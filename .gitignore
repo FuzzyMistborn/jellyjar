@@ -1,0 +1,22 @@
+# Android build output
+android/.gradle/
+android/build/
+android/app/build/
+
+# Local SDK path — machine-specific
+android/local.properties
+
+# IDE
+android/.idea/
+!android/.idea/.gitignore
+*.iml
+
+# Python
+press/__pycache__/
+press/*.pyc
+*.pyc
+*.pyo
+__pycache__/
+
+# Claude Code internal
+.claude/

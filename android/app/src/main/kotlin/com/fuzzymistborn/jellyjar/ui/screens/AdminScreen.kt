@@ -1,0 +1,554 @@
+package com.fuzzymistborn.jellyjar.ui.screens
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.fuzzymistborn.jellyjar.ui.theme.*
+import com.fuzzymistborn.jellyjar.ui.viewmodel.AdminViewModel
+
+// ─── PIN Gate ─────────────────────────────────────────────────────────────────
+
+@Composable
+fun PinGateScreen(
+    isPinEnabled: Boolean,
+    settingsLoaded: Boolean = false,
+    onUnlocked: () -> Unit,
+    onSkip: () -> Unit,
+    viewModel: AdminViewModel = hiltViewModel(),
+) {
+    LaunchedEffect(isPinEnabled, settingsLoaded) {
+        if (settingsLoaded && !isPinEnabled) onSkip()
+    }
+
+    if (!settingsLoaded || !isPinEnabled) return
+
+    var pin by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf(false) }
+
+    Box(
+        modifier = Modifier.fillMaxSize().background(Background),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(20.dp),
+            modifier = Modifier.widthIn(max = 340.dp),
+        ) {
+            Icon(Icons.Default.Lock, contentDescription = null, tint = Primary, modifier = Modifier.size(48.dp))
+            Text("Admin Access", style = MaterialTheme.typography.headlineMedium, color = OnSurface)
+
+            OutlinedTextField(
+                value = pin,
+                onValueChange = {
+                    if (it.length <= 8) {
+                        pin = it
+                        error = false
+                    }
+                },
+                label = { Text("PIN") },
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                isError = error,
+                supportingText = if (error) { { Text("Incorrect PIN") } } else null,
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Button(
+                onClick = {
+                    if (viewModel.verifyPin(pin)) onUnlocked()
+                    else { error = true; pin = "" }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Primary),
+            ) {
+                Text("Unlock")
+            }
+        }
+    }
+}
+
+// ─── Admin screen ─────────────────────────────────────────────────────────────
+
+@Composable
+fun AdminScreen(
+    onBack: () -> Unit,
+    viewModel: AdminViewModel = hiltViewModel(),
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+
+    // Track whether URL/shim fields have unsaved changes
+    val savedUrl = remember { mutableStateOf(state.jellyfinUrl) }
+    val savedShimUrl = remember { mutableStateOf(state.shimUrl) }
+    val savedDownloadPath = remember { mutableStateOf(state.downloadPath) }
+    val isDirty = state.jellyfinUrl != savedUrl.value ||
+        state.shimUrl != savedShimUrl.value ||
+        state.downloadPath != savedDownloadPath.value
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Background)
+            .verticalScroll(rememberScrollState())
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        // Header
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(bottom = 8.dp),
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = OnSurface)
+            }
+            Spacer(Modifier.width(8.dp))
+            Text("Settings", style = MaterialTheme.typography.headlineMedium, color = OnSurface)
+        }
+
+        // ── Jellyfin Server ───────────────────────────────────────────────────
+        SettingsCard(
+            title = "Jellyfin Server",
+            statusBadge = {
+                if (state.isAuthenticated) {
+                    StatusChip(label = "Connected", color = Color(0xFF4CAF50))
+                } else {
+                    StatusChip(label = "Not connected", color = OnSurfaceMuted)
+                }
+            },
+        ) {
+            SettingsTextField(
+                label = "Server URL",
+                placeholder = "192.168.1.x:8096",
+                value = state.jellyfinUrl,
+                onValueChange = viewModel::setJellyfinUrl,
+            )
+            SettingsTextField(
+                label = "Username",
+                value = state.username,
+                onValueChange = viewModel::setUsername,
+            )
+            SettingsTextField(
+                label = "Password",
+                value = state.password,
+                onValueChange = viewModel::setPassword,
+                isPassword = true,
+            )
+            Button(
+                onClick = viewModel::authenticate,
+                enabled = !state.isAuthenticating,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Primary),
+            ) {
+                if (state.isAuthenticating) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = OnPrimary, strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Connecting…")
+                } else {
+                    Icon(
+                        if (state.isAuthenticated) Icons.Default.CheckCircle else Icons.Default.Link,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (state.isAuthenticated) "Re-authenticate" else "Connect")
+                }
+            }
+            AnimatedVisibility(visible = state.authError != null) {
+                state.authError?.let { err ->
+                    Surface(
+                        color = Color(0x22FF4444),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Default.ErrorOutline, contentDescription = null,
+                                tint = Error, modifier = Modifier.size(16.dp))
+                            Text(err, style = MaterialTheme.typography.bodySmall, color = Error)
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Press ─────────────────────────────────────────────────────────────
+        SettingsCard(
+            title = "Press",
+            statusBadge = {
+                when (state.shimOk) {
+                    true -> StatusChip(label = "Reachable", color = Color(0xFF4CAF50))
+                    false -> StatusChip(label = "Unreachable", color = Error)
+                    null -> {}
+                }
+            },
+        ) {
+            SettingsTextField(
+                label = "Press URL",
+                placeholder = "192.168.1.x:8090",
+                value = state.shimUrl,
+                onValueChange = viewModel::setShimUrl,
+            )
+            OutlinedButton(
+                onClick = viewModel::testShim,
+                enabled = !state.isTestingShim,
+                modifier = Modifier.fillMaxWidth(),
+                colors = when (state.shimOk) {
+                    true -> ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF4CAF50))
+                    false -> ButtonDefaults.outlinedButtonColors(contentColor = Error)
+                    null -> ButtonDefaults.outlinedButtonColors()
+                },
+            ) {
+                if (state.isTestingShim) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Testing…")
+                } else {
+                    Icon(Icons.Default.NetworkCheck, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Test Connection")
+                }
+            }
+        }
+
+        // ── Downloads ─────────────────────────────────────────────────────────
+        SettingsCard(title = "Downloads") {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val folderPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree(),
+            ) { uri ->
+                if (uri != null) {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri,
+                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                    )
+                    viewModel.setDownloadPath(uri.toString())
+                }
+            }
+
+            // Folder row
+            Surface(
+                color = Background,
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Default.FolderOpen, contentDescription = null,
+                            tint = Primary, modifier = Modifier.size(20.dp))
+                        Column {
+                            Text("Download Folder", style = MaterialTheme.typography.bodyMedium, color = OnSurface)
+                            if (state.downloadPath.isNotBlank()) {
+                                val displayPath = remember(state.downloadPath) {
+                                    runCatching {
+                                        android.net.Uri.parse(state.downloadPath).lastPathSegment
+                                            ?.replace("primary:", "/storage/emulated/0/")
+                                            ?: state.downloadPath
+                                    }.getOrDefault(state.downloadPath)
+                                }
+                                Text(displayPath, style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+                            } else {
+                                Text("Not set", style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+                            }
+                        }
+                    }
+                    TextButton(onClick = { folderPickerLauncher.launch(null) }) {
+                        Text(if (state.downloadPath.isBlank()) "Choose" else "Change")
+                    }
+                }
+            }
+
+            state.storageInfo?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted,
+                    modifier = Modifier.padding(horizontal = 4.dp))
+            }
+
+            SettingsToggleRow(
+                title = "Wi-Fi Only",
+                subtitle = "Pause downloads on mobile data",
+                checked = state.wifiOnly,
+                onCheckedChange = { viewModel.setWifiOnly(it); viewModel.saveAll() },
+            )
+        }
+
+        // ── Home Screen ───────────────────────────────────────────────────────
+        SettingsCard(title = "Home Screen") {
+            SettingsToggleRow(
+                title = "Continue Watching",
+                subtitle = "Show the Continue Watching row",
+                checked = state.showContinueWatching,
+                onCheckedChange = { viewModel.setShowContinueWatching(it) },
+            )
+            SettingsToggleRow(
+                title = "Recently Added",
+                subtitle = "Show the Recently Added row",
+                checked = state.showRecentlyAdded,
+                onCheckedChange = { viewModel.setShowRecentlyAdded(it) },
+            )
+            SettingsToggleRow(
+                title = "My List",
+                subtitle = "Show the My List / Favorites row",
+                checked = state.showMyList,
+                onCheckedChange = { viewModel.setShowMyList(it) },
+            )
+        }
+
+        // ── Admin PIN ─────────────────────────────────────────────────────────
+        SettingsCard(
+            title = "Admin PIN",
+            statusBadge = {
+                StatusChip(
+                    label = if (state.isPinEnabled) "Enabled" else "Disabled",
+                    color = if (state.isPinEnabled) Primary else OnSurfaceMuted,
+                )
+            },
+        ) {
+            var newPin by remember { mutableStateOf("") }
+            var pinVisible by remember { mutableStateOf(false) }
+
+            OutlinedTextField(
+                value = newPin,
+                onValueChange = { if (it.length <= 8) newPin = it },
+                label = { Text("New PIN") },
+                placeholder = { Text("Leave blank to disable", color = OnSurfaceMuted) },
+                visualTransformation = if (pinVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                trailingIcon = {
+                    IconButton(onClick = { pinVisible = !pinVisible }) {
+                        Icon(
+                            if (pinVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = if (pinVisible) "Hide PIN" else "Show PIN",
+                            tint = OnSurfaceMuted,
+                        )
+                    }
+                },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { viewModel.savePin(newPin); newPin = "" },
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary),
+                ) {
+                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Save PIN")
+                }
+                if (state.isPinEnabled) {
+                    OutlinedButton(
+                        onClick = viewModel::clearPin,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
+                    ) {
+                        Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Clear")
+                    }
+                }
+            }
+        }
+
+        // ── Active Jobs ───────────────────────────────────────────────────────
+        AnimatedVisibility(visible = state.activeJobs.isNotEmpty()) {
+            SettingsCard(title = "Active Jobs") {
+                state.activeJobs.forEach { job ->
+                    Surface(
+                        color = Background,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        job.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = OnSurface,
+                                        maxLines = 1,
+                                    )
+                                    Text(
+                                        "${job.status.lowercase().replaceFirstChar { it.uppercase() }} · ${job.preset}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = OnSurfaceMuted,
+                                    )
+                                }
+                                Text(
+                                    "${job.progress.toInt()}%",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = Primary,
+                                    modifier = Modifier.padding(start = 12.dp),
+                                )
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            LinearProgressIndicator(
+                                progress = { (job.progress / 100f).coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth(),
+                                color = Primary,
+                                trackColor = SurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Save button — only shown when there are unsaved field changes
+        AnimatedVisibility(visible = isDirty) {
+            Button(
+                onClick = {
+                    viewModel.saveAll()
+                    savedUrl.value = state.jellyfinUrl
+                    savedShimUrl.value = state.shimUrl
+                    savedDownloadPath.value = state.downloadPath
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Primary),
+            ) {
+                Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Save Changes")
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+// ─── Shared composables ────────────────────────────────────────────────────────
+
+@Composable
+private fun SettingsCard(
+    title: String,
+    statusBadge: @Composable RowScope.() -> Unit = {},
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Surface(
+        color = SurfaceVariant,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(title, style = MaterialTheme.typography.titleMedium, color = Primary)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { statusBadge() }
+            }
+            HorizontalDivider(color = Background)
+            content()
+        }
+    }
+}
+
+@Composable
+private fun StatusChip(label: String, color: Color) {
+    Surface(
+        color = color.copy(alpha = 0.15f),
+        shape = RoundedCornerShape(50),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = color,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+    }
+}
+
+@Composable
+private fun SettingsToggleRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium, color = OnSurface)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(checkedThumbColor = OnPrimary, checkedTrackColor = Primary),
+        )
+    }
+}
+
+@Composable
+private fun SettingsTextField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String = "",
+    isPassword: Boolean = false,
+) {
+    var passwordVisible by remember { mutableStateOf(false) }
+
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        placeholder = if (placeholder.isNotBlank()) { { Text(placeholder, color = OnSurfaceMuted) } } else null,
+        visualTransformation = if (isPassword && !passwordVisible) PasswordVisualTransformation()
+                               else VisualTransformation.None,
+        keyboardOptions = if (isPassword) KeyboardOptions(keyboardType = KeyboardType.Password)
+                          else KeyboardOptions.Default,
+        trailingIcon = if (isPassword) {
+            {
+                IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                    Icon(
+                        if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                        contentDescription = if (passwordVisible) "Hide password" else "Show password",
+                        tint = OnSurfaceMuted,
+                    )
+                }
+            }
+        } else null,
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}

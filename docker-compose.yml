@@ -1,0 +1,40 @@
+services:
+
+  # ─── Press (FFmpeg transcode service) ───────────────────────────────────────
+  jellyjar-press:
+    build:
+      context: ./press
+      dockerfile: Dockerfile
+    container_name: jellyjar-press
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    environment:
+      MEDIA_ROOT: /mnt
+      OUTPUT_ROOT: /output
+      LIBVA_DRIVER_NAME: iHD     # use Intel iHD driver for QSV/VAAPI on gen8+ iGPUs
+      # ENCODER: h264_vaapi     # pin encoder; skips startup probe (h264_nvenc | h264_qsv | h264_vaapi | libx264)
+    volumes:
+      - /mnt/Media/Movies:/mnt/movies:ro
+      - /mnt/Media/TV Shows:/mnt/tv:ro
+      - jellyjar-output:/output
+    # Intel / AMD GPU (VAAPI & QSV) — exposes /dev/dri/renderD128 inside container
+    devices:
+      - /dev/dri:/dev/dri
+    # NVIDIA GPU — uncomment if you have an NVIDIA card and the NVIDIA Container Toolkit installed
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu, video]
+    networks:
+      - jellyjar
+
+volumes:
+  jellyjar-output:
+
+networks:
+  jellyjar:
+    driver: bridge
