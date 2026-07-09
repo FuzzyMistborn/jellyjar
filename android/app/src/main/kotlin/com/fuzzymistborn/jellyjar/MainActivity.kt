@@ -214,7 +214,7 @@ fun JellyJarNavHost() {
         }
 
         composable(Screen.PinGate.route) {
-            val adminViewModel: com.fuzzymistborn.jellyjar.ui.viewmodel.AdminViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+            val adminViewModel: com.fuzzymistborn.jellyjar.ui.viewmodel.AdminViewModel = androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel()
             val adminState by adminViewModel.state.collectAsStateWithLifecycle()
             PinGateScreen(
                 isPinEnabled = adminState.isPinEnabled,
