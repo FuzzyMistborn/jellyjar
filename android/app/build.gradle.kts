@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "com.fuzzymistborn.jellyjar"
-    compileSdk = 35
+    compileSdk = 37
     buildToolsVersion = "36.0.0"
 
     defaultConfig {

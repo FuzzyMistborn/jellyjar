@@ -15,7 +15,7 @@ jellyjar/
 │   ├── main.py                 # FastAPI app, port 8090
 │   └── requirements.txt
 └── android/
-    ├── build.gradle.kts        # compileSdk=35, buildToolsVersion="36.0.0", minSdk=35
+    ├── build.gradle.kts        # compileSdk=37, buildToolsVersion="36.0.0", minSdk=35
     ├── settings.gradle.kts
     ├── gradle/libs.versions.toml
     └── app/src/main/
