@@ -12,6 +12,9 @@
 
 # Gson / Jellyfin models
 -keep class com.fuzzymistborn.jellyjar.model.** { *; }
+# Request/response DTOs declared alongside the API interfaces (AuthRequest, etc.)
+# rely on Gson reflection with no @SerializedName — R8 must not rename their fields
+-keep class com.fuzzymistborn.jellyjar.api.** { *; }
 -keepclassmembers class * {
     @com.google.gson.annotations.SerializedName <fields>;
 }
