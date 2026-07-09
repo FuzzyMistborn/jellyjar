@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JellyJar Press</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #14161a;
+    --panel: #1d2027;
+    --border: #2c313a;
+    --text: #e6e8eb;
+    --muted: #8b93a1;
+    --accent: #5b8def;
+    --ok: #4caf7d;
+    --warn: #d9a441;
+    --err: #d9534f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin-bottom: 20px;
+  }
+  .panel-header { display: flex; justify-content: space-between; align-items: baseline; }
+  .panel-header .stat { color: var(--muted); font-size: 13px; }
+  .panel-header .stat b { color: var(--text); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+  tr:last-child td { border-bottom: none; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 100px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+  .badge.queued { background: #3a3f4a; color: var(--muted); }
+  .badge.running { background: rgba(91,141,239,0.15); color: var(--accent); }
+  .badge.complete { background: rgba(76,175,125,0.15); color: var(--ok); }
+  .badge.failed { background: rgba(217,83,79,0.15); color: var(--err); }
+  .progress-bar {
+    width: 100px;
+    height: 6px;
+    background: #2c313a;
+    border-radius: 100px;
+    overflow: hidden;
+    display: inline-block;
+    vertical-align: middle;
+  }
+  .progress-fill { height: 100%; background: var(--accent); }
+  button, input {
+    font-family: inherit;
+    font-size: 13px;
+    background: #262a32;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.danger:hover { border-color: var(--err); color: var(--err); }
+  input { width: 90px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .empty { color: var(--muted); font-size: 13px; padding: 6px 0; }
+  .preset-name { font-weight: 600; }
+  .add-preset { display: flex; gap: 8px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+  .add-preset input[name="name"] { width: 100px; }
+  .health { font-size: 13px; color: var(--muted); }
+  .health b { color: var(--text); }
+  .mono { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+<h1>JellyJar Press</h1>
+<div class="sub" id="health">loading…</div>
+
+<div class="panel">
+  <div class="panel-header">
+    <h2>Now Encoding</h2>
+    <span class="stat" id="queue-summary"></span>
+  </div>
+  <table id="running-table">
+    <thead>
+      <tr><th>ID</th><th>Progress</th><th>FPS</th><th>Speed</th><th>ETA</th><th>Output</th><th></th></tr>
+    </thead>
+    <tbody id="running-body"></tbody>
+  </table>
+  <div class="empty" id="running-empty" style="display:none">Nothing encoding right now.</div>
+</div>
+
+<div class="panel">
+  <h2>Queued</h2>
+  <table id="queued-table">
+    <thead>
+      <tr><th>#</th><th>ID</th><th>Est. duration</th><th>Queued</th><th></th></tr>
+    </thead>
+    <tbody id="queued-body"></tbody>
+  </table>
+  <div class="empty" id="queued-empty" style="display:none">Queue is empty.</div>
+</div>
+
+<div class="panel">
+  <h2>History</h2>
+  <table id="history-table">
+    <thead>
+      <tr><th>ID</th><th>Status</th><th>Output</th><th>Finished</th><th></th></tr>
+    </thead>
+    <tbody id="history-body"></tbody>
+  </table>
+  <div class="empty" id="history-empty" style="display:none">No completed or failed jobs yet.</div>
+</div>
+
+<div class="panel">
+  <h2>Transcode Presets</h2>
+  <table id="presets-table">
+    <thead>
+      <tr><th>Name</th><th>Scale</th><th>Video bitrate</th><th>Audio bitrate</th><th>CRF</th><th></th></tr>
+    </thead>
+    <tbody id="presets-body"></tbody>
+  </table>
+  <div class="add-preset">
+    <input name="name" placeholder="name">
+    <input name="scale" placeholder="1920x1080" value="1920:1080">
+    <input name="video_bitrate" placeholder="4000k" value="4000k">
+    <input name="audio_bitrate" placeholder="192k" value="192k">
+    <input name="crf" placeholder="18" value="18">
+    <button onclick="addPreset()">Add preset</button>
+  </div>
+</div>
+
+<script>
+const runningBody = document.getElementById('running-body');
+const runningEmpty = document.getElementById('running-empty');
+const queuedBody = document.getElementById('queued-body');
+const queuedEmpty = document.getElementById('queued-empty');
+const historyBody = document.getElementById('history-body');
+const historyEmpty = document.getElementById('history-empty');
+const presetsBody = document.getElementById('presets-body');
+const healthEl = document.getElementById('health');
+const queueSummaryEl = document.getElementById('queue-summary');
+
+function timeAgo(iso) {
+  const d = new Date(iso + 'Z');
+  const secs = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+  if (secs < 60) return `${secs}s ago`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  return `${Math.floor(secs / 3600)}h ago`;
+}
+
+function formatDuration(seconds) {
+  if (seconds == null) return '—';
+  seconds = Math.round(seconds);
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+async function refreshHealth() {
+  try {
+    const h = await (await fetch('/health')).json();
+    healthEl.innerHTML = `encoder: <b>${h.encoder}</b> &nbsp;·&nbsp; media root: <b>${h.media_root}</b> &nbsp;·&nbsp; output root: <b>${h.output_root}</b>`;
+  } catch (e) {
+    healthEl.textContent = 'unable to reach Press service';
+  }
+}
+
+async function refreshQueueStats() {
+  try {
+    const s = await (await fetch('/api/queue/stats')).json();
+    queueSummaryEl.innerHTML = `${s.running_count} running / ${s.queued_count} queued (max ${s.max_workers} worker${s.max_workers === 1 ? '' : 's'}) &nbsp;·&nbsp; queue remaining: <b class="mono">${formatDuration(s.queue_remaining_seconds)}</b>`;
+  } catch (e) {
+    queueSummaryEl.textContent = '';
+  }
+}
+
+async function refreshJobs() {
+  const jobs = await (await fetch('/jobs')).json();
+
+  const running = jobs.filter(j => j.status === 'running').sort((a, b) => a.created_at < b.created_at ? -1 : 1);
+  const queued = jobs.filter(j => j.status === 'queued').sort((a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0));
+  const history = jobs.filter(j => j.status === 'complete' || j.status === 'failed')
+    .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
+
+  runningEmpty.style.display = running.length ? 'none' : 'block';
+  runningBody.innerHTML = running.map(job => {
+    const progress = job.progress ?? 0;
+    const outputName = job.output_path ? job.output_path.split('/').pop() : '—';
+    return `
+      <tr>
+        <td title="${job.job_id}">${job.job_id.slice(0, 8)}</td>
+        <td>
+          <span class="progress-bar"><span class="progress-fill" style="width:${progress}%"></span></span>
+          ${progress.toFixed(0)}%
+        </td>
+        <td class="mono">${job.fps != null ? job.fps.toFixed(1) : '—'}</td>
+        <td class="mono">${job.speed != null ? job.speed.toFixed(2) + 'x' : '—'}</td>
+        <td class="mono">${formatDuration(job.eta_seconds)}</td>
+        <td>${outputName}</td>
+        <td><button class="danger" onclick="deleteJob('${job.job_id}')">Cancel</button></td>
+      </tr>`;
+  }).join('');
+
+  queuedEmpty.style.display = queued.length ? 'none' : 'block';
+  queuedBody.innerHTML = queued.map(job => `
+    <tr>
+      <td>${job.queue_position ?? '—'}</td>
+      <td title="${job.job_id}">${job.job_id.slice(0, 8)}</td>
+      <td class="mono">${formatDuration(job.duration_seconds)}</td>
+      <td>${timeAgo(job.created_at)}</td>
+      <td><button class="danger" onclick="deleteJob('${job.job_id}')">Remove</button></td>
+    </tr>`).join('');
+
+  historyEmpty.style.display = history.length ? 'none' : 'block';
+  historyBody.innerHTML = history.map(job => {
+    const outputName = job.output_path ? job.output_path.split('/').pop() : '—';
+    const outputCell = job.status === 'complete'
+      ? `<a href="/download/${job.job_id}">${outputName}</a>`
+      : (job.error ? `<span title="${job.error.replace(/"/g, '&quot;')}">error</span>` : '—');
+    return `
+      <tr>
+        <td title="${job.job_id}">${job.job_id.slice(0, 8)}</td>
+        <td><span class="badge ${job.status}">${job.status}</span></td>
+        <td>${outputCell}</td>
+        <td>${timeAgo(job.updated_at)}</td>
+        <td><button class="danger" onclick="deleteJob('${job.job_id}')">Delete</button></td>
+      </tr>`;
+  }).join('');
+
+  refreshQueueStats();
+}
+
+async function deleteJob(id) {
+  if (!confirm('Delete this job and its output file?')) return;
+  await fetch(`/jobs/${id}`, { method: 'DELETE' });
+  refreshJobs();
+}
+
+async function refreshPresets() {
+  const presets = await (await fetch('/api/presets')).json();
+  presetsBody.innerHTML = '';
+
+  for (const [name, cfg] of Object.entries(presets)) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="preset-name">${name}</td>
+      <td><input value="${cfg.scale}" data-field="scale"></td>
+      <td><input value="${cfg.video_bitrate}" data-field="video_bitrate"></td>
+      <td><input value="${cfg.audio_bitrate}" data-field="audio_bitrate"></td>
+      <td><input value="${cfg.crf}" data-field="crf" style="width:50px"></td>
+      <td>
+        <button onclick="savePreset('${name}', this)">Save</button>
+        <button class="danger" onclick="deletePreset('${name}')">Delete</button>
+      </td>
+    `;
+    presetsBody.appendChild(tr);
+  }
+}
+
+async function savePreset(name, btn) {
+  const row = btn.closest('tr');
+  const body = {};
+  row.querySelectorAll('input[data-field]').forEach(i => body[i.dataset.field] = i.value);
+  const res = await fetch(`/api/presets/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (res.ok) { btn.textContent = 'Saved'; setTimeout(() => btn.textContent = 'Save', 1200); }
+  else alert('Failed to save preset');
+}
+
+async function deletePreset(name) {
+  if (!confirm(`Delete preset "${name}"?`)) return;
+  const res = await fetch(`/api/presets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  if (res.ok) refreshPresets();
+  else alert((await res.json()).detail || 'Failed to delete preset');
+}
+
+async function addPreset() {
+  const form = document.querySelector('.add-preset');
+  const name = form.querySelector('[name="name"]').value.trim();
+  if (!name) return alert('Preset name is required');
+  const body = {
+    scale: form.querySelector('[name="scale"]').value,
+    video_bitrate: form.querySelector('[name="video_bitrate"]').value,
+    audio_bitrate: form.querySelector('[name="audio_bitrate"]').value,
+    crf: form.querySelector('[name="crf"]').value,
+  };
+  const res = await fetch(`/api/presets/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (res.ok) { form.querySelector('[name="name"]').value = ''; refreshPresets(); }
+  else alert('Failed to add preset');
+}
+
+refreshHealth();
+refreshJobs();
+refreshPresets();
+setInterval(refreshHealth, 10000);
+setInterval(refreshJobs, 2000);
+</script>
+
+</body>
+</html>

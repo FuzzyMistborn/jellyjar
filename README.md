@@ -36,6 +36,29 @@ Verify it's running:
 curl http://localhost:8090/health
 ```
 
+By default Press transcodes one job at a time (most hardware encoders only support a single
+session anyway). To allow more concurrent jobs, set `MAX_WORKERS` in `docker-compose.yml`:
+
+```yaml
+environment:
+  MAX_WORKERS: 1   # concurrent transcode jobs
+```
+
+### Web UI
+
+Press serves a small built-in dashboard at `http://<press-host>:8090/` — no extra setup needed.
+It shows:
+
+- **Now Encoding** — jobs currently transcoding, with live progress, FPS, encode speed, and ETA
+- **Queued** — jobs waiting for a free worker, with position and estimated duration
+- **History** — completed/failed jobs, with download and delete
+- A summary of running/queued counts and estimated total time remaining for the queue
+- **Presets** — view, edit, add, or delete transcode presets (scale, video/audio bitrate, CRF) at runtime
+
+Preset edits persist across container restarts — they're written to `presets.json` on the
+`jellyjar-config` volume (mounted at `/config`, override with `CONFIG_ROOT`). Job history is
+still in-memory only and resets when the Press container restarts.
+
 ### 2. Build the Android APK
 
 Open the `android/` folder in Android Studio. Let Gradle sync, then:
@@ -77,11 +100,17 @@ Or copy the APK to the tablet and open it in a file manager.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/transcode` | Start a transcode job |
-| GET | `/jobs/{id}` | Poll job status + progress |
+| GET | `/jobs` | List all jobs (queued/running/complete/failed) |
+| GET | `/jobs/{id}` | Poll job status, progress, fps, speed, ETA |
 | GET | `/download/{id}` | Download completed file |
 | DELETE | `/jobs/{id}` | Cancel job + delete output |
 | GET | `/health` | Health check |
-| GET | `/presets` | List available presets |
+| GET | `/presets` | List available preset names (used by the Android app) |
+| GET | `/api/presets` | Full preset configs (scale, bitrate, CRF) |
+| PUT | `/api/presets/{name}` | Add or update a preset |
+| DELETE | `/api/presets/{name}` | Delete a preset |
+| GET | `/api/queue/stats` | Aggregate queue stats (running/queued counts, est. time remaining) |
+| GET | `/` | Web UI (queue, history, preset editor) |
 
 ## Project Structure
 
@@ -91,7 +120,9 @@ jellyjar/
 ├── press/
 │   ├── Dockerfile
 │   ├── main.py          # FastAPI ffmpeg wrapper
-│   └── requirements.txt
+│   ├── requirements.txt
+│   └── static/
+│       └── index.html   # Web UI (queue, history, preset editor)
 └── android/
     ├── build.gradle.kts
     ├── settings.gradle.kts

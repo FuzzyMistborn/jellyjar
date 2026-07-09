@@ -22,9 +22,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
+COPY static ./static
 
 # Directories — override via docker-compose volumes
-RUN mkdir -p /media /output
+RUN mkdir -p /media /output /config
 
 EXPOSE 8090
 

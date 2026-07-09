@@ -9,7 +9,8 @@ from typing import Optional
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 _active_encoder: str = "libx264"
@@ -51,15 +52,21 @@ async def detect_encoder() -> str:
     return "libx264"
 
 
+MAX_WORKERS = max(1, int(os.environ.get("MAX_WORKERS", "1")))
+_worker_semaphore: asyncio.Semaphore
+
+
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
-    global _active_encoder
+    global _active_encoder, _worker_semaphore
+    _worker_semaphore = asyncio.Semaphore(MAX_WORKERS)
     forced = os.environ.get("ENCODER", "").strip()
     if forced:
         print(f"[Press] Encoder forced via env: {forced}", flush=True)
         _active_encoder = forced
     else:
         _active_encoder = await detect_encoder()
+    print(f"[Press] Max concurrent transcode workers: {MAX_WORKERS}", flush=True)
     yield
 
 
@@ -70,8 +77,10 @@ jobs: dict[str, dict] = {}
 
 MEDIA_ROOT = os.environ.get("MEDIA_ROOT", "/media")
 OUTPUT_ROOT = os.environ.get("OUTPUT_ROOT", "/output")
+CONFIG_ROOT = os.environ.get("CONFIG_ROOT", "/config")
+PRESETS_FILE = Path(CONFIG_ROOT) / "presets.json"
 
-PRESETS = {
+DEFAULT_PRESETS = {
     "1080p": {
         "video_bitrate": "4000k",
         "audio_bitrate": "192k",
@@ -87,10 +96,35 @@ PRESETS = {
 }
 
 
+def load_presets() -> dict:
+    try:
+        return json.loads(PRESETS_FILE.read_text())
+    except FileNotFoundError:
+        return dict(DEFAULT_PRESETS)
+    except Exception as e:
+        print(f"[Press] Failed to read {PRESETS_FILE}, using defaults: {e}", flush=True)
+        return dict(DEFAULT_PRESETS)
+
+
+def save_presets() -> None:
+    PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PRESETS_FILE.write_text(json.dumps(PRESETS, indent=2))
+
+
+PRESETS = load_presets()
+
+
 class TranscodeRequest(BaseModel):
     source_path: str          # Path relative to MEDIA_ROOT
     preset: str               # "1080p" or "720p"
     output_filename: Optional[str] = None
+
+
+class PresetConfig(BaseModel):
+    video_bitrate: str
+    audio_bitrate: str
+    scale: str
+    crf: str
 
 
 class JobStatus(BaseModel):
@@ -101,6 +135,11 @@ class JobStatus(BaseModel):
     error: Optional[str] = None
     created_at: str
     updated_at: str
+    duration_seconds: Optional[float] = None   # source media duration
+    fps: Optional[float] = None
+    speed: Optional[float] = None              # ffmpeg encode speed, e.g. 2.5 = 2.5x realtime
+    eta_seconds: Optional[float] = None        # estimated time remaining for this job
+    queue_position: Optional[int] = None       # 1-based position among queued (waiting) jobs
 
 
 async def get_duration_us(source: str) -> Optional[float]:
@@ -171,92 +210,101 @@ def build_ffmpeg_command(source: str, output: str, preset: dict, encoder: str | 
     ]
 
 
-async def run_transcode(job_id: str, source: str, output: str, preset: dict):
-    jobs[job_id]["status"] = "running"
-    jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+async def stream_progress(process: asyncio.subprocess.Process, job_id: str, duration_us: Optional[float]) -> None:
+    """Read ffmpeg's `-progress pipe:1` output and update progress/fps/speed/eta on the job."""
+    current_us = None
+    while True:
+        line = await process.stdout.readline()
+        if not line:
+            break
+        decoded = line.decode().strip()
 
-    duration_us = await get_duration_us(source)
-    cmd = build_ffmpeg_command(source, output, preset)
+        if decoded.startswith("out_time_us="):
+            try:
+                val = int(decoded.split("=")[1])
+                if val >= 0:
+                    current_us = val
+            except ValueError:
+                pass
+        elif decoded.startswith("fps="):
+            try:
+                jobs[job_id]["fps"] = float(decoded.split("=")[1])
+            except ValueError:
+                pass
+        elif decoded.startswith("speed="):
+            raw = decoded.split("=")[1].strip().rstrip("x")
+            try:
+                jobs[job_id]["speed"] = float(raw) if raw else None
+            except ValueError:
+                jobs[job_id]["speed"] = None
 
-    try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        if duration_us and current_us and duration_us > 0:
+            progress = min((current_us / duration_us) * 100, 100)
+            jobs[job_id]["progress"] = round(progress, 1)
 
-        current_us = None
+            speed = jobs[job_id].get("speed")
+            if speed and speed > 0:
+                remaining_us = max(duration_us - current_us, 0)
+                jobs[job_id]["eta_seconds"] = round(remaining_us / 1_000_000 / speed, 1)
 
-        while True:
-            line = await process.stdout.readline()
-            if not line:
-                break
-            decoded = line.decode().strip()
+            jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
 
-            if decoded.startswith("out_time_us="):
-                try:
-                    val = int(decoded.split("=")[1])
-                    if val >= 0:
-                        current_us = val
-                except ValueError:
-                    pass
 
-            if duration_us and current_us and duration_us > 0:
-                progress = min((current_us / duration_us) * 100, 100)
-                jobs[job_id]["progress"] = round(progress, 1)
-                jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+async def run_transcode(job_id: str, source: str, output: str, preset: dict, duration_us: Optional[float]):
+    async with _worker_semaphore:
+        jobs[job_id]["status"] = "running"
+        jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
 
-        await process.wait()
+        cmd = build_ffmpeg_command(source, output, preset)
 
-        stderr_bytes = await process.stderr.read()
-        if process.returncode == 0:
-            jobs[job_id]["status"] = "complete"
-            jobs[job_id]["output_path"] = output
-            jobs[job_id]["progress"] = 100.0
-        else:
-            error_text = stderr_bytes.decode()[-1000:]
-            if _active_encoder != "libx264":
-                # Hardware encoder failed at runtime — fall back to libx264
-                print(f"[Press] {_active_encoder} failed (rc={process.returncode}), retrying with libx264", flush=True)
-                sw_cmd = build_ffmpeg_command(source, output, preset, encoder="libx264")
-                sw_process = await asyncio.create_subprocess_exec(
-                    *sw_cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                while True:
-                    line = await sw_process.stdout.readline()
-                    if not line:
-                        break
-                    decoded = line.decode().strip()
-                    if decoded.startswith("out_time_us="):
-                        try:
-                            val = int(decoded.split("=")[1])
-                            if val >= 0 and duration_us and duration_us > 0:
-                                jobs[job_id]["progress"] = round(min((val / duration_us) * 100, 100), 1)
-                                jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
-                        except ValueError:
-                            pass
-                await sw_process.wait()
-                sw_stderr = (await sw_process.stderr.read()).decode()[-1000:]
-                if sw_process.returncode == 0:
-                    jobs[job_id]["status"] = "complete"
-                    jobs[job_id]["output_path"] = output
-                    jobs[job_id]["progress"] = 100.0
-                else:
-                    print(f"[Press] libx264 fallback also failed:\n{sw_stderr}", flush=True)
-                    jobs[job_id]["status"] = "failed"
-                    jobs[job_id]["error"] = sw_stderr
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await stream_progress(process, job_id, duration_us)
+            await process.wait()
+
+            stderr_bytes = await process.stderr.read()
+            if process.returncode == 0:
+                jobs[job_id]["status"] = "complete"
+                jobs[job_id]["output_path"] = output
+                jobs[job_id]["progress"] = 100.0
+                jobs[job_id]["eta_seconds"] = 0.0
             else:
-                print(f"[Press] transcode FAILED (job {job_id}, rc={process.returncode}):\n{error_text}", flush=True)
-                jobs[job_id]["status"] = "failed"
-                jobs[job_id]["error"] = error_text
+                error_text = stderr_bytes.decode()[-1000:]
+                if _active_encoder != "libx264":
+                    # Hardware encoder failed at runtime — fall back to libx264
+                    print(f"[Press] {_active_encoder} failed (rc={process.returncode}), retrying with libx264", flush=True)
+                    sw_cmd = build_ffmpeg_command(source, output, preset, encoder="libx264")
+                    sw_process = await asyncio.create_subprocess_exec(
+                        *sw_cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    await stream_progress(sw_process, job_id, duration_us)
+                    await sw_process.wait()
+                    sw_stderr = (await sw_process.stderr.read()).decode()[-1000:]
+                    if sw_process.returncode == 0:
+                        jobs[job_id]["status"] = "complete"
+                        jobs[job_id]["output_path"] = output
+                        jobs[job_id]["progress"] = 100.0
+                        jobs[job_id]["eta_seconds"] = 0.0
+                    else:
+                        print(f"[Press] libx264 fallback also failed:\n{sw_stderr}", flush=True)
+                        jobs[job_id]["status"] = "failed"
+                        jobs[job_id]["error"] = sw_stderr
+                else:
+                    print(f"[Press] transcode FAILED (job {job_id}, rc={process.returncode}):\n{error_text}", flush=True)
+                    jobs[job_id]["status"] = "failed"
+                    jobs[job_id]["error"] = error_text
 
-    except Exception as e:
-        jobs[job_id]["status"] = "failed"
-        jobs[job_id]["error"] = str(e)
+        except Exception as e:
+            jobs[job_id]["status"] = "failed"
+            jobs[job_id]["error"] = str(e)
 
-    jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+        jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
 
 
 @app.post("/transcode", response_model=JobStatus)
@@ -275,6 +323,8 @@ async def start_transcode(req: TranscodeRequest, background_tasks: BackgroundTas
     output_filename = req.output_filename or f"{source.stem}_{req.preset}.mp4"
     output = str(Path(OUTPUT_ROOT) / output_filename)
 
+    duration_us = await get_duration_us(str(source))
+
     now = datetime.utcnow().isoformat()
     jobs[job_id] = {
         "job_id": job_id,
@@ -284,24 +334,67 @@ async def start_transcode(req: TranscodeRequest, background_tasks: BackgroundTas
         "error": None,
         "created_at": now,
         "updated_at": now,
+        "duration_seconds": (duration_us / 1_000_000) if duration_us else None,
+        "fps": None,
+        "speed": None,
+        "eta_seconds": None,
     }
 
     preset = PRESETS[req.preset]
-    background_tasks.add_task(run_transcode, job_id, str(source), output, preset)
+    background_tasks.add_task(run_transcode, job_id, str(source), output, preset, duration_us)
 
-    return JobStatus(**jobs[job_id])
+    return _to_job_status(jobs[job_id])
+
+
+def _queue_position(job_id: str) -> Optional[int]:
+    if jobs[job_id]["status"] != "queued":
+        return None
+    queued = sorted(
+        (j for j in jobs.values() if j["status"] == "queued"),
+        key=lambda j: j["created_at"],
+    )
+    for idx, j in enumerate(queued):
+        if j["job_id"] == job_id:
+            return idx + 1
+    return None
+
+
+def _to_job_status(job: dict) -> JobStatus:
+    return JobStatus(**job, queue_position=_queue_position(job["job_id"]))
 
 
 @app.get("/jobs/{job_id}", response_model=JobStatus)
 async def get_job(job_id: str):
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-    return JobStatus(**jobs[job_id])
+    return _to_job_status(jobs[job_id])
 
 
 @app.get("/jobs", response_model=list[JobStatus])
 async def list_jobs():
-    return [JobStatus(**j) for j in jobs.values()]
+    return [_to_job_status(j) for j in jobs.values()]
+
+
+@app.get("/api/queue/stats")
+async def queue_stats():
+    """Very rough aggregate estimate — not a precise scheduler simulation."""
+    running = [j for j in jobs.values() if j["status"] == "running"]
+    queued = [j for j in jobs.values() if j["status"] == "queued"]
+
+    running_remaining = sum(
+        j["eta_seconds"] if j.get("eta_seconds") is not None else (j.get("duration_seconds") or 0)
+        for j in running
+    )
+    queued_work = sum(j.get("duration_seconds") or 0 for j in queued)
+
+    total_remaining = running_remaining + (queued_work / MAX_WORKERS)
+
+    return {
+        "max_workers": MAX_WORKERS,
+        "running_count": len(running),
+        "queued_count": len(queued),
+        "queue_remaining_seconds": round(total_remaining, 1) if (running or queued) else 0.0,
+    }
 
 
 @app.get("/download/{job_id}")
@@ -345,3 +438,37 @@ async def health():
 @app.get("/presets")
 async def get_presets():
     return list(PRESETS.keys())
+
+
+# ─── Web UI + preset management ──────────────────────────────────────────────
+# In-memory only, like `jobs` — edits reset on container restart.
+
+app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+
+
+@app.get("/", include_in_schema=False)
+async def ui_root():
+    return RedirectResponse(url="/static/index.html")
+
+
+@app.get("/api/presets", response_model=dict[str, PresetConfig])
+async def get_preset_details():
+    return PRESETS
+
+
+@app.put("/api/presets/{name}", response_model=dict[str, PresetConfig])
+async def upsert_preset(name: str, config: PresetConfig):
+    PRESETS[name] = config.model_dump()
+    save_presets()
+    return PRESETS
+
+
+@app.delete("/api/presets/{name}")
+async def delete_preset(name: str):
+    if name not in PRESETS:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    if len(PRESETS) == 1:
+        raise HTTPException(status_code=400, detail="Cannot delete the last remaining preset")
+    del PRESETS[name]
+    save_presets()
+    return {"deleted": name}
