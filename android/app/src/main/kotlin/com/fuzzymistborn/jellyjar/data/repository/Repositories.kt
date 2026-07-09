@@ -489,7 +489,7 @@ class DownloadRepository @Inject constructor(
         if (!response.isSuccessful) return null
         val dir = File(context.filesDir, "thumbnails").apply { mkdirs() }
         val file = File(dir, "$jellyfinId.jpg")
-        response.body?.byteStream()?.use { input ->
+        response.body.byteStream().use { input ->
             file.outputStream().use { output -> input.copyTo(output) }
         }
         return file.absolutePath
