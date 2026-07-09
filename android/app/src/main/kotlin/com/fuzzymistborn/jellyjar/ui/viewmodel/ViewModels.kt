@@ -665,8 +665,10 @@ class AdminViewModel @Inject constructor(
     private fun ensureScheme(url: String): String {
         val trimmed = url.trim()
         if (trimmed.isBlank()) return ""
-        return if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed
-        else "http://$trimmed"
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
+        // IP addresses default to http (LAN), domain names default to https
+        val looksLikeIp = trimmed.split(":")[0].matches(Regex("""\d{1,3}(\.\d{1,3}){3}"""))
+        return if (looksLikeIp) "http://$trimmed" else "https://$trimmed"
     }
 
     fun savePin(pin: String) = viewModelScope.launch {

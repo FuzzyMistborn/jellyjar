@@ -14,8 +14,8 @@ android {
         applicationId = "com.fuzzymistborn.jellyjar"
         minSdk = 35          // Android 15
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.1"
+        versionCode = 3
+        versionName = "0.0.3"
     }
 
     buildTypes {
