@@ -100,7 +100,7 @@
   </div>
   <table id="running-table">
     <thead>
-      <tr><th>ID</th><th>Progress</th><th>FPS</th><th>Speed</th><th>ETA</th><th>Output</th><th></th></tr>
+      <tr><th>Title</th><th>ID</th><th>Progress</th><th>FPS</th><th>Speed</th><th>ETA</th><th></th></tr>
     </thead>
     <tbody id="running-body"></tbody>
   </table>
@@ -111,7 +111,7 @@
   <h2>Queued</h2>
   <table id="queued-table">
     <thead>
-      <tr><th>#</th><th>ID</th><th>Est. duration</th><th>Queued</th><th></th></tr>
+      <tr><th>#</th><th>Title</th><th>ID</th><th>Est. duration</th><th>Queued</th><th></th></tr>
     </thead>
     <tbody id="queued-body"></tbody>
   </table>
@@ -122,7 +122,7 @@
   <h2>History</h2>
   <table id="history-table">
     <thead>
-      <tr><th>ID</th><th>Status</th><th>Output</th><th>Finished</th><th></th></tr>
+      <tr><th>Title</th><th>ID</th><th>Status</th><th>Output</th><th>Finished</th><th></th></tr>
     </thead>
     <tbody id="history-body"></tbody>
   </table>
@@ -166,6 +166,18 @@ function timeAgo(iso) {
   return `${Math.floor(secs / 3600)}h ago`;
 }
 
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function titleFor(job) {
+  if (job.display_name) return escapeHtml(job.display_name);
+  if (job.output_path) return escapeHtml(job.output_path.split('/').pop());
+  return `Job ${job.job_id.slice(0, 8)}`;
+}
+
 function formatDuration(seconds) {
   if (seconds == null) return '—';
   seconds = Math.round(seconds);
@@ -206,9 +218,9 @@ async function refreshJobs() {
   runningEmpty.style.display = running.length ? 'none' : 'block';
   runningBody.innerHTML = running.map(job => {
     const progress = job.progress ?? 0;
-    const outputName = job.output_path ? job.output_path.split('/').pop() : '—';
     return `
       <tr>
+        <td>${titleFor(job)}</td>
         <td title="${job.job_id}">${job.job_id.slice(0, 8)}</td>
         <td>
           <span class="progress-bar"><span class="progress-fill" style="width:${progress}%"></span></span>
@@ -217,7 +229,6 @@ async function refreshJobs() {
         <td class="mono">${job.fps != null ? job.fps.toFixed(1) : '—'}</td>
         <td class="mono">${job.speed != null ? job.speed.toFixed(2) + 'x' : '—'}</td>
         <td class="mono">${formatDuration(job.eta_seconds)}</td>
-        <td>${outputName}</td>
         <td><button class="danger" onclick="deleteJob('${job.job_id}')">Cancel</button></td>
       </tr>`;
   }).join('');
@@ -226,6 +237,7 @@ async function refreshJobs() {
   queuedBody.innerHTML = queued.map(job => `
     <tr>
       <td>${job.queue_position ?? '—'}</td>
+      <td>${titleFor(job)}</td>
       <td title="${job.job_id}">${job.job_id.slice(0, 8)}</td>
       <td class="mono">${formatDuration(job.duration_seconds)}</td>
       <td>${timeAgo(job.created_at)}</td>
@@ -236,10 +248,11 @@ async function refreshJobs() {
   historyBody.innerHTML = history.map(job => {
     const outputName = job.output_path ? job.output_path.split('/').pop() : '—';
     const outputCell = job.status === 'complete'
-      ? `<a href="/download/${job.job_id}">${outputName}</a>`
-      : (job.error ? `<span title="${job.error.replace(/"/g, '&quot;')}">error</span>` : '—');
+      ? `<a href="/download/${job.job_id}">${escapeHtml(outputName)}</a>`
+      : (job.error ? `<span title="${escapeHtml(job.error)}">error</span>` : '—');
     return `
       <tr>
+        <td>${titleFor(job)}</td>
         <td title="${job.job_id}">${job.job_id.slice(0, 8)}</td>
         <td><span class="badge ${job.status}">${job.status}</span></td>
         <td>${outputCell}</td>

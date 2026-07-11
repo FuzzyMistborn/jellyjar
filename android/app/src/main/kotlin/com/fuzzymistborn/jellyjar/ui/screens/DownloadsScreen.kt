@@ -182,6 +182,8 @@ fun DownloadsScreen(
                 }
             }
         }
+
+        DownloadErrorSnackbar(state.downloadError) { viewModel.clearDownloadError() }
     }
 }
 

@@ -73,6 +73,7 @@ data class TranscodeRequest(
     val source_path: String,
     val preset: String,
     val output_filename: String?,
+    val display_name: String? = null,
 )
 
 data class TranscodeJob(

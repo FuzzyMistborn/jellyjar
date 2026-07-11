@@ -365,6 +365,7 @@ data class DetailState(
     val isLoading: Boolean = false,
     val isOnline: Boolean = true,
     val error: String? = null,
+    val downloadError: String? = null,
     val jellyfinUrl: String = "",
     val jellyfinToken: String = "",
     val episodeViewGrid: Boolean = true,
@@ -438,7 +439,9 @@ class DetailViewModel @Inject constructor(
 
     fun queueEpisodeDownload(episode: JellyfinItem, preset: String) = viewModelScope.launch {
         val mediaPath = episode.mediaSources?.firstOrNull()?.path ?: return@launch
-        downloadRepo.queueTranscode(episode, preset, mediaPath)
+        downloadRepo.queueTranscode(episode, preset, mediaPath).onFailure {
+            _state.update { s -> s.copy(downloadError = "Couldn't start download: ${it.message ?: "unknown error"}") }
+        }
     }
 
     fun queueSeasonDownload(seasonId: String, preset: String) = viewModelScope.launch {
@@ -446,14 +449,20 @@ class DetailViewModel @Inject constructor(
         _state.update { it.copy(seasonDownloadProgress = it.seasonDownloadProgress + (seasonId to 0f)) }
         jellyfinRepo.getItems(parentId = seasonId, types = "Episode").onSuccess { response ->
             val episodes = response.Items
+            var failCount = 0
             episodes.forEachIndexed { idx, episode ->
                 val mediaPath = episode.mediaSources?.firstOrNull()?.path ?: return@forEachIndexed
-                downloadRepo.queueTranscode(episode, preset, mediaPath)
+                downloadRepo.queueTranscode(episode, preset, mediaPath).onFailure { failCount++ }
                 val progress = ((idx + 1).toFloat() / episodes.size) * 100f
                 _state.update { it.copy(seasonDownloadProgress = it.seasonDownloadProgress + (seasonId to progress)) }
             }
             // Clear progress indicator once all queued
-            _state.update { it.copy(seasonDownloadProgress = it.seasonDownloadProgress - seasonId) }
+            _state.update {
+                it.copy(
+                    seasonDownloadProgress = it.seasonDownloadProgress - seasonId,
+                    downloadError = if (failCount > 0) "$failCount episode(s) failed to queue" else it.downloadError,
+                )
+            }
         }.onFailure {
             _state.update { it.copy(seasonDownloadProgress = it.seasonDownloadProgress - seasonId) }
         }
@@ -500,7 +509,9 @@ class DetailViewModel @Inject constructor(
     fun queueDownload(preset: String) = viewModelScope.launch {
         val item = _state.value.item ?: return@launch
         val mediaPath = item.mediaSources?.firstOrNull()?.path ?: return@launch
-        downloadRepo.queueTranscode(item, preset, mediaPath)
+        downloadRepo.queueTranscode(item, preset, mediaPath).onFailure {
+            _state.update { s -> s.copy(downloadError = "Couldn't start download: ${it.message ?: "unknown error"}") }
+        }
     }
 
     fun deleteDownload(itemId: String) = viewModelScope.launch {
@@ -509,8 +520,12 @@ class DetailViewModel @Inject constructor(
 
     fun retryDownload(itemId: String) = viewModelScope.launch {
         val entity = downloadRepo.findById(itemId) ?: return@launch
-        downloadRepo.retryTranscode(entity)
+        downloadRepo.retryTranscode(entity).onFailure {
+            _state.update { s -> s.copy(downloadError = "Couldn't retry download: ${it.message ?: "unknown error"}") }
+        }
     }
+
+    fun clearDownloadError() = _state.update { it.copy(downloadError = null) }
 
     fun toggleFavorite() = viewModelScope.launch {
         val item = _state.value.item ?: return@launch
@@ -727,6 +742,7 @@ data class DownloadsState(
     val jellyfinUrl: String = "",
     val storageStats: StorageStats? = null,
     val etaByJellyfinId: Map<String, Int?> = emptyMap(),
+    val downloadError: String? = null,
 )
 
 @HiltViewModel
@@ -800,8 +816,12 @@ class DownloadsViewModel @Inject constructor(
 
     fun retryDownload(jellyfinId: String) = viewModelScope.launch {
         val entity = downloadRepo.findById(jellyfinId) ?: return@launch
-        downloadRepo.retryTranscode(entity)
+        downloadRepo.retryTranscode(entity).onFailure {
+            _state.update { s -> s.copy(downloadError = "Couldn't retry download: ${it.message ?: "unknown error"}") }
+        }
     }
+
+    fun clearDownloadError() = _state.update { it.copy(downloadError = null) }
 
     fun cancelAllActive() = viewModelScope.launch {
         _state.value.active.forEach { downloadRepo.deleteDownload(it.jellyfinId) }
@@ -812,7 +832,9 @@ class DownloadsViewModel @Inject constructor(
     }
 
     fun retryAllFailed() = viewModelScope.launch {
-        _state.value.failed.forEach { downloadRepo.retryTranscode(it) }
+        var failCount = 0
+        _state.value.failed.forEach { downloadRepo.retryTranscode(it).onFailure { failCount++ } }
+        if (failCount > 0) _state.update { it.copy(downloadError = "$failCount download(s) failed to retry") }
     }
 
     fun clearAllFailed() = viewModelScope.launch {
@@ -843,6 +865,7 @@ data class SeasonState(
     val isOnline: Boolean = true,
     val episodeViewGrid: Boolean = true,
     val error: String? = null,
+    val downloadError: String? = null,
     val jellyfinUrl: String = "",
     val jellyfinToken: String = "",
 )
@@ -909,7 +932,9 @@ class SeasonViewModel @Inject constructor(
 
     fun queueEpisodeDownload(episode: JellyfinItem, preset: String) = viewModelScope.launch {
         val path = episode.mediaSources?.firstOrNull()?.path ?: return@launch
-        downloadRepo.queueTranscode(episode, preset, path)
+        downloadRepo.queueTranscode(episode, preset, path).onFailure {
+            _state.update { s -> s.copy(downloadError = "Couldn't start download: ${it.message ?: "unknown error"}") }
+        }
     }
 
     fun deleteDownload(itemId: String) = viewModelScope.launch {
@@ -918,11 +943,16 @@ class SeasonViewModel @Inject constructor(
 
     fun retryEpisodeDownload(itemId: String) = viewModelScope.launch {
         val entity = downloadRepo.findById(itemId) ?: return@launch
-        downloadRepo.retryTranscode(entity)
+        downloadRepo.retryTranscode(entity).onFailure {
+            _state.update { s -> s.copy(downloadError = "Couldn't retry download: ${it.message ?: "unknown error"}") }
+        }
     }
+
+    fun clearDownloadError() = _state.update { it.copy(downloadError = null) }
 
     fun downloadRemaining(preset: String) = viewModelScope.launch {
         val downloads = _state.value.episodeDownloads
+        var failCount = 0
         _state.value.episodes
             .filter { ep ->
                 val dl = downloads[ep.id]
@@ -930,13 +960,15 @@ class SeasonViewModel @Inject constructor(
             }
             .forEach { ep ->
                 ep.mediaSources?.firstOrNull()?.path?.let { path ->
-                    downloadRepo.queueTranscode(ep, preset, path)
+                    downloadRepo.queueTranscode(ep, preset, path).onFailure { failCount++ }
                 }
             }
+        if (failCount > 0) _state.update { it.copy(downloadError = "$failCount episode(s) failed to queue") }
     }
 
     fun downloadNextN(n: Int, preset: String) = viewModelScope.launch {
         val downloads = _state.value.episodeDownloads
+        var failCount = 0
         _state.value.episodes
             .filter { ep ->
                 val dl = downloads[ep.id]
@@ -945,9 +977,10 @@ class SeasonViewModel @Inject constructor(
             .take(n)
             .forEach { ep ->
                 ep.mediaSources?.firstOrNull()?.path?.let { path ->
-                    downloadRepo.queueTranscode(ep, preset, path)
+                    downloadRepo.queueTranscode(ep, preset, path).onFailure { failCount++ }
                 }
             }
+        if (failCount > 0) _state.update { it.copy(downloadError = "$failCount episode(s) failed to queue") }
     }
 
     fun toggleEpisodeView() = viewModelScope.launch {

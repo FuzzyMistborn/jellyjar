@@ -3,11 +3,49 @@ package com.fuzzymistborn.jellyjar.ui.screens
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BoxScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.fuzzymistborn.jellyjar.ui.theme.*
+
+@Composable
+fun BoxScope.DownloadErrorSnackbar(error: String?, onDismissed: () -> Unit) {
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(error) {
+        if (error != null) {
+            snackbarHostState.showSnackbar(error)
+            onDismissed()
+        }
+    }
+    SnackbarHost(snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter))
+}
+
+@Composable
+fun DeleteConfirmDialog(
+    title: String = "Remove download?",
+    message: String = "This deletes the downloaded file from this device. You can download it again later.",
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title, style = MaterialTheme.typography.titleLarge, color = OnSurface) },
+        text = { Text(message, style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted) },
+        confirmButton = {
+            TextButton(onClick = { onDismiss(); onConfirm() }) {
+                Text("Remove", color = Error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+        containerColor = SurfaceVariant,
+    )
+}
 
 @Composable
 fun PresetPickerDialog(

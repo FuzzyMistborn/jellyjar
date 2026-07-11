@@ -2,6 +2,7 @@ import os
 import uuid
 import asyncio
 import json
+import logging
 import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,6 +13,17 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+# The web UI polls these on a timer; they'd otherwise flood the access log every couple seconds.
+_QUIET_PATHS = ("GET /jobs ", "GET /api/queue/stats ", "GET /health ")
+
+
+class _QuietPollingFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not any(p in record.getMessage() for p in _QUIET_PATHS)
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietPollingFilter())
 
 _active_encoder: str = "libx264"
 
@@ -118,6 +130,7 @@ class TranscodeRequest(BaseModel):
     source_path: str          # Path relative to MEDIA_ROOT
     preset: str               # "1080p" or "720p"
     output_filename: Optional[str] = None
+    display_name: Optional[str] = None   # e.g. "The Matrix" or "Breaking Bad · S01E03 · Title"
 
 
 class PresetConfig(BaseModel):
@@ -135,6 +148,7 @@ class JobStatus(BaseModel):
     error: Optional[str] = None
     created_at: str
     updated_at: str
+    display_name: Optional[str] = None
     duration_seconds: Optional[float] = None   # source media duration
     fps: Optional[float] = None
     speed: Optional[float] = None              # ffmpeg encode speed, e.g. 2.5 = 2.5x realtime
@@ -334,6 +348,7 @@ async def start_transcode(req: TranscodeRequest, background_tasks: BackgroundTas
         "error": None,
         "created_at": now,
         "updated_at": now,
+        "display_name": req.display_name,
         "duration_seconds": (duration_us / 1_000_000) if duration_us else None,
         "fps": None,
         "speed": None,

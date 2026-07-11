@@ -242,5 +242,7 @@ fun SeasonScreen(
                 }
             }
         }
+
+        DownloadErrorSnackbar(state.downloadError) { viewModel.clearDownloadError() }
     }
 }

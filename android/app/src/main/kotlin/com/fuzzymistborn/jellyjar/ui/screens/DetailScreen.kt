@@ -57,6 +57,7 @@ fun DetailScreen(
 
     val state by viewModel.state.collectAsStateWithLifecycle()
     var showPresetDialog by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize().background(BackgroundGradient)) {
 
@@ -254,7 +255,7 @@ fun DetailScreen(
                                         DownloadProgressButton(dl.status, dl.progress)
                                     dl?.status == DownloadStatus.COMPLETE.name ->
                                         OutlinedButton(
-                                            onClick = { viewModel.deleteDownload(item.id) },
+                                            onClick = { showDeleteConfirm = true },
                                             colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
                                         ) {
                                             Icon(Icons.Default.Delete, contentDescription = null)
@@ -273,7 +274,7 @@ fun DetailScreen(
                                             }
                                         }
                                         OutlinedButton(
-                                            onClick = { viewModel.deleteDownload(item.id) },
+                                            onClick = { showDeleteConfirm = true },
                                             colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
                                         ) {
                                             Icon(Icons.Default.Delete, contentDescription = null)
@@ -352,6 +353,8 @@ fun DetailScreen(
                 onRetry = { viewModel.loadItem(itemId) },
             )
         }
+
+        DownloadErrorSnackbar(state.downloadError) { viewModel.clearDownloadError() }
     } // end Box
 
     // Preset selection dialog
@@ -362,6 +365,13 @@ fun DetailScreen(
                 viewModel.queueDownload(preset)
             },
             onDismiss = { showPresetDialog = false },
+        )
+    }
+
+    if (showDeleteConfirm) {
+        DeleteConfirmDialog(
+            onConfirm = { viewModel.deleteDownload(itemId) },
+            onDismiss = { showDeleteConfirm = false },
         )
     }
 }

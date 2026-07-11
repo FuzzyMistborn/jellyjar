@@ -313,6 +313,7 @@ class DownloadRepository @Inject constructor(
                     source_path = mediaSourcePath,
                     preset = preset,
                     output_filename = "${item.id}_${preset}.mp4",
+                    display_name = item.displayTitle,
                 )
             )
 
@@ -455,6 +456,7 @@ class DownloadRepository @Inject constructor(
                     source_path = mediaPath,
                     preset = entity.preset,
                     output_filename = "${entity.jellyfinId}_${entity.preset}.mp4",
+                    display_name = entity.title,
                 )
             )
             val wifiOnly = settings.currentSnapshot().wifiOnly
