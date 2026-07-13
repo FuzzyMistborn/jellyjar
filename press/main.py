@@ -75,6 +75,40 @@ CLEANUP_INTERVAL_SECONDS = 3600
 # Processes currently running, keyed by job_id, so DELETE /jobs/{id} can kill an in-progress transcode.
 _active_processes: dict[str, asyncio.subprocess.Process] = {}
 
+# Keeps strong references to transcode tasks restarted at startup (asyncio only holds weak ones).
+_resume_tasks: list[asyncio.Task] = []
+
+
+async def resume_interrupted_jobs():
+    """Restart transcodes that were queued/running when the service last stopped."""
+    changed = 0
+    resumed = 0
+    for job in list(jobs.values()):
+        if job["status"] != "queued":
+            continue
+        changed += 1
+        source = job["source_path"]
+        preset_name = job["preset"]
+        if preset_name not in PRESETS:
+            job["status"] = "failed"
+            job["error"] = f"Preset '{preset_name}' no longer exists"
+            job["updated_at"] = datetime.utcnow().isoformat()
+            continue
+        if not Path(source).exists():
+            job["status"] = "failed"
+            job["error"] = f"Source file not found: {source}"
+            job["updated_at"] = datetime.utcnow().isoformat()
+            continue
+        duration_us = await get_duration_us(source)
+        job["duration_seconds"] = (duration_us / 1_000_000) if duration_us else None
+        _resume_tasks.append(asyncio.create_task(
+            run_transcode(job["job_id"], source, job["output_path"], PRESETS[preset_name], duration_us)
+        ))
+        resumed += 1
+    if changed:
+        print(f"[Press] Restarted {resumed} interrupted transcode job(s)", flush=True)
+        _save_jobs()
+
 
 async def cleanup_loop():
     """Periodically remove completed jobs (and their output files) older than CLEANUP_AFTER_DAYS."""
@@ -113,6 +147,7 @@ async def lifespan(app_: FastAPI):
     else:
         _active_encoder = await detect_encoder()
     print(f"[Press] Max concurrent transcode workers: {MAX_WORKERS}", flush=True)
+    await resume_interrupted_jobs()
     if CLEANUP_AFTER_DAYS > 0:
         print(f"[Press] Output cleanup: jobs older than {CLEANUP_AFTER_DAYS} day(s) will be removed", flush=True)
     cleanup_task = asyncio.create_task(cleanup_loop())
@@ -171,12 +206,23 @@ def load_jobs() -> dict:
         print(f"[Press] Failed to read {JOBS_FILE}, starting with no jobs: {e}", flush=True)
         return {}
 
-    # Jobs that were mid-transcode when the service stopped can't be resumed.
+    # Jobs that were mid-transcode when the service stopped were killed with it.
+    # Ones with a persisted source_path/preset are re-queued and restarted at
+    # startup (see resume_interrupted_jobs); older jobs saved before those
+    # fields existed can't be retried automatically.
     now = datetime.utcnow().isoformat()
     for job in raw.values():
         if job["status"] in ("queued", "running"):
-            job["status"] = "failed"
-            job["error"] = "Interrupted by service restart"
+            if job.get("source_path") and job.get("preset"):
+                job["status"] = "queued"
+                job["progress"] = 0.0
+                job["error"] = None
+                job["fps"] = None
+                job["speed"] = None
+                job["eta_seconds"] = None
+            else:
+                job["status"] = "failed"
+                job["error"] = "Interrupted by service restart"
             job["updated_at"] = now
     return raw
 
@@ -435,6 +481,8 @@ async def _create_job(
         "job_id": job_id,
         "status": "queued",
         "progress": 0.0,
+        "source_path": str(source),
+        "preset": req.preset,
         "output_path": output,
         "error": None,
         "created_at": now,

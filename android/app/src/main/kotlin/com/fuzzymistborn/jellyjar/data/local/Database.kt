@@ -24,6 +24,8 @@ data class DownloadEntity(
     val seriesName: String?,
     val mediaSourcePath: String? = null,
     val playbackPositionMs: Long = 0,
+    // Order within the local download queue; only meaningful while status = QUEUED.
+    val queuePosition: Long = 0,
 )
 
 @Entity(tableName = "cached_items")
@@ -103,6 +105,21 @@ interface DownloadDao {
 
     @Query("SELECT COALESCE(SUM(sizeBytes), 0) FROM downloads WHERE status = 'COMPLETE'")
     suspend fun totalCompletedBytes(): Long
+
+    @Query("SELECT * FROM downloads WHERE status = 'QUEUED' ORDER BY queuePosition ASC, addedAt ASC")
+    suspend fun queuedInOrder(): List<DownloadEntity>
+
+    @Query("SELECT COUNT(*) FROM downloads WHERE status IN ('TRANSCODING', 'DOWNLOADING')")
+    suspend fun countInFlight(): Int
+
+    @Query("SELECT COALESCE(MAX(queuePosition), 0) FROM downloads WHERE status = 'QUEUED'")
+    suspend fun maxQueuePosition(): Long
+
+    @Query("SELECT COALESCE(MIN(queuePosition), 0) FROM downloads WHERE status = 'QUEUED'")
+    suspend fun minQueuePosition(): Long
+
+    @Query("UPDATE downloads SET queuePosition = :position WHERE jellyfinId = :id")
+    suspend fun updateQueuePosition(id: String, position: Long)
 }
 
 @Dao
@@ -181,7 +198,7 @@ interface CachedItemDao {
 
 @Database(
     entities = [DownloadEntity::class, CachedItemEntity::class, PlaybackPositionEntity::class, FavoriteEntity::class],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class JellyJarDatabase : RoomDatabase() {

@@ -132,4 +132,6 @@ data class AppSettings(
     val showRecentlyAdded: Boolean = true,
     val showMyList: Boolean = true,
     val autoPlayNextEpisode: Boolean = true,
+    val downloadQueuePaused: Boolean = false,
+    val maxConcurrentDownloads: Int = 1,
 )

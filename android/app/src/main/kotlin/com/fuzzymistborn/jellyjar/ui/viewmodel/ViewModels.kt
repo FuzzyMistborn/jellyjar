@@ -611,6 +611,7 @@ data class AdminState(
     val showRecentlyAdded: Boolean = true,
     val showMyList: Boolean = true,
     val autoPlayNextEpisode: Boolean = true,
+    val maxConcurrentDownloads: Int = 1,
 )
 
 @HiltViewModel
@@ -641,6 +642,7 @@ class AdminViewModel @Inject constructor(
                         showRecentlyAdded = s.showRecentlyAdded,
                         showMyList = s.showMyList,
                         autoPlayNextEpisode = s.autoPlayNextEpisode,
+                        maxConcurrentDownloads = s.maxConcurrentDownloads,
                     )
                 }
                 refreshStorageInfo()
@@ -747,6 +749,11 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch { settings.saveAutoPlayNextEpisode(v) }
     }
 
+    fun setMaxConcurrentDownloads(v: Int) {
+        _state.update { it.copy(maxConcurrentDownloads = v) }
+        viewModelScope.launch { settings.saveMaxConcurrentDownloads(v) }
+    }
+
     fun saveAll() = viewModelScope.launch {
         settings.saveShimUrl(ensureScheme(_state.value.shimUrl))
         settings.saveDownloadPath(_state.value.downloadPath)
@@ -779,8 +786,10 @@ data class StorageStats(
 
 data class DownloadsState(
     val active: List<com.fuzzymistborn.jellyjar.data.local.DownloadEntity> = emptyList(),
+    val queued: List<com.fuzzymistborn.jellyjar.data.local.DownloadEntity> = emptyList(),
     val completed: List<com.fuzzymistborn.jellyjar.data.local.DownloadEntity> = emptyList(),
     val failed: List<com.fuzzymistborn.jellyjar.data.local.DownloadEntity> = emptyList(),
+    val queuePaused: Boolean = false,
     val jellyfinUrl: String = "",
     val storageStats: StorageStats? = null,
     val etaByJellyfinId: Map<String, Int?> = emptyMap(),
@@ -801,14 +810,13 @@ class DownloadsViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             settings.settings.collect { s ->
-                _state.update { it.copy(jellyfinUrl = s.jellyfinUrl) }
+                _state.update { it.copy(jellyfinUrl = s.jellyfinUrl, queuePaused = s.downloadQueuePaused) }
             }
         }
         viewModelScope.launch {
             downloadRepo.downloads.collect { all ->
                 val now = System.currentTimeMillis()
                 val activeStatusNames = listOf(
-                    com.fuzzymistborn.jellyjar.model.DownloadStatus.QUEUED.name,
                     com.fuzzymistborn.jellyjar.model.DownloadStatus.TRANSCODING.name,
                     com.fuzzymistborn.jellyjar.model.DownloadStatus.DOWNLOADING.name,
                 )
@@ -838,6 +846,9 @@ class DownloadsViewModel @Inject constructor(
                 _state.update {
                     it.copy(
                         active = all.filter { d -> d.status in activeStatusNames },
+                        queued = all
+                            .filter { d -> d.status == com.fuzzymistborn.jellyjar.model.DownloadStatus.QUEUED.name }
+                            .sortedWith(compareBy({ d -> d.queuePosition }, { d -> d.addedAt })),
                         completed = completed,
                         failed = all.filter { d -> d.status == com.fuzzymistborn.jellyjar.model.DownloadStatus.FAILED.name },
                         etaByJellyfinId = newEtas,
@@ -865,8 +876,18 @@ class DownloadsViewModel @Inject constructor(
 
     fun clearDownloadError() = _state.update { it.copy(downloadError = null) }
 
+    fun pauseQueue() = viewModelScope.launch { settings.saveDownloadQueuePaused(true) }
+
+    fun resumeQueue() = viewModelScope.launch { settings.saveDownloadQueuePaused(false) }
+
+    fun moveUp(jellyfinId: String) = viewModelScope.launch { downloadRepo.moveInQueue(jellyfinId, -1) }
+
+    fun moveDown(jellyfinId: String) = viewModelScope.launch { downloadRepo.moveInQueue(jellyfinId, 1) }
+
+    fun prioritize(jellyfinId: String) = viewModelScope.launch { downloadRepo.prioritize(jellyfinId) }
+
     fun cancelAllActive() = viewModelScope.launch {
-        _state.value.active.forEach { downloadRepo.deleteDownload(it.jellyfinId) }
+        (_state.value.active + _state.value.queued).forEach { downloadRepo.deleteDownload(it.jellyfinId) }
     }
 
     fun deleteAllCompleted() = viewModelScope.launch {
@@ -891,6 +912,87 @@ class DownloadsViewModel @Inject constructor(
         com.fuzzymistborn.jellyjar.api.JellyfinImageHelper.primaryImageUrl(
             _state.value.jellyfinUrl, jellyfinId, maxWidth = 200
         )
+}
+
+// ─── Storage ViewModel ────────────────────────────────────────────────────────
+
+enum class StorageSort { SIZE, NEWEST, OLDEST, NAME }
+
+data class StorageState(
+    val items: List<DownloadEntity> = emptyList(),
+    val sort: StorageSort = StorageSort.SIZE,
+    val movieCount: Int = 0,
+    val movieBytes: Long = 0L,
+    val episodeCount: Int = 0,
+    val episodeBytes: Long = 0L,
+    val totalBytes: Long = 0L,
+    val freeBytes: Long = 0L,
+    val deviceTotalBytes: Long = 0L,
+    val watchedItems: List<DownloadEntity> = emptyList(),
+    val watchedBytes: Long = 0L,
+) {
+    val sortedItems: List<DownloadEntity> get() = when (sort) {
+        StorageSort.SIZE -> items.sortedByDescending { it.sizeBytes }
+        StorageSort.NEWEST -> items.sortedByDescending { it.addedAt }
+        StorageSort.OLDEST -> items.sortedBy { it.addedAt }
+        StorageSort.NAME -> items.sortedBy { it.title.lowercase() }
+    }
+}
+
+@HiltViewModel
+class StorageViewModel @Inject constructor(
+    private val downloadRepo: DownloadRepository,
+) : ViewModel() {
+
+    private val _state = MutableStateFlow(StorageState())
+    val state: StateFlow<StorageState> = _state.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            downloadRepo.completedDownloads.collect { completed ->
+                val movies = completed.filter { it.type == "Movie" }
+                val episodes = completed.filter { it.type == "Episode" }
+                val watched = completed.filter { d ->
+                    val runtimeMs = (d.runtimeMinutes ?: 0).toLong() * 60_000L
+                    runtimeMs > 0 && d.playbackPositionMs >= runtimeMs * 0.8
+                }
+                val info = downloadRepo.getDeviceStorageInfo()
+                _state.update {
+                    it.copy(
+                        items = completed,
+                        movieCount = movies.size,
+                        movieBytes = movies.sumOf { m -> m.sizeBytes },
+                        episodeCount = episodes.size,
+                        episodeBytes = episodes.sumOf { e -> e.sizeBytes },
+                        totalBytes = completed.sumOf { c -> c.sizeBytes },
+                        freeBytes = info.freeBytes,
+                        deviceTotalBytes = info.totalBytes,
+                        watchedItems = watched,
+                        watchedBytes = watched.sumOf { w -> w.sizeBytes },
+                    )
+                }
+            }
+        }
+    }
+
+    fun setSort(sort: StorageSort) = _state.update { it.copy(sort = sort) }
+
+    fun delete(jellyfinId: String) = viewModelScope.launch {
+        downloadRepo.deleteDownload(jellyfinId)
+    }
+
+    fun deleteWatched() = viewModelScope.launch {
+        _state.value.watchedItems.forEach { downloadRepo.deleteDownload(it.jellyfinId) }
+    }
+
+    fun deleteOldest(count: Int) = viewModelScope.launch {
+        _state.value.items.sortedBy { it.addedAt }.take(count)
+            .forEach { downloadRepo.deleteDownload(it.jellyfinId) }
+    }
+
+    fun deleteEverything() = viewModelScope.launch {
+        _state.value.items.forEach { downloadRepo.deleteDownload(it.jellyfinId) }
+    }
 }
 
 // ─── Seasons ViewModel ────────────────────────────────────────────────────────

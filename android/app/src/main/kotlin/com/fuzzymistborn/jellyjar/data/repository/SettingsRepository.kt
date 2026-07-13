@@ -3,6 +3,7 @@ package com.fuzzymistborn.jellyjar.data.repository
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.fuzzymistborn.jellyjar.model.AppSettings
@@ -33,6 +34,8 @@ class SettingsRepository @Inject constructor(
         val SHOW_RECENTLY_ADDED = booleanPreferencesKey("show_recently_added")
         val SHOW_MY_LIST = booleanPreferencesKey("show_my_list")
         val AUTO_PLAY_NEXT_EPISODE = booleanPreferencesKey("auto_play_next_episode")
+        val DOWNLOAD_QUEUE_PAUSED = booleanPreferencesKey("download_queue_paused")
+        val MAX_CONCURRENT_DOWNLOADS = intPreferencesKey("max_concurrent_downloads")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { prefs ->
@@ -50,6 +53,8 @@ class SettingsRepository @Inject constructor(
             showRecentlyAdded = prefs[Keys.SHOW_RECENTLY_ADDED] ?: true,
             showMyList = prefs[Keys.SHOW_MY_LIST] ?: true,
             autoPlayNextEpisode = prefs[Keys.AUTO_PLAY_NEXT_EPISODE] ?: true,
+            downloadQueuePaused = prefs[Keys.DOWNLOAD_QUEUE_PAUSED] ?: false,
+            maxConcurrentDownloads = (prefs[Keys.MAX_CONCURRENT_DOWNLOADS] ?: 1).coerceIn(1, 2),
         )
     }
 
@@ -113,6 +118,14 @@ class SettingsRepository @Inject constructor(
 
     suspend fun saveAutoPlayNextEpisode(enabled: Boolean) {
         context.dataStore.edit { prefs -> prefs[Keys.AUTO_PLAY_NEXT_EPISODE] = enabled }
+    }
+
+    suspend fun saveDownloadQueuePaused(paused: Boolean) {
+        context.dataStore.edit { prefs -> prefs[Keys.DOWNLOAD_QUEUE_PAUSED] = paused }
+    }
+
+    suspend fun saveMaxConcurrentDownloads(limit: Int) {
+        context.dataStore.edit { prefs -> prefs[Keys.MAX_CONCURRENT_DOWNLOADS] = limit.coerceIn(1, 2) }
     }
 
     fun verifyPin(input: String, storedHash: String): Boolean =

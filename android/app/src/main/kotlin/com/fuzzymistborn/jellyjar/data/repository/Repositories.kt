@@ -331,32 +331,25 @@ class DownloadRepository @Inject constructor(
             .create(ShimApiService::class.java)
     }
 
+    // Adds the item to the end of the local download queue. The DownloadQueueManager promotes
+    // queued items to Press (and starts a DownloadWorker) as concurrency slots free up.
     suspend fun queueTranscode(
         item: JellyfinItem,
         preset: String,
         mediaSourcePath: String,
-    ): Result<String> = withContext(Dispatchers.IO) {
+    ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             checkFreeSpace(preset, item.runtimeMinutes)
-            val job = shimService().startTranscode(
-                TranscodeRequest(
-                    source_path = mediaSourcePath,
-                    preset = preset,
-                    output_filename = "${item.id}_${preset}.mp4",
-                    display_name = item.displayTitle,
-                )
-            )
-
             val entity = DownloadEntity(
                 jellyfinId = item.id,
                 title = item.displayTitle,
                 localPath = "",
-                status = DownloadStatus.TRANSCODING.name,
+                status = DownloadStatus.QUEUED.name,
                 progress = 0f,
                 sizeBytes = 0L,
                 preset = preset,
                 addedAt = System.currentTimeMillis(),
-                shimJobId = job.job_id,
+                shimJobId = null,
                 thumbnailPath = null,
                 overview = item.overview,
                 year = item.year,
@@ -364,16 +357,66 @@ class DownloadRepository @Inject constructor(
                 type = item.type,
                 seriesName = item.seriesName,
                 mediaSourcePath = mediaSourcePath,
+                queuePosition = downloadDao.maxQueuePosition() + 1,
             )
-            val wifiOnly = settings.currentSnapshot().wifiOnly
             downloadDao.upsert(entity)
-            WorkManager.getInstance(context).enqueueUniqueWork(
-                "download_${item.id}",
-                ExistingWorkPolicy.REPLACE,
-                DownloadWorker.buildRequest(job.job_id, "${item.id}_${preset}.mp4", wifiOnly),
-            )
-            job.job_id
         }
+    }
+
+    // Submits a QUEUED item to Press and hands the poll+download off to a DownloadWorker.
+    // Called only by DownloadQueueManager, which enforces the concurrency limit and pause flag.
+    suspend fun startQueuedItem(entity: DownloadEntity): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val mediaPath = entity.mediaSourcePath ?: error("No source path saved")
+            val filename = "${entity.jellyfinId}_${entity.preset}.mp4"
+            val job = shimService().startTranscode(
+                TranscodeRequest(
+                    source_path = mediaPath,
+                    preset = entity.preset,
+                    output_filename = filename,
+                    display_name = entity.title,
+                )
+            )
+            downloadDao.upsert(entity.copy(shimJobId = job.job_id, status = DownloadStatus.TRANSCODING.name, progress = 0f))
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                "download_${entity.jellyfinId}",
+                ExistingWorkPolicy.REPLACE,
+                DownloadWorker.buildRequest(job.job_id, filename, settings.currentSnapshot().wifiOnly),
+            )
+            Unit
+        }.onFailure {
+            downloadDao.updateStatus(entity.jellyfinId, DownloadStatus.FAILED.name)
+        }
+    }
+
+    suspend fun queuedInOrder(): List<DownloadEntity> = withContext(Dispatchers.IO) {
+        downloadDao.queuedInOrder()
+    }
+
+    suspend fun countInFlight(): Int = withContext(Dispatchers.IO) {
+        downloadDao.countInFlight()
+    }
+
+    suspend fun prioritize(jellyfinId: String) = withContext(Dispatchers.IO) {
+        downloadDao.updateQueuePosition(jellyfinId, downloadDao.minQueuePosition() - 1)
+    }
+
+    // Swaps the item with its neighbor above (direction = -1) or below (+1) in the queue.
+    suspend fun moveInQueue(jellyfinId: String, direction: Int) = withContext(Dispatchers.IO) {
+        val queued = downloadDao.queuedInOrder()
+        val index = queued.indexOfFirst { it.jellyfinId == jellyfinId }
+        if (index == -1) return@withContext
+        val neighbor = queued.getOrNull(index + direction) ?: return@withContext
+        val current = queued[index]
+        // Positions can collide (e.g. both 0 from older rows); re-derive distinct values on swap.
+        val (a, b) = if (current.queuePosition != neighbor.queuePosition) {
+            current.queuePosition to neighbor.queuePosition
+        } else {
+            val base = current.queuePosition
+            if (direction > 0) base to base + 1 else base + 1 to base
+        }
+        downloadDao.updateQueuePosition(current.jellyfinId, b)
+        downloadDao.updateQueuePosition(neighbor.jellyfinId, a)
     }
 
     suspend fun pollJobStatus(jobId: String): Result<TranscodeJob> = withContext(Dispatchers.IO) {
@@ -530,26 +573,19 @@ class DownloadRepository @Inject constructor(
         }
     }
 
-    suspend fun retryTranscode(entity: DownloadEntity): Result<String> = withContext(Dispatchers.IO) {
+    // Puts a failed item back at the end of the local queue; the queue manager restarts it.
+    suspend fun retryTranscode(entity: DownloadEntity): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             checkFreeSpace(entity.preset, entity.runtimeMinutes)
-            val mediaPath = entity.mediaSourcePath ?: error("No source path saved for retry")
-            val job = shimService().startTranscode(
-                TranscodeRequest(
-                    source_path = mediaPath,
-                    preset = entity.preset,
-                    output_filename = "${entity.jellyfinId}_${entity.preset}.mp4",
-                    display_name = entity.title,
+            if (entity.mediaSourcePath == null) error("No source path saved for retry")
+            downloadDao.upsert(
+                entity.copy(
+                    status = DownloadStatus.QUEUED.name,
+                    progress = 0f,
+                    shimJobId = null,
+                    queuePosition = downloadDao.maxQueuePosition() + 1,
                 )
             )
-            val wifiOnly = settings.currentSnapshot().wifiOnly
-            downloadDao.upsert(entity.copy(shimJobId = job.job_id, status = DownloadStatus.TRANSCODING.name, progress = 0f))
-            WorkManager.getInstance(context).enqueueUniqueWork(
-                "download_${entity.jellyfinId}",
-                ExistingWorkPolicy.REPLACE,
-                DownloadWorker.buildRequest(job.job_id, "${entity.jellyfinId}_${entity.preset}.mp4", wifiOnly),
-            )
-            job.job_id
         }
     }
 

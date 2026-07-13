@@ -41,6 +41,7 @@ sealed class Screen(val route: String) {
         fun go(seasonId: String, seriesId: String) = "season/$seasonId/$seriesId"
     }
     object Downloads : Screen("downloads")
+    object Storage : Screen("storage")
     object PinGate : Screen("pin_gate")
     object Admin : Screen("admin")
 }
@@ -152,8 +153,13 @@ fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableSta
                 onPlayClick = { localPath, jellyfinId ->
                     navController.navigate(Screen.Player.go(localPath, jellyfinId))
                 },
+                onStorageClick = { navController.navigate(Screen.Storage.route) },
                 onBack = { navController.popBackStack() },
             )
+        }
+
+        composable(Screen.Storage.route) {
+            StorageScreen(onBack = { navController.popBackStack() })
         }
 
         composable(

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -25,11 +26,13 @@ import com.fuzzymistborn.jellyjar.ui.viewmodel.DownloadsViewModel
 @Composable
 fun DownloadsScreen(
     onPlayClick: (localPath: String, jellyfinId: String) -> Unit,
+    onStorageClick: () -> Unit,
     onBack: () -> Unit,
     viewModel: DownloadsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val hasContent = state.active.isNotEmpty() || state.completed.isNotEmpty() || state.failed.isNotEmpty()
+    val hasContent = state.active.isNotEmpty() || state.queued.isNotEmpty() ||
+        state.completed.isNotEmpty() || state.failed.isNotEmpty()
 
     Box(modifier = Modifier.fillMaxSize().background(Background)) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -45,6 +48,10 @@ fun DownloadsScreen(
                 }
                 Spacer(Modifier.width(4.dp))
                 Text("Downloads", style = MaterialTheme.typography.headlineMedium, color = OnSurface)
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onStorageClick) {
+                    Icon(Icons.Default.Storage, contentDescription = "Manage Storage", tint = OnSurface)
+                }
             }
 
             if (!hasContent) {
@@ -125,6 +132,48 @@ fun DownloadsScreen(
                             ActiveDownloadCard(
                                 entity = entity,
                                 etaMinutes = state.etaByJellyfinId[entity.jellyfinId],
+                                onCancel = { viewModel.cancelDownload(entity.jellyfinId) },
+                            )
+                        }
+                    }
+                    if (state.queued.isNotEmpty() || (state.queuePaused && state.active.isEmpty())) {
+                        item {
+                            SectionHeader("Queue (${state.queued.size})") {
+                                TextButton(onClick = {
+                                    if (state.queuePaused) viewModel.resumeQueue() else viewModel.pauseQueue()
+                                }) {
+                                    Icon(
+                                        if (state.queuePaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(
+                                        if (state.queuePaused) "Resume" else "Pause",
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                            }
+                        }
+                        if (state.queuePaused) {
+                            item {
+                                Text(
+                                    "Queue paused — items already in progress will finish",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = OnSurfaceMuted,
+                                    modifier = Modifier.padding(bottom = 4.dp),
+                                )
+                            }
+                        }
+                        itemsIndexed(state.queued, key = { _, d -> d.jellyfinId }) { index, entity ->
+                            QueuedDownloadCard(
+                                entity = entity,
+                                position = index + 1,
+                                isFirst = index == 0,
+                                isLast = index == state.queued.lastIndex,
+                                onPrioritize = { viewModel.prioritize(entity.jellyfinId) },
+                                onMoveUp = { viewModel.moveUp(entity.jellyfinId) },
+                                onMoveDown = { viewModel.moveDown(entity.jellyfinId) },
                                 onCancel = { viewModel.cancelDownload(entity.jellyfinId) },
                             )
                         }
@@ -266,6 +315,70 @@ private fun ActiveDownloadCard(entity: DownloadEntity, etaMinutes: Int?, onCance
                 )
                 Spacer(Modifier.height(4.dp))
                 Text("Starting…", style = MaterialTheme.typography.labelSmall, color = OnSurfaceMuted)
+            }
+        }
+    }
+}
+
+@Composable
+private fun QueuedDownloadCard(
+    entity: DownloadEntity,
+    position: Int,
+    isFirst: Boolean,
+    isLast: Boolean,
+    onPrioritize: () -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Surface(color = SurfaceVariant, shape = RoundedCornerShape(12.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                "$position",
+                style = MaterialTheme.typography.titleMedium,
+                color = OnSurfaceMuted,
+                modifier = Modifier.widthIn(min = 24.dp),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    entity.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = OnSurface,
+                    maxLines = 2,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "Waiting · ${entity.preset}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OnSurfaceMuted,
+                )
+            }
+            IconButton(onClick = onPrioritize, enabled = !isFirst) {
+                Icon(
+                    Icons.Default.KeyboardDoubleArrowUp, contentDescription = "Move to top",
+                    tint = if (isFirst) OnSurfaceMuted.copy(alpha = 0.3f) else Primary,
+                )
+            }
+            IconButton(onClick = onMoveUp, enabled = !isFirst) {
+                Icon(
+                    Icons.Default.KeyboardArrowUp, contentDescription = "Move up",
+                    tint = if (isFirst) OnSurfaceMuted.copy(alpha = 0.3f) else OnSurfaceMuted,
+                )
+            }
+            IconButton(onClick = onMoveDown, enabled = !isLast) {
+                Icon(
+                    Icons.Default.KeyboardArrowDown, contentDescription = "Move down",
+                    tint = if (isLast) OnSurfaceMuted.copy(alpha = 0.3f) else OnSurfaceMuted,
+                )
+            }
+            IconButton(onClick = onCancel) {
+                Icon(Icons.Default.Close, contentDescription = "Cancel", tint = OnSurfaceMuted)
             }
         }
     }

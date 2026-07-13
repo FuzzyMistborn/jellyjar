@@ -300,6 +300,32 @@ fun AdminScreen(
                 checked = state.wifiOnly,
                 onCheckedChange = { viewModel.setWifiOnly(it); viewModel.saveAll() },
             )
+
+            // Simultaneous downloads (queue concurrency)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Simultaneous Downloads", style = MaterialTheme.typography.bodyMedium, color = OnSurface)
+                    Text(
+                        "How many items transcode and download at once",
+                        style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted,
+                    )
+                }
+                SingleChoiceSegmentedButtonRow {
+                    listOf(1, 2).forEachIndexed { index, value ->
+                        SegmentedButton(
+                            selected = state.maxConcurrentDownloads == value,
+                            onClick = { viewModel.setMaxConcurrentDownloads(value) },
+                            shape = SegmentedButtonDefaults.itemShape(index = index, count = 2),
+                        ) {
+                            Text("$value")
+                        }
+                    }
+                }
+            }
         }
 
         // ── Home Screen ───────────────────────────────────────────────────────

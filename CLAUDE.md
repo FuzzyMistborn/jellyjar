@@ -31,6 +31,7 @@ jellyjar/
             │   ├── local/Database.kt       # Room: DownloadEntity, CachedItemEntity
             │   └── repository/
             │       ├── Repositories.kt     # JellyfinRepository, DownloadRepository, dynamic URL building
+            │       ├── DownloadQueueManager.kt  # Promotes QUEUED items to Press, enforces concurrency + pause
             │       ├── SettingsRepository.kt
             │       └── SettingsExt.kt
             ├── di/AppModule.kt             # Hilt, OkHttpClient injection
@@ -41,6 +42,7 @@ jellyjar/
             │   │   ├── DetailScreen.kt     # Movie/Series detail, inline seasons+episodes, download controls
             │   │   ├── SeasonsScreen.kt    # Standalone seasons browser (not used in main flow)
             │   │   ├── AdminScreen.kt      # Settings, PIN gate, folder picker for download path
+            │   │   ├── StorageScreen.kt    # Storage management: usage breakdown, bulk delete, sort
             │   │   └── PlayerScreen.kt     # ExoPlayer for local or stream URLs
             │   ├── theme/
             │   └── viewmodel/ViewModels.kt # All ViewModels in one file
@@ -65,6 +67,7 @@ jellyjar/
 - **`http://` auto-prepend**: `ensureScheme()` in AdminViewModel prepends `http://` if no scheme present, applied to both URLs on save/authenticate/test
 - **PIN gate timing fix**: `AdminState.settingsLoaded = true` is set on first DataStore emit; `PinGateScreen` waits for this before calling `onSkip()` to avoid race condition with default `isPinEnabled = false`
 - **Admin unlock**: `isAdminUnlocked` in MainActivity uses `rememberSaveable` to survive navigation; Download button is now always visible (not gated by admin)
+- **Client-side download queue**: `queueTranscode()` only inserts a `QUEUED` DownloadEntity (with `queuePosition`); `DownloadQueueManager` (started in `JellyJarApp.onCreate`) observes downloads+settings and promotes queued items to Press via `startQueuedItem()` until `maxConcurrentDownloads` (1–2, Admin setting) are in flight. Pause flag (`downloadQueuePaused` in DataStore) stops promotions only — in-flight items finish. Reorder = swap `queuePosition`; prioritize = min-1; retry re-queues at the end. A failed promotion (Press unreachable) marks that item FAILED and backs off 30s before trying the next
 
 ## Navigation Flow
 ```
@@ -98,7 +101,7 @@ Gear icon → PIN gate → Admin/Settings
 
 ## Press Job Persistence & Cleanup
 - Jobs are persisted to `$CONFIG_ROOT/jobs.json` on every status transition (not on every progress tick), so job history survives container restarts
-- Any job still `queued`/`running` at startup was interrupted by the restart (its ffmpeg process is gone) and is loaded as `failed` with error `"Interrupted by service restart"`
+- Jobs persist `source_path` and `preset`, so any job still `queued`/`running` at startup (its ffmpeg process died with the container) is re-queued and its transcode restarted automatically (`resume_interrupted_jobs()` in lifespan). If the preset was deleted or the source file is gone, it's marked `failed` with a specific error instead. Legacy jobs saved before `source_path`/`preset` existed fail with `"Interrupted by service restart"`
 - `CLEANUP_AFTER_DAYS` (env var, default `0` = disabled) automatically deletes completed jobs and their output files once older than N days; checked hourly
 
 ## Press Docker Volumes
@@ -139,6 +142,8 @@ environment:
 ## In Progress / Not Yet Tested
 - ⏳ Full download→file→playback pipeline end-to-end
 - ⏳ Offline playback from Downloads home tile
+- ⏳ Download queue (reorder/pause/resume/prioritize/concurrency) — implemented, not yet run on device
+- ⏳ Storage management screen (Downloads → storage icon) — implemented, not yet run on device
 
 ## Server Details
 - Jellyfin: `http://192.168.50.24:8096`
