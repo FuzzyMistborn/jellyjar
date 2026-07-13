@@ -86,12 +86,31 @@
   .health { font-size: 13px; color: var(--muted); }
   .health b { color: var(--text); }
   .mono { font-variant-numeric: tabular-nums; }
+  .disk-bar {
+    width: 100%;
+    height: 10px;
+    background: #2c313a;
+    border-radius: 100px;
+    overflow: hidden;
+    margin: 10px 0 8px;
+  }
+  .disk-fill { height: 100%; background: var(--accent); }
+  .disk-fill.warn { background: var(--warn); }
+  .disk-fill.err { background: var(--err); }
+  .disk-stats { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); }
+  .disk-stats b { color: var(--text); }
 </style>
 </head>
 <body>
 
 <h1>JellyJar Press</h1>
 <div class="sub" id="health">loading…</div>
+
+<div class="panel">
+  <h2>Disk Usage</h2>
+  <div class="disk-bar"><div class="disk-fill" id="disk-fill" style="width:0%"></div></div>
+  <div class="disk-stats" id="disk-stats">loading…</div>
+</div>
 
 <div class="panel">
   <div class="panel-header">
@@ -157,6 +176,15 @@ const historyEmpty = document.getElementById('history-empty');
 const presetsBody = document.getElementById('presets-body');
 const healthEl = document.getElementById('health');
 const queueSummaryEl = document.getElementById('queue-summary');
+const diskFillEl = document.getElementById('disk-fill');
+const diskStatsEl = document.getElementById('disk-stats');
+
+function formatBytes(bytes) {
+  if (bytes == null) return '—';
+  const gb = bytes / 1_073_741_824;
+  if (gb >= 1) return `${gb.toFixed(1)} GB`;
+  return `${(bytes / 1_048_576).toFixed(0)} MB`;
+}
 
 function timeAgo(iso) {
   const d = new Date(iso + 'Z');
@@ -195,6 +223,19 @@ async function refreshHealth() {
     healthEl.innerHTML = `encoder: <b>${h.encoder}</b> &nbsp;·&nbsp; media root: <b>${h.media_root}</b> &nbsp;·&nbsp; output root: <b>${h.output_root}</b>`;
   } catch (e) {
     healthEl.textContent = 'unable to reach Press service';
+  }
+}
+
+async function refreshDisk() {
+  try {
+    const d = await (await fetch('/api/disk')).json();
+    const usedPct = d.total ? (d.used / d.total) * 100 : 0;
+    diskFillEl.style.width = `${usedPct}%`;
+    diskFillEl.className = 'disk-fill' + (usedPct >= 90 ? ' err' : usedPct >= 75 ? ' warn' : '');
+    diskStatsEl.innerHTML = `<span><b>${formatBytes(d.free)}</b> free of ${formatBytes(d.total)} (${usedPct.toFixed(0)}% used)</span>` +
+      `<span><b>${formatBytes(d.output_bytes)}</b> in Press output</span>`;
+  } catch (e) {
+    diskStatsEl.textContent = 'unable to reach Press service';
   }
 }
 
@@ -331,9 +372,11 @@ async function addPreset() {
 }
 
 refreshHealth();
+refreshDisk();
 refreshJobs();
 refreshPresets();
 setInterval(refreshHealth, 10000);
+setInterval(refreshDisk, 10000);
 setInterval(refreshJobs, 2000);
 </script>
 

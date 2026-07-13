@@ -3,11 +3,12 @@ import uuid
 import asyncio
 import json
 import logging
+import shutil
 import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, RedirectResponse
@@ -67,6 +68,39 @@ async def detect_encoder() -> str:
 MAX_WORKERS = max(1, int(os.environ.get("MAX_WORKERS", "1")))
 _worker_semaphore: asyncio.Semaphore
 
+# Days a completed job's output is kept before automatic cleanup. 0 (default) disables cleanup.
+CLEANUP_AFTER_DAYS = float(os.environ.get("CLEANUP_AFTER_DAYS", "0"))
+CLEANUP_INTERVAL_SECONDS = 3600
+
+# Processes currently running, keyed by job_id, so DELETE /jobs/{id} can kill an in-progress transcode.
+_active_processes: dict[str, asyncio.subprocess.Process] = {}
+
+
+async def cleanup_loop():
+    """Periodically remove completed jobs (and their output files) older than CLEANUP_AFTER_DAYS."""
+    if CLEANUP_AFTER_DAYS <= 0:
+        return
+    while True:
+        cutoff = datetime.utcnow() - timedelta(days=CLEANUP_AFTER_DAYS)
+        removed = 0
+        for job_id, job in list(jobs.items()):
+            if job["status"] != "complete":
+                continue
+            try:
+                completed_at = datetime.fromisoformat(job["updated_at"])
+            except (TypeError, ValueError):
+                continue
+            if completed_at < cutoff:
+                output_path = job.get("output_path")
+                if output_path and Path(output_path).exists():
+                    Path(output_path).unlink()
+                del jobs[job_id]
+                removed += 1
+        if removed:
+            print(f"[Press] Cleanup: removed {removed} job(s) older than {CLEANUP_AFTER_DAYS} day(s)", flush=True)
+            _save_jobs()
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+
 
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
@@ -79,18 +113,20 @@ async def lifespan(app_: FastAPI):
     else:
         _active_encoder = await detect_encoder()
     print(f"[Press] Max concurrent transcode workers: {MAX_WORKERS}", flush=True)
+    if CLEANUP_AFTER_DAYS > 0:
+        print(f"[Press] Output cleanup: jobs older than {CLEANUP_AFTER_DAYS} day(s) will be removed", flush=True)
+    cleanup_task = asyncio.create_task(cleanup_loop())
     yield
+    cleanup_task.cancel()
 
 
 app = FastAPI(title="JellyJar Press", version="1.0.0", lifespan=lifespan)
-
-# In-memory job store (fine for single-instance use)
-jobs: dict[str, dict] = {}
 
 MEDIA_ROOT = os.environ.get("MEDIA_ROOT", "/media")
 OUTPUT_ROOT = os.environ.get("OUTPUT_ROOT", "/output")
 CONFIG_ROOT = os.environ.get("CONFIG_ROOT", "/config")
 PRESETS_FILE = Path(CONFIG_ROOT) / "presets.json"
+JOBS_FILE = Path(CONFIG_ROOT) / "jobs.json"
 
 DEFAULT_PRESETS = {
     "1080p": {
@@ -124,6 +160,33 @@ def save_presets() -> None:
 
 
 PRESETS = load_presets()
+
+
+def load_jobs() -> dict:
+    try:
+        raw = json.loads(JOBS_FILE.read_text())
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        print(f"[Press] Failed to read {JOBS_FILE}, starting with no jobs: {e}", flush=True)
+        return {}
+
+    # Jobs that were mid-transcode when the service stopped can't be resumed.
+    now = datetime.utcnow().isoformat()
+    for job in raw.values():
+        if job["status"] in ("queued", "running"):
+            job["status"] = "failed"
+            job["error"] = "Interrupted by service restart"
+            job["updated_at"] = now
+    return raw
+
+
+def _save_jobs() -> None:
+    JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    JOBS_FILE.write_text(json.dumps(jobs, indent=2))
+
+
+jobs: dict[str, dict] = load_jobs()
 
 
 class TranscodeRequest(BaseModel):
@@ -231,6 +294,9 @@ async def stream_progress(process: asyncio.subprocess.Process, job_id: str, dura
         line = await process.stdout.readline()
         if not line:
             break
+        if job_id not in jobs:
+            break  # job was cancelled/deleted mid-transcode
+
         decoded = line.decode().strip()
 
         if decoded.startswith("out_time_us="):
@@ -266,8 +332,12 @@ async def stream_progress(process: asyncio.subprocess.Process, job_id: str, dura
 
 async def run_transcode(job_id: str, source: str, output: str, preset: dict, duration_us: Optional[float]):
     async with _worker_semaphore:
+        if job_id not in jobs:
+            return  # cancelled while queued, before it got a chance to start
+
         jobs[job_id]["status"] = "running"
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+        _save_jobs()
 
         cmd = build_ffmpeg_command(source, output, preset)
 
@@ -277,8 +347,13 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+            _active_processes[job_id] = process
             await stream_progress(process, job_id, duration_us)
             await process.wait()
+            _active_processes.pop(job_id, None)
+
+            if job_id not in jobs:
+                return  # cancelled mid-transcode; delete_job already removed the output file
 
             stderr_bytes = await process.stderr.read()
             if process.returncode == 0:
@@ -297,8 +372,14 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                     )
+                    _active_processes[job_id] = sw_process
                     await stream_progress(sw_process, job_id, duration_us)
                     await sw_process.wait()
+                    _active_processes.pop(job_id, None)
+
+                    if job_id not in jobs:
+                        return  # cancelled during fallback retry
+
                     sw_stderr = (await sw_process.stderr.read()).decode()[-1000:]
                     if sw_process.returncode == 0:
                         jobs[job_id]["status"] = "complete"
@@ -315,14 +396,18 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
                     jobs[job_id]["error"] = error_text
 
         except Exception as e:
-            jobs[job_id]["status"] = "failed"
-            jobs[job_id]["error"] = str(e)
+            _active_processes.pop(job_id, None)
+            if job_id in jobs:
+                jobs[job_id]["status"] = "failed"
+                jobs[job_id]["error"] = str(e)
 
-        jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+        if job_id in jobs:
+            jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+            _save_jobs()
 
 
-@app.post("/transcode", response_model=JobStatus)
-async def start_transcode(req: TranscodeRequest, background_tasks: BackgroundTasks):
+def _validate_transcode_request(req: TranscodeRequest) -> tuple[Path, dict]:
+    """Resolve + validate a request. Raises HTTPException on bad preset or missing source file."""
     if req.preset not in PRESETS:
         raise HTTPException(status_code=400, detail=f"Unknown preset '{req.preset}'. Use: {list(PRESETS.keys())}")
 
@@ -333,6 +418,12 @@ async def start_transcode(req: TranscodeRequest, background_tasks: BackgroundTas
         print(f"[Press] 404 — file not found at {source}", flush=True)
         raise HTTPException(status_code=404, detail=f"Source file not found: {source}")
 
+    return source, PRESETS[req.preset]
+
+
+async def _create_job(
+    req: TranscodeRequest, background_tasks: BackgroundTasks, source: Path, preset: dict
+) -> JobStatus:
     job_id = str(uuid.uuid4())
     output_filename = req.output_filename or f"{source.stem}_{req.preset}.mp4"
     output = str(Path(OUTPUT_ROOT) / output_filename)
@@ -344,7 +435,7 @@ async def start_transcode(req: TranscodeRequest, background_tasks: BackgroundTas
         "job_id": job_id,
         "status": "queued",
         "progress": 0.0,
-        "output_path": None,
+        "output_path": output,
         "error": None,
         "created_at": now,
         "updated_at": now,
@@ -354,11 +445,58 @@ async def start_transcode(req: TranscodeRequest, background_tasks: BackgroundTas
         "speed": None,
         "eta_seconds": None,
     }
+    _save_jobs()
 
-    preset = PRESETS[req.preset]
     background_tasks.add_task(run_transcode, job_id, str(source), output, preset, duration_us)
 
     return _to_job_status(jobs[job_id])
+
+
+def _failed_job_status(req: TranscodeRequest, detail: str) -> JobStatus:
+    """Record a job that couldn't even be started (e.g. batch item with a bad source path)."""
+    job_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    jobs[job_id] = {
+        "job_id": job_id,
+        "status": "failed",
+        "progress": None,
+        "output_path": None,
+        "error": detail,
+        "created_at": now,
+        "updated_at": now,
+        "display_name": req.display_name,
+        "duration_seconds": None,
+        "fps": None,
+        "speed": None,
+        "eta_seconds": None,
+    }
+    return _to_job_status(jobs[job_id])
+
+
+@app.post("/transcode", response_model=JobStatus)
+async def start_transcode(req: TranscodeRequest, background_tasks: BackgroundTasks):
+    source, preset = _validate_transcode_request(req)
+    return await _create_job(req, background_tasks, source, preset)
+
+
+class BatchTranscodeRequest(BaseModel):
+    items: list[TranscodeRequest]
+
+
+@app.post("/transcode/batch", response_model=list[JobStatus])
+async def start_batch_transcode(req: BatchTranscodeRequest, background_tasks: BackgroundTasks):
+    """Queue multiple transcodes (e.g. a whole season) in one call. Bad items are recorded as
+    failed jobs rather than aborting the rest of the batch."""
+    results = []
+    for item in req.items:
+        try:
+            source, preset = _validate_transcode_request(item)
+        except HTTPException as e:
+            results.append(_failed_job_status(item, str(e.detail)))
+            continue
+        results.append(await _create_job(item, background_tasks, source, preset))
+    _save_jobs()
+    return results
 
 
 def _queue_position(job_id: str) -> Optional[int]:
@@ -438,16 +576,38 @@ async def delete_job(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
 
     job = jobs[job_id]
-    if job["output_path"] and Path(job["output_path"]).exists():
-        Path(job["output_path"]).unlink()
 
+    # Kill the in-progress ffmpeg process, if any, so it doesn't keep writing to an orphaned file.
+    process = _active_processes.get(job_id)
+    if process and process.returncode is None:
+        process.kill()
+
+    output_path = job.get("output_path")
     del jobs[job_id]
+    _save_jobs()
+
+    if output_path and Path(output_path).exists():
+        Path(output_path).unlink()
+
     return {"deleted": job_id}
 
 
 @app.get("/health")
 async def health():
     return {"status": "ok", "media_root": MEDIA_ROOT, "output_root": OUTPUT_ROOT, "encoder": _active_encoder}
+
+
+@app.get("/api/disk")
+async def disk_usage():
+    """Usage of the volume backing OUTPUT_ROOT, plus how much of that is JellyJar's own output."""
+    usage = shutil.disk_usage(OUTPUT_ROOT)
+    output_bytes = sum(f.stat().st_size for f in Path(OUTPUT_ROOT).rglob("*") if f.is_file())
+    return {
+        "total": usage.total,
+        "used": usage.used,
+        "free": usage.free,
+        "output_bytes": output_bytes,
+    }
 
 
 @app.get("/presets")

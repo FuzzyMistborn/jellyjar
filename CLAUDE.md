@@ -81,10 +81,11 @@ Gear icon → PIN gate → Admin/Settings
 | `/health` | GET | Returns `{"status":"ok","media_root":...,"output_root":...}` |
 | `/presets` | GET | Returns `["1080p","720p"]` |
 | `/transcode` | POST | Starts transcode job, returns `JobStatus` |
+| `/transcode/batch` | POST | Starts multiple transcode jobs in one call (e.g. a whole season); returns `list[JobStatus]`. Bad items are recorded as `failed` jobs rather than aborting the batch |
 | `/jobs` | GET | Lists all jobs |
 | `/jobs/{id}` | GET | Gets job status + progress |
 | `/download/{id}` | GET | Streams completed MP4 file |
-| `/jobs/{id}` | DELETE | Deletes job + output file |
+| `/jobs/{id}` | DELETE | Deletes job + output file; kills the ffmpeg process first if the job is still running |
 
 **TranscodeRequest body:**
 ```json
@@ -93,6 +94,13 @@ Gear icon → PIN gate → Admin/Settings
 - `source_path` is the **absolute path** as returned by Jellyfin's `MediaSources[].Path`
 - Press accepts absolute paths directly (no MEDIA_ROOT prepending when path is absolute)
 
+**BatchTranscodeRequest body:** `{ "items": [ <TranscodeRequest>, ... ] }`
+
+## Press Job Persistence & Cleanup
+- Jobs are persisted to `$CONFIG_ROOT/jobs.json` on every status transition (not on every progress tick), so job history survives container restarts
+- Any job still `queued`/`running` at startup was interrupted by the restart (its ffmpeg process is gone) and is loaded as `failed` with error `"Interrupted by service restart"`
+- `CLEANUP_AFTER_DAYS` (env var, default `0` = disabled) automatically deletes completed jobs and their output files once older than N days; checked hourly
+
 ## Press Docker Volumes
 Media mounts mirror Jellyfin's container paths exactly:
 ```yaml
@@ -100,9 +108,12 @@ volumes:
   - /mnt/Media/Movies:/mnt/movies:ro
   - /mnt/Media/TV Shows:/mnt/tv:ro
   - jellyjar-output:/output
+  - jellyjar-config:/config
 environment:
   MEDIA_ROOT: /mnt
   OUTPUT_ROOT: /output
+  CONFIG_ROOT: /config
+  CLEANUP_AFTER_DAYS: 0      # 0 disables auto-cleanup of old completed jobs/output
 ```
 
 ## Known Working State
@@ -118,13 +129,16 @@ environment:
 - ✅ Admin PIN gate with race condition fix
 - ✅ Press connectivity (HTTP to LAN IP working)
 - ✅ Press path resolution (absolute Jellyfin paths work)
+- ✅ Downloads screen: active/completed/failed sections, retry (single + all), bulk delete, watched-item cleanup
+- ✅ Wi-Fi-only downloads toggle (Admin → Downloads)
+- ✅ Season download progress rollup on season poster cards ("3/8 downloaded" / "downloading" / "Downloaded")
+- ✅ Tap-to-open notification on download completion/failure → jumps to Downloads screen
+- ✅ Device storage info (free/used space + per-item file size) in Admin → Downloads and Downloads screen
 - ✅ Library tile artwork loading (backdrop → primary image fallback)
 
 ## In Progress / Not Yet Tested
 - ⏳ Full download→file→playback pipeline end-to-end
 - ⏳ Offline playback from Downloads home tile
-- ⏳ Download progress polling / DownloadWorker integration
-- ⏳ Season download progress tracking in UI
 
 ## Server Details
 - Jellyfin: `http://192.168.50.24:8096`

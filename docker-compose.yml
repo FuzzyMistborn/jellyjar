@@ -16,6 +16,7 @@ services:
       LIBVA_DRIVER_NAME: iHD     # use Intel iHD driver for QSV/VAAPI on gen8+ iGPUs
       # ENCODER: h264_vaapi     # pin encoder; skips startup probe (h264_nvenc | h264_qsv | h264_vaapi | libx264)
       MAX_WORKERS: 1             # concurrent transcode jobs; most HW encoders only support one session at a time
+      CLEANUP_AFTER_DAYS: 0      # auto-delete completed jobs + their output after N days; 0 disables cleanup
     volumes:
       - /mnt/Media/Movies:/mnt/movies:ro
       - /mnt/Media/TV Shows:/mnt/tv:ro

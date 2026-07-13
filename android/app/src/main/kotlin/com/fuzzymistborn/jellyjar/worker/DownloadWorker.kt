@@ -2,11 +2,15 @@ package com.fuzzymistborn.jellyjar.worker
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.hilt.work.HiltWorker
 import androidx.work.*
+import com.fuzzymistborn.jellyjar.MainActivity
 import com.fuzzymistborn.jellyjar.data.repository.DownloadRepository
 import java.util.concurrent.TimeUnit
 import com.fuzzymistborn.jellyjar.data.repository.SettingsRepository
@@ -68,6 +72,7 @@ class DownloadWorker @AssistedInject constructor(
                         Result.retry()
                     } else {
                         downloadRepo.markFailed(jobId)
+                        postResultNotification(jobId, success = false)
                         Result.failure()
                     }
                 }
@@ -77,9 +82,10 @@ class DownloadWorker @AssistedInject constructor(
             job = result.getOrNull()!!
             when (job.status) {
                 "complete" -> polling = false
-                "failed" -> return Result.failure(
-                    workDataOf("error" to (job.error ?: "Transcode failed"))
-                )
+                "failed" -> {
+                    postResultNotification(jobId, success = false)
+                    return Result.failure(workDataOf("error" to (job.error ?: "Transcode failed")))
+                }
                 else -> {
                     val progress = (job.progress ?: 0f).toInt()
                     setForeground(createForegroundInfo("Transcoding $progress%", progress))
@@ -96,11 +102,40 @@ class DownloadWorker @AssistedInject constructor(
                 Result.retry()
             } else {
                 downloadRepo.markFailed(jobId)
+                postResultNotification(jobId, success = false)
                 Result.failure(workDataOf("error" to it.message))
             }
         }
 
+        postResultNotification(jobId, success = true)
         return Result.success()
+    }
+
+    // Foreground progress notifications disappear once doWork() returns, so post a separate,
+    // tappable one for the terminal state — tapping it opens Downloads (complete or failed).
+    private suspend fun postResultNotification(jobId: String, success: Boolean) {
+        val title = downloadRepo.findByShimJobId(jobId)?.title ?: "Download"
+
+        val openIntent = Intent(context, MainActivity::class.java).apply {
+            putExtra(MainActivity.EXTRA_OPEN_DOWNLOADS, true)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context, jobId.hashCode(), openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setContentTitle(if (success) "Download complete" else "Download failed")
+            .setContentText(title)
+            .setSmallIcon(
+                if (success) android.R.drawable.stat_sys_download_done
+                else android.R.drawable.stat_notify_error
+            )
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(context).notify(jobId.hashCode(), notification)
     }
 
     private fun createForegroundInfo(title: String, progress: Int): ForegroundInfo {

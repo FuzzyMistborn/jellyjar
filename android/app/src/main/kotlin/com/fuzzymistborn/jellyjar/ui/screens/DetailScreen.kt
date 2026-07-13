@@ -322,6 +322,12 @@ fun DetailScreen(
                                                 contentScale = ContentScale.Crop,
                                                 modifier = Modifier.fillMaxSize(),
                                             )
+                                            SeasonDownloadBadge(
+                                                queuingProgress = state.seasonDownloadProgress[season.id],
+                                                episodeIds = state.seasonEpisodeIds[season.id],
+                                                episodeDownloads = state.episodeDownloads,
+                                                modifier = Modifier.align(Alignment.BottomCenter),
+                                            )
                                         }
                                         Spacer(Modifier.height(4.dp))
                                         Text(
@@ -401,6 +407,74 @@ private fun DownloadProgressButton(status: String, progress: Float) {
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = OnSurface,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SeasonDownloadBadge(
+    queuingProgress: Float?,
+    episodeIds: List<String>?,
+    episodeDownloads: Map<String, com.fuzzymistborn.jellyjar.data.local.DownloadEntity>,
+    modifier: Modifier = Modifier,
+) {
+    if (queuingProgress != null) {
+        Surface(
+            color = Color(0xCC000000),
+            shape = RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp),
+            modifier = modifier.fillMaxWidth(),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp, color = Primary)
+                Text("Queuing…", style = MaterialTheme.typography.labelSmall, color = Color.White)
+            }
+        }
+        return
+    }
+
+    val ids = episodeIds
+    if (ids.isNullOrEmpty()) return
+
+    val downloadedCount = ids.count { episodeDownloads[it]?.status == DownloadStatus.COMPLETE.name }
+    val activeCount = ids.count {
+        episodeDownloads[it]?.status == DownloadStatus.TRANSCODING.name ||
+            episodeDownloads[it]?.status == DownloadStatus.DOWNLOADING.name
+    }
+    if (downloadedCount == 0 && activeCount == 0) return
+
+    val allDownloaded = downloadedCount == ids.size
+    val label = when {
+        allDownloaded -> "Downloaded"
+        activeCount > 0 -> "$downloadedCount/${ids.size} · downloading"
+        else -> "$downloadedCount/${ids.size} downloaded"
+    }
+    Surface(
+        color = Color(0xCC000000),
+        shape = RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (allDownloaded) Icons.Default.DownloadDone else Icons.Default.Download,
+                contentDescription = null,
+                tint = if (allDownloaded) Color(0xFF88CC88) else OnSurfaceMuted,
+                modifier = Modifier.size(12.dp),
+            )
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }

@@ -1,6 +1,7 @@
 package com.fuzzymistborn.jellyjar
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -47,20 +48,51 @@ sealed class Screen(val route: String) {
 private fun String.encode() = java.net.URLEncoder.encode(this, "UTF-8")
 private fun String.decode() = java.net.URLDecoder.decode(this, "UTF-8")
 
+// Replaces the current player entry with the next episode so repeated auto-play doesn't pile up
+// player screens on the back stack.
+private fun navigateToNextEpisode(
+    navController: androidx.navigation.NavHostController,
+    target: com.fuzzymistborn.jellyjar.ui.viewmodel.NextEpisodeTarget,
+) {
+    val route = when (target) {
+        is com.fuzzymistborn.jellyjar.ui.viewmodel.NextEpisodeTarget.Local ->
+            Screen.Player.go(target.localPath, target.jellyfinId)
+        is com.fuzzymistborn.jellyjar.ui.viewmodel.NextEpisodeTarget.Stream ->
+            Screen.StreamPlayer.go(target.streamUrl, target.jellyfinId)
+    }
+    val currentRoute = navController.currentBackStackEntry?.destination?.route
+    navController.navigate(route) {
+        if (currentRoute != null) popUpTo(currentRoute) { inclusive = true }
+    }
+}
+
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { /* results ignored — app still runs; playback will fail gracefully without the permission */ }
 
+    // Set by a tap on a "download complete/failed" notification (see DownloadWorker); read once by
+    // JellyJarNavHost to jump straight to the Downloads screen, then reset to avoid re-navigating.
+    private val openDownloads = mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         requestMediaPermissionsIfNeeded()
+        openDownloads.value = intent?.getBooleanExtra(EXTRA_OPEN_DOWNLOADS, false) == true
         setContent {
             JellyJarTheme {
-                JellyJarNavHost()
+                JellyJarNavHost(openDownloads = openDownloads)
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_OPEN_DOWNLOADS, false)) {
+            openDownloads.value = true
         }
     }
 
@@ -71,12 +103,23 @@ class MainActivity : ComponentActivity() {
         ).filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (needed.isNotEmpty()) requestPermissions.launch(needed.toTypedArray())
     }
+
+    companion object {
+        const val EXTRA_OPEN_DOWNLOADS = "open_downloads"
+    }
 }
 
 @Composable
-fun JellyJarNavHost() {
+fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableStateOf(false) }) {
     val navController = rememberNavController()
     var isAdminUnlocked by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(openDownloads.value) {
+        if (openDownloads.value) {
+            navController.navigate(Screen.Downloads.route)
+            openDownloads.value = false
+        }
+    }
 
     NavHost(
         navController = navController,
@@ -191,6 +234,7 @@ fun JellyJarNavHost() {
                 jellyfinId = jellyfinId,
                 startPositionMs = startMs,
                 onBack = { navController.popBackStack() },
+                onPlayNext = { target -> navigateToNextEpisode(navController, target) },
             )
         }
 
@@ -210,6 +254,7 @@ fun JellyJarNavHost() {
                 jellyfinId = jellyfinId,
                 startPositionMs = startMs,
                 onBack = { navController.popBackStack() },
+                onPlayNext = { target -> navigateToNextEpisode(navController, target) },
             )
         }
 

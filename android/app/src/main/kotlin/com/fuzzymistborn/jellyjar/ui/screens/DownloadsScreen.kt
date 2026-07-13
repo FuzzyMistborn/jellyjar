@@ -187,6 +187,10 @@ fun DownloadsScreen(
     }
 }
 
+private fun formatFileSize(bytes: Long): String =
+    if (bytes >= 1_073_741_824L) "%.1f GB".format(bytes / 1_073_741_824.0)
+    else "%.0f MB".format(bytes / 1_048_576.0)
+
 @Composable
 private fun SectionHeader(title: String, action: @Composable (() -> Unit)? = null) {
     Row(
@@ -324,6 +328,9 @@ private fun CompletedDownloadCard(
                         Text("${it}m", style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
                     }
                     Text(entity.preset, style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+                    if (entity.sizeBytes > 0) {
+                        Text(formatFileSize(entity.sizeBytes), style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+                    }
                 }
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

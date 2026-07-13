@@ -21,6 +21,7 @@ data class JellyfinItem(
     @SerializedName("BackdropImageTags") val backdropImageTags: List<String>?,
     @SerializedName("UserData") val userData: UserData?,
     @SerializedName("SeriesId") val seriesId: String? = null,
+    @SerializedName("SeasonId") val seasonId: String? = null,
 ) {
     val runtimeMinutes: Int?
         get() = runTimeTicks?.let { (it / 600_000_000).toInt() }
@@ -86,6 +87,13 @@ data class TranscodeJob(
     val updated_at: String,
 )
 
+data class PresetConfigDto(
+    val video_bitrate: String,
+    val audio_bitrate: String,
+    val scale: String,
+    val crf: String,
+)
+
 // ─── Local download model ─────────────────────────────────────────────────────
 
 enum class DownloadStatus {
@@ -123,4 +131,5 @@ data class AppSettings(
     val showContinueWatching: Boolean = true,
     val showRecentlyAdded: Boolean = true,
     val showMyList: Boolean = true,
+    val autoPlayNextEpisode: Boolean = true,
 )

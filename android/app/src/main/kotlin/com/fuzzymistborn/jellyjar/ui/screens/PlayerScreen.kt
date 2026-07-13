@@ -24,6 +24,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
@@ -32,8 +33,10 @@ import com.fuzzymistborn.jellyjar.ui.theme.OnSurface
 import com.fuzzymistborn.jellyjar.ui.theme.OnSurfaceMuted
 import com.fuzzymistborn.jellyjar.ui.theme.Primary
 import com.fuzzymistborn.jellyjar.ui.theme.Surface
+import com.fuzzymistborn.jellyjar.ui.viewmodel.NextEpisodeTarget
 import com.fuzzymistborn.jellyjar.ui.viewmodel.PlayerViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun PlayerScreen(
@@ -42,6 +45,7 @@ fun PlayerScreen(
     mediaSourceId: String? = null,
     startPositionMs: Long = 0L,
     onBack: () -> Unit,
+    onPlayNext: (NextEpisodeTarget) -> Unit = {},
     viewModel: PlayerViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
@@ -101,6 +105,24 @@ fun PlayerScreen(
             }
             player.release()
         }
+    }
+
+    // Auto-play: when the current episode finishes, look up what comes next and hand off to it.
+    val coroutineScope = rememberCoroutineScope()
+    var autoPlayTriggered by remember { mutableStateOf(false) }
+    DisposableEffect(player, jellyfinId) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED && jellyfinId != null && !autoPlayTriggered) {
+                    autoPlayTriggered = true
+                    coroutineScope.launch {
+                        viewModel.resolveNextEpisode(jellyfinId)?.let { onPlayNext(it) }
+                    }
+                }
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
     }
 
     BackHandler {

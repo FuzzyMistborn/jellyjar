@@ -32,6 +32,7 @@ class SettingsRepository @Inject constructor(
         val SHOW_CONTINUE_WATCHING = booleanPreferencesKey("show_continue_watching")
         val SHOW_RECENTLY_ADDED = booleanPreferencesKey("show_recently_added")
         val SHOW_MY_LIST = booleanPreferencesKey("show_my_list")
+        val AUTO_PLAY_NEXT_EPISODE = booleanPreferencesKey("auto_play_next_episode")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { prefs ->
@@ -48,6 +49,7 @@ class SettingsRepository @Inject constructor(
             showContinueWatching = prefs[Keys.SHOW_CONTINUE_WATCHING] ?: true,
             showRecentlyAdded = prefs[Keys.SHOW_RECENTLY_ADDED] ?: true,
             showMyList = prefs[Keys.SHOW_MY_LIST] ?: true,
+            autoPlayNextEpisode = prefs[Keys.AUTO_PLAY_NEXT_EPISODE] ?: true,
         )
     }
 
@@ -107,6 +109,10 @@ class SettingsRepository @Inject constructor(
 
     suspend fun saveShowMyList(show: Boolean) {
         context.dataStore.edit { prefs -> prefs[Keys.SHOW_MY_LIST] = show }
+    }
+
+    suspend fun saveAutoPlayNextEpisode(enabled: Boolean) {
+        context.dataStore.edit { prefs -> prefs[Keys.AUTO_PLAY_NEXT_EPISODE] = enabled }
     }
 
     fun verifyPin(input: String, storedHash: String): Boolean =

@@ -11,6 +11,8 @@ import com.fuzzymistborn.jellyjar.model.SortOrder
 import com.fuzzymistborn.jellyjar.util.NetworkMonitor
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -358,6 +360,7 @@ data class DetailState(
     val download: DownloadEntity? = null,
     val episodeDownloads: Map<String, DownloadEntity> = emptyMap(),
     val seasonDownloadProgress: Map<String, Float> = emptyMap(),
+    val seasonEpisodeIds: Map<String, List<String>> = emptyMap(),
     val seasons: List<com.fuzzymistborn.jellyjar.model.JellyfinItem> = emptyList(),
     val selectedSeasonIndex: Int? = null,
     val episodes: List<com.fuzzymistborn.jellyjar.model.JellyfinItem> = emptyList(),
@@ -472,6 +475,7 @@ class DetailViewModel @Inject constructor(
         jellyfinRepo.getItems(parentId = seriesId, types = "Season")
             .onSuccess { response ->
                 _state.update { it.copy(seasons = response.Items) }
+                loadSeasonEpisodeIds(response.Items)
             }
             .onFailure {
                 val seriesName = _state.value.item?.name ?: return@launch
@@ -482,6 +486,24 @@ class DetailViewModel @Inject constructor(
     private fun loadOfflineSeasons(seriesName: String) = viewModelScope.launch {
         val seasons = jellyfinRepo.getCachedSeasonsBySeriesName(seriesName)
         _state.update { it.copy(seasons = seasons) }
+        val idsBySeason = seasons.associate { season ->
+            val num = season.indexNumber
+            val episodes = if (num != null) jellyfinRepo.getCachedEpisodesBySeriesAndSeason(seriesName, num) else emptyList()
+            season.id to episodes.map { it.id }
+        }
+        _state.update { it.copy(seasonEpisodeIds = idsBySeason) }
+    }
+
+    // Fetches each season's episode IDs so poster cards can show a "downloaded X/Y" rollup.
+    // Also warms the offline cache for these episodes as a side effect of getItems().
+    private fun loadSeasonEpisodeIds(seasons: List<JellyfinItem>) = viewModelScope.launch {
+        val idsBySeason = seasons.map { season ->
+            async {
+                val episodes = jellyfinRepo.getItems(parentId = season.id, types = "Episode").getOrNull()?.Items ?: emptyList()
+                season.id to episodes.map { it.id }
+            }
+        }.awaitAll().toMap()
+        _state.update { it.copy(seasonEpisodeIds = idsBySeason) }
     }
 
     fun selectSeason(index: Int) = viewModelScope.launch {
@@ -588,6 +610,7 @@ data class AdminState(
     val showContinueWatching: Boolean = true,
     val showRecentlyAdded: Boolean = true,
     val showMyList: Boolean = true,
+    val autoPlayNextEpisode: Boolean = true,
 )
 
 @HiltViewModel
@@ -617,8 +640,10 @@ class AdminViewModel @Inject constructor(
                         showContinueWatching = s.showContinueWatching,
                         showRecentlyAdded = s.showRecentlyAdded,
                         showMyList = s.showMyList,
+                        autoPlayNextEpisode = s.autoPlayNextEpisode,
                     )
                 }
+                refreshStorageInfo()
             }
         }
         viewModelScope.launch {
@@ -629,6 +654,7 @@ class AdminViewModel @Inject constructor(
                         .map { d -> JobSummary(d.title, d.status, d.preset, d.progress) }
                     )
                 }
+                refreshStorageInfo()
             }
         }
     }
@@ -716,10 +742,26 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch { settings.saveShowMyList(v) }
     }
 
+    fun setAutoPlayNextEpisode(v: Boolean) {
+        _state.update { it.copy(autoPlayNextEpisode = v) }
+        viewModelScope.launch { settings.saveAutoPlayNextEpisode(v) }
+    }
+
     fun saveAll() = viewModelScope.launch {
         settings.saveShimUrl(ensureScheme(_state.value.shimUrl))
         settings.saveDownloadPath(_state.value.downloadPath)
         settings.saveWifiOnly(_state.value.wifiOnly)
+        refreshStorageInfo()
+    }
+
+    private suspend fun refreshStorageInfo() {
+        val info = downloadRepo.getDeviceStorageInfo()
+        _state.update { it.copy(storageInfo = formatStorageInfo(info)) }
+    }
+
+    private fun formatStorageInfo(info: com.fuzzymistborn.jellyjar.data.repository.DeviceStorageInfo): String {
+        fun gb(bytes: Long) = "%.1f GB".format(bytes / 1_073_741_824.0)
+        return "${gb(info.usedByJellyJarBytes)} used by JellyJar · ${gb(info.freeBytes)} free of ${gb(info.totalBytes)}"
     }
 }
 
@@ -1003,14 +1045,65 @@ class SeasonViewModel @Inject constructor(
 
 // ─── Player ViewModel ─────────────────────────────────────────────────────────
 
+sealed class NextEpisodeTarget {
+    data class Local(val localPath: String, val jellyfinId: String) : NextEpisodeTarget()
+    data class Stream(val streamUrl: String, val jellyfinId: String) : NextEpisodeTarget()
+}
+
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
     private val downloadRepo: DownloadRepository,
     private val jellyfinRepo: JellyfinRepository,
+    private val settings: SettingsRepository,
 ) : ViewModel() {
 
     fun loadStartPosition(jellyfinId: String): Long =
         kotlinx.coroutines.runBlocking { downloadRepo.getPlaybackPosition(jellyfinId) }
+
+    // Resolves the episode that should play next when `currentJellyfinId` finishes, honoring the
+    // Auto-play Next Episode setting. Tries the live Jellyfin server first, then falls back to the
+    // offline cache (only episodes with a completed local download can be targeted while offline).
+    suspend fun resolveNextEpisode(currentJellyfinId: String): NextEpisodeTarget? {
+        if (!settings.currentSnapshot().autoPlayNextEpisode) return null
+
+        // If the server is reachable, trust its answer outright — including "no next episode"
+        // (series finale) — rather than falling through to a possibly-stale offline cache.
+        val onlineCurrent = jellyfinRepo.getItem(currentJellyfinId).getOrNull()
+        if (onlineCurrent != null) {
+            val next = jellyfinRepo.findNextEpisodeOnline(onlineCurrent) ?: return null
+            val dl = downloadRepo.findById(next.id)
+            return if (dl?.status == com.fuzzymistborn.jellyjar.model.DownloadStatus.COMPLETE.name) {
+                NextEpisodeTarget.Local(dl.localPath, next.id)
+            } else {
+                val s = settings.currentSnapshot()
+                NextEpisodeTarget.Stream(JellyfinImageHelper.streamUrl(s.jellyfinUrl, next.id, s.jellyfinToken), next.id)
+            }
+        }
+
+        val cached = jellyfinRepo.getCachedItem(currentJellyfinId) ?: return null
+        val seriesName = cached.seriesName ?: return null
+        val seasonNumber = cached.parentIndexNumber ?: return null
+        if (cached.type != "Episode") return null
+
+        val inSeason = jellyfinRepo.getCachedEpisodesBySeriesAndSeason(seriesName, seasonNumber)
+            .sortedBy { it.indexNumber ?: Int.MAX_VALUE }
+        val next = inSeason.firstOrNull { (it.indexNumber ?: -1) > (cached.indexNumber ?: -1) }
+            ?: jellyfinRepo.getCachedSeasonsBySeriesName(seriesName)
+                .sortedBy { it.indexNumber ?: Int.MAX_VALUE }
+                .firstOrNull { (it.indexNumber ?: -1) > seasonNumber }
+                ?.indexNumber
+                ?.let { nextSeasonNum ->
+                    jellyfinRepo.getCachedEpisodesBySeriesAndSeason(seriesName, nextSeasonNum)
+                        .sortedBy { it.indexNumber ?: Int.MAX_VALUE }
+                        .firstOrNull()
+                }
+            ?: return null
+
+        val dl = downloadRepo.findById(next.id)
+        return if (dl?.status == com.fuzzymistborn.jellyjar.model.DownloadStatus.COMPLETE.name) {
+            NextEpisodeTarget.Local(dl.localPath, next.id)
+        } else null
+    }
 
     fun savePosition(jellyfinId: String, positionMs: Long) = viewModelScope.launch {
         downloadRepo.updatePlaybackPosition(jellyfinId, positionMs)

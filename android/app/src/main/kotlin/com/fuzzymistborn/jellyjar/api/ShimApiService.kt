@@ -1,5 +1,6 @@
 package com.fuzzymistborn.jellyjar.api
 
+import com.fuzzymistborn.jellyjar.model.PresetConfigDto
 import com.fuzzymistborn.jellyjar.model.TranscodeJob
 import com.fuzzymistborn.jellyjar.model.TranscodeRequest
 import okhttp3.ResponseBody
@@ -28,4 +29,7 @@ interface ShimApiService {
 
     @GET("presets")
     suspend fun getPresets(): List<String>
+
+    @GET("api/presets")
+    suspend fun getPresetDetails(): Map<String, PresetConfigDto>
 }

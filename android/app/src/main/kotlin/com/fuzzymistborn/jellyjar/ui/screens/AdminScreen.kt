@@ -324,6 +324,16 @@ fun AdminScreen(
             )
         }
 
+        // ── Playback ──────────────────────────────────────────────────────────
+        SettingsCard(title = "Playback") {
+            SettingsToggleRow(
+                title = "Auto-play Next Episode",
+                subtitle = "Continue to the next episode when one finishes",
+                checked = state.autoPlayNextEpisode,
+                onCheckedChange = { viewModel.setAutoPlayNextEpisode(it) },
+            )
+        }
+
         // ── Admin PIN ─────────────────────────────────────────────────────────
         SettingsCard(
             title = "Admin PIN",

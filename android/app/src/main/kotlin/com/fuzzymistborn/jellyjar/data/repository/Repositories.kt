@@ -3,6 +3,7 @@ package com.fuzzymistborn.jellyjar.data.repository
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
+import android.os.StatFs
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -208,6 +209,26 @@ class JellyfinRepository @Inject constructor(
             .build()
     }
 
+    // Looks up the episode that follows `current` (same season first, then the first episode of
+    // the next season). Returns null for non-episodes or when `current` is already the finale.
+    suspend fun findNextEpisodeOnline(current: JellyfinItem): JellyfinItem? = withContext(Dispatchers.IO) {
+        if (current.type != "Episode") return@withContext null
+        val seasonId = current.seasonId ?: return@withContext null
+        val seriesId = current.seriesId ?: return@withContext null
+
+        val inSeason = getItems(parentId = seasonId, types = "Episode").getOrNull()?.Items
+            ?.sortedBy { it.indexNumber ?: Int.MAX_VALUE }
+        inSeason?.firstOrNull { (it.indexNumber ?: -1) > (current.indexNumber ?: -1) }?.let { return@withContext it }
+
+        val seasons = getItems(parentId = seriesId, types = "Season").getOrNull()?.Items
+            ?.sortedBy { it.indexNumber ?: Int.MAX_VALUE }
+        val nextSeason = seasons?.firstOrNull { (it.indexNumber ?: -1) > (current.parentIndexNumber ?: -1) }
+            ?: return@withContext null
+        getItems(parentId = nextSeason.id, types = "Episode").getOrNull()?.Items
+            ?.sortedBy { it.indexNumber ?: Int.MAX_VALUE }
+            ?.firstOrNull()
+    }
+
     fun primaryImageUrl(itemId: String, baseUrl: String): String =
         JellyfinImageHelper.primaryImageUrl(baseUrl, itemId)
 
@@ -277,6 +298,8 @@ private fun documentUriToFilePath(uri: Uri): String? = runCatching {
     } else null
 }.getOrNull()
 
+data class DeviceStorageInfo(val usedByJellyJarBytes: Long, val freeBytes: Long, val totalBytes: Long)
+
 // ─── Download Repository ──────────────────────────────────────────────────────
 
 @Singleton
@@ -290,6 +313,12 @@ class DownloadRepository @Inject constructor(
 ) {
     val downloads: Flow<List<DownloadEntity>> = downloadDao.observeAll().distinctUntilChanged()
     val completedDownloads: Flow<List<DownloadEntity>> = downloadDao.observeCompleted().distinctUntilChanged()
+
+    companion object {
+        // Absolute floor used when we can't estimate the output size (e.g. Press unreachable or
+        // the item has no known runtime) — still guards against starting a download onto a full disk.
+        private const val MIN_FREE_SPACE_BYTES = 500L * 1024 * 1024
+    }
 
     private suspend fun shimService(): ShimApiService {
         val url = settings.currentSnapshot().shimUrl
@@ -308,6 +337,7 @@ class DownloadRepository @Inject constructor(
         mediaSourcePath: String,
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            checkFreeSpace(preset, item.runtimeMinutes)
             val job = shimService().startTranscode(
                 TranscodeRequest(
                     source_path = mediaSourcePath,
@@ -448,8 +478,61 @@ class DownloadRepository @Inject constructor(
         downloadDao.findById(jellyfinId)
     }
 
+    suspend fun findByShimJobId(shimJobId: String): DownloadEntity? = withContext(Dispatchers.IO) {
+        downloadDao.findByShimJobId(shimJobId)
+    }
+
+    suspend fun getDeviceStorageInfo(): DeviceStorageInfo = withContext(Dispatchers.IO) {
+        val downloadPath = settings.currentSnapshot().downloadPath
+        val resolvedPath = when {
+            downloadPath.startsWith("content://") ->
+                documentUriToFilePath(Uri.parse(downloadPath)) ?: Environment.getExternalStorageDirectory().absolutePath
+            downloadPath.isNotBlank() -> downloadPath
+            else -> context.filesDir.absolutePath
+        }
+        val statFs = runCatching { StatFs(resolvedPath) }
+            .getOrElse { StatFs(Environment.getExternalStorageDirectory().absolutePath) }
+        DeviceStorageInfo(
+            usedByJellyJarBytes = downloadDao.totalCompletedBytes(),
+            freeBytes = statFs.availableBytes,
+            totalBytes = statFs.totalBytes,
+        )
+    }
+
+    // Estimates transcode output size from the preset's configured bitrates and the source
+    // runtime, then requires a safety margin of free space beyond that before allowing the
+    // download to start. Falls back to a flat minimum when the estimate can't be computed.
+    private suspend fun checkFreeSpace(preset: String, runtimeMinutes: Int?) {
+        val freeBytes = getDeviceStorageInfo().freeBytes
+        val estimate = estimateOutputBytes(preset, runtimeMinutes)
+        val required = estimate?.let { (it * 1.15).toLong() } ?: MIN_FREE_SPACE_BYTES
+        check(freeBytes > required) {
+            fun gb(bytes: Long) = "%.1f GB".format(bytes / 1_073_741_824.0)
+            "Not enough storage: need ~${gb(required)}, only ${gb(freeBytes)} free"
+        }
+    }
+
+    private suspend fun estimateOutputBytes(preset: String, runtimeMinutes: Int?): Long? {
+        if (runtimeMinutes == null || runtimeMinutes <= 0) return null
+        val config = runCatching { shimService().getPresetDetails()[preset] }.getOrNull() ?: return null
+        val videoBps = parseBitrateBps(config.video_bitrate) ?: return null
+        val audioBps = parseBitrateBps(config.audio_bitrate) ?: return null
+        val seconds = runtimeMinutes.toLong() * 60
+        return ((videoBps + audioBps) / 8) * seconds
+    }
+
+    private fun parseBitrateBps(value: String): Long? {
+        val trimmed = value.trim().lowercase()
+        return when {
+            trimmed.endsWith("k") -> trimmed.dropLast(1).toLongOrNull()?.times(1_000)
+            trimmed.endsWith("m") -> trimmed.dropLast(1).toLongOrNull()?.times(1_000_000)
+            else -> trimmed.toLongOrNull()
+        }
+    }
+
     suspend fun retryTranscode(entity: DownloadEntity): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            checkFreeSpace(entity.preset, entity.runtimeMinutes)
             val mediaPath = entity.mediaSourcePath ?: error("No source path saved for retry")
             val job = shimService().startTranscode(
                 TranscodeRequest(
