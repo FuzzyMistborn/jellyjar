@@ -44,6 +44,19 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
+      - name: Derive version from release tag
+        id: version
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Tag '$TAG' is not a vMAJOR.MINOR.PATCH tag" >&2
+            exit 1
+          fi
+          IFS=. read -r MAJOR MINOR PATCH <<< "$VERSION"
+          echo "name=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "code=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))" >> "$GITHUB_OUTPUT"
+
       - name: Build release APK
         working-directory: android
         env:
@@ -52,15 +65,16 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          VERSION_ARGS="-PversionName=${{ steps.version.outputs.name }} -PversionCode=${{ steps.version.outputs.code }}"
           if [ -n "$KEYSTORE_FILE" ]; then
             echo "$KEYSTORE_FILE" | base64 --decode > keystore.jks
-            ./gradlew assembleRelease \
+            ./gradlew assembleRelease $VERSION_ARGS \
               -Pandroid.injected.signing.store.file="$PWD/keystore.jks" \
               -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
               -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
               -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
           else
-            ./gradlew assembleRelease
+            ./gradlew assembleRelease $VERSION_ARGS
           fi
 
       - name: Upload APK to release

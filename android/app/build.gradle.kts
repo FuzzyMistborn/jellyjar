@@ -14,8 +14,10 @@ android {
         applicationId = "com.fuzzymistborn.jellyjar"
         minSdk = 35          // Android 15
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.1.0"
+        // Overridden by CI from the release tag (-PversionCode / -PversionName);
+        // these are the fallbacks for local builds
+        versionCode = (project.findProperty("versionCode") as String?)?.toInt() ?: 4
+        versionName = (project.findProperty("versionName") as String?) ?: "0.1.0"
     }
 
     buildTypes {
