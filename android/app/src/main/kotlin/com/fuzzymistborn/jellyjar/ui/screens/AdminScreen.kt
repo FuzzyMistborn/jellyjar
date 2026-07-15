@@ -96,6 +96,8 @@ fun AdminScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
+    LaunchedEffect(Unit) { viewModel.checkJellyfinConnection() }
+
     // Track whether URL/shim fields have unsaved changes
     val savedUrl = remember { mutableStateOf(state.jellyfinUrl) }
     val savedShimUrl = remember { mutableStateOf(state.shimUrl) }
@@ -125,10 +127,11 @@ fun AdminScreen(
         SettingsCard(
             title = "Jellyfin Server",
             statusBadge = {
-                if (state.isAuthenticated) {
-                    StatusChip(label = "Connected", color = Success)
-                } else {
-                    StatusChip(label = "Not connected", color = OnSurfaceMuted)
+                when {
+                    state.isCheckingConnection -> StatusChip(label = "Checking…", color = OnSurfaceMuted)
+                    state.isAuthenticated -> StatusChip(label = "Connected", color = Success)
+                    state.hasCredentials -> StatusChip(label = "Unreachable", color = Warning)
+                    else -> StatusChip(label = "Not connected", color = OnSurfaceMuted)
                 }
             },
         ) {

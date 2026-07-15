@@ -121,16 +121,6 @@ class LibraryViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            jellyfinRepo.getResumeItems().onSuccess { items ->
-                _state.update { it.copy(resumeItems = items) }
-            }
-        }
-        viewModelScope.launch {
-            jellyfinRepo.getRecentlyAdded().onSuccess { items ->
-                _state.update { it.copy(recentlyAdded = items) }
-            }
-        }
-        viewModelScope.launch {
             favoriteRepo.favorites.collect { faves ->
                 _state.update { s ->
                     s.copy(
@@ -158,9 +148,10 @@ class LibraryViewModel @Inject constructor(
         jellyfinRepo.getLibraries()
             .onSuccess { libs ->
                 _state.update { s -> s.copy(libraries = libs, jellyfinAvailable = true) }
+                loadHomeRows()
             }
             .onFailure {
-                _state.update { s -> s.copy(isLoading = false, isRefreshing = false, jellyfinAvailable = false) }
+                _state.update { s -> s.copy(isLoading = false, isRefreshing = false, jellyfinAvailable = false, resumeItems = emptyList(), recentlyAdded = emptyList()) }
                 buildOfflineLibraries() // show downloaded content whenever Jellyfin is unreachable
                 return@launch
             }
@@ -191,6 +182,15 @@ class LibraryViewModel @Inject constructor(
             jellyfinRepo.getGenres(parentId).onSuccess { genres ->
                 _state.update { s -> s.copy(genres = genres) }
             }
+        }
+    }
+
+    private fun loadHomeRows() = viewModelScope.launch {
+        jellyfinRepo.getResumeItems().onSuccess { items ->
+            _state.update { it.copy(resumeItems = items) }
+        }
+        jellyfinRepo.getRecentlyAdded().onSuccess { items ->
+            _state.update { it.copy(recentlyAdded = items) }
         }
     }
 
@@ -246,7 +246,7 @@ class LibraryViewModel @Inject constructor(
             if (downloads.any { it.type == "Episode" })
                 add(JellyfinLibrary(id = "offline_tv", name = "TV Shows", collectionType = "tvshows"))
         }
-        _state.update { s -> s.copy(libraries = syntheticLibraries) }
+        _state.update { s -> s.copy(libraries = syntheticLibraries, resumeItems = emptyList(), recentlyAdded = emptyList()) }
     }
 
     private fun loadOfflineLibrary(libraryName: String) = viewModelScope.launch {
@@ -615,8 +615,10 @@ data class AdminState(
     val downloadPath: String = "",
     val isPinEnabled: Boolean = false,
     val settingsLoaded: Boolean = false,
+    val hasCredentials: Boolean = false,
     val isAuthenticated: Boolean = false,
     val isAuthenticating: Boolean = false,
+    val isCheckingConnection: Boolean = false,
     val authError: String? = null,
     val isTestingShim: Boolean = false,
     val shimOk: Boolean? = null,
@@ -647,13 +649,15 @@ class AdminViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             settings.settings.collect { s ->
+                val hasCredentials = s.jellyfinToken.isNotBlank()
+                val urlChanged = _state.value.jellyfinUrl != s.jellyfinUrl
                 _state.update {
                     it.copy(
                         jellyfinUrl = s.jellyfinUrl,
                         shimUrl = s.shimUrl,
                         downloadPath = s.downloadPath,
                         isPinEnabled = s.isPinEnabled,
-                        isAuthenticated = s.jellyfinToken.isNotBlank(),
+                        hasCredentials = hasCredentials,
                         settingsLoaded = true,
                         wifiOnly = s.wifiOnly,
                         showContinueWatching = s.showContinueWatching,
@@ -666,6 +670,7 @@ class AdminViewModel @Inject constructor(
                     )
                 }
                 refreshStorageInfo()
+                if (hasCredentials && urlChanged) checkJellyfinConnection()
             }
         }
         viewModelScope.launch {
@@ -695,10 +700,23 @@ class AdminViewModel @Inject constructor(
             password = _state.value.password,
         ).onSuccess { result ->
             settings.saveJellyfinAuth(ensureScheme(_state.value.jellyfinUrl), result.userId, result.token)
-            _state.update { it.copy(isAuthenticating = false, isAuthenticated = true) }
+            _state.update { it.copy(isAuthenticating = false, hasCredentials = true, isAuthenticated = true) }
         }.onFailure { e ->
-            _state.update { it.copy(isAuthenticating = false, authError = e.message) }
+            _state.update { it.copy(isAuthenticating = false, isAuthenticated = false, authError = e.message) }
         }
+    }
+
+    // Performs a real call to Jellyfin (not just "do we have a saved token") so the Admin
+    // "Connected" indicator matches what the Home screen actually experiences.
+    fun checkJellyfinConnection() = viewModelScope.launch {
+        if (!_state.value.hasCredentials) {
+            _state.update { it.copy(isAuthenticated = false) }
+            return@launch
+        }
+        _state.update { it.copy(isCheckingConnection = true) }
+        jellyfinRepo.getLibraries()
+            .onSuccess { _state.update { it.copy(isCheckingConnection = false, isAuthenticated = true) } }
+            .onFailure { e -> _state.update { it.copy(isCheckingConnection = false, isAuthenticated = false, authError = e.message) } }
     }
 
     fun testShim() = viewModelScope.launch {
