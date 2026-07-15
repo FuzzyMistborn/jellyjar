@@ -185,8 +185,8 @@ fun DownloadsScreen(
                         items(state.completed, key = { it.jellyfinId }) { entity ->
                             CompletedDownloadCard(
                                 entity = entity,
-                                thumbnailUrl = entity.thumbnailPath?.let { java.io.File(it) }
-                    ?: viewModel.thumbnailUrl(entity.jellyfinId),
+                                thumbnailUrl = entity.thumbnailPath
+                                    ?: viewModel.thumbnailUrl(entity.jellyfinId),
                                 onPlay = { onPlayClick(entity.localPath, entity.jellyfinId) },
                                 onDelete = { viewModel.removeDownload(entity.jellyfinId) },
                             )
@@ -379,7 +379,7 @@ private fun QueuedDownloadCard(
 @Composable
 private fun CompletedDownloadCard(
     entity: DownloadEntity,
-    thumbnailUrl: Any,
+    thumbnailUrl: String,
     onPlay: () -> Unit,
     onDelete: () -> Unit,
 ) {
