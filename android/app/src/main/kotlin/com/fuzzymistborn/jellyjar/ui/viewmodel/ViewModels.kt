@@ -37,6 +37,8 @@ data class LibraryState(
     val downloadStatuses: Map<String, String> = emptyMap(),
     val searchQuery: String = "",
     val sortOrder: SortOrder = SortOrder.DEFAULT,
+    val genres: List<String> = emptyList(),
+    val selectedGenre: String? = null,
     val showContinueWatching: Boolean = true,
     val showRecentlyAdded: Boolean = true,
     val showMyList: Boolean = true,
@@ -170,7 +172,7 @@ class LibraryViewModel @Inject constructor(
             "tvshows" -> "Series"
             else -> "Movie,Series"
         }
-        jellyfinRepo.getItems(parentId = parentId, types = types, startIndex = 0)
+        jellyfinRepo.getItems(parentId = parentId, types = types, startIndex = 0, genres = _state.value.selectedGenre)
             .onSuccess { response ->
                 _state.update { s ->
                     s.copy(
@@ -184,6 +186,12 @@ class LibraryViewModel @Inject constructor(
             .onFailure {
                 _state.update { s -> s.copy(isLoading = false, isRefreshing = false, jellyfinAvailable = false) }
             }
+        // Populate the genre filter chips for this library (once per selection)
+        if (selectedLib != null && _state.value.genres.isEmpty()) {
+            jellyfinRepo.getGenres(parentId).onSuccess { genres ->
+                _state.update { s -> s.copy(genres = genres) }
+            }
+        }
     }
 
     fun refresh() {
@@ -208,6 +216,7 @@ class LibraryViewModel @Inject constructor(
                 parentId = parentId,
                 types = types,
                 startIndex = _state.value.items.size,
+                genres = _state.value.selectedGenre,
             ).onSuccess { response ->
                 _state.update { s ->
                     s.copy(
@@ -261,7 +270,7 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun goHome() {
-        _state.update { it.copy(selectedLibrary = null, showingDownloads = false, items = emptyList(), totalCount = 0) }
+        _state.update { it.copy(selectedLibrary = null, showingDownloads = false, items = emptyList(), totalCount = 0, genres = emptyList(), selectedGenre = null) }
     }
 
     fun showDownloads() {
@@ -276,7 +285,7 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun selectLibrary(name: String?) {
-        _state.update { it.copy(selectedLibrary = name, items = emptyList(), totalCount = 0) }
+        _state.update { it.copy(selectedLibrary = name, items = emptyList(), totalCount = 0, genres = emptyList(), selectedGenre = null) }
         if (name != null) {
             if (_state.value.isOnline && _state.value.jellyfinAvailable) loadLibrary()
             else loadOfflineLibrary(name)
@@ -293,6 +302,13 @@ class LibraryViewModel @Inject constructor(
 
     fun setSortOrder(order: SortOrder) {
         _state.update { it.copy(sortOrder = order) }
+    }
+
+    // Genre filtering is server-side (results are paginated), so changing it reloads the library
+    fun setGenre(genre: String?) {
+        if (_state.value.selectedGenre == genre) return
+        _state.update { it.copy(selectedGenre = genre, items = emptyList(), totalCount = 0) }
+        if (_state.value.isOnline && _state.value.jellyfinAvailable) loadLibrary()
     }
 
     fun openGlobalSearch() {
@@ -611,6 +627,8 @@ data class AdminState(
     val showRecentlyAdded: Boolean = true,
     val showMyList: Boolean = true,
     val autoPlayNextEpisode: Boolean = true,
+    val introSkipEnabled: Boolean = true,
+    val trickplayEnabled: Boolean = true,
     val maxConcurrentDownloads: Int = 1,
 )
 
@@ -642,6 +660,8 @@ class AdminViewModel @Inject constructor(
                         showRecentlyAdded = s.showRecentlyAdded,
                         showMyList = s.showMyList,
                         autoPlayNextEpisode = s.autoPlayNextEpisode,
+                        introSkipEnabled = s.introSkipEnabled,
+                        trickplayEnabled = s.trickplayEnabled,
                         maxConcurrentDownloads = s.maxConcurrentDownloads,
                     )
                 }
@@ -747,6 +767,16 @@ class AdminViewModel @Inject constructor(
     fun setAutoPlayNextEpisode(v: Boolean) {
         _state.update { it.copy(autoPlayNextEpisode = v) }
         viewModelScope.launch { settings.saveAutoPlayNextEpisode(v) }
+    }
+
+    fun setIntroSkipEnabled(v: Boolean) {
+        _state.update { it.copy(introSkipEnabled = v) }
+        viewModelScope.launch { settings.saveIntroSkipEnabled(v) }
+    }
+
+    fun setTrickplayEnabled(v: Boolean) {
+        _state.update { it.copy(trickplayEnabled = v) }
+        viewModelScope.launch { settings.saveTrickplayEnabled(v) }
     }
 
     fun setMaxConcurrentDownloads(v: Int) {
@@ -1152,15 +1182,73 @@ sealed class NextEpisodeTarget {
     data class Stream(val streamUrl: String, val jellyfinId: String) : NextEpisodeTarget()
 }
 
+// Everything the player needs to render trickplay scrub previews for one item
+data class TrickplaySpec(
+    val itemId: String,
+    val widthKey: Int,           // resolution key used in the tile URL
+    val info: TrickplayInfo,
+    val baseUrl: String,
+    val token: String,
+)
+
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
     private val downloadRepo: DownloadRepository,
     private val jellyfinRepo: JellyfinRepository,
     private val settings: SettingsRepository,
+    private val okHttpClient: okhttp3.OkHttpClient,
 ) : ViewModel() {
 
     fun loadStartPosition(jellyfinId: String): Long =
         kotlinx.coroutines.runBlocking { downloadRepo.getPlaybackPosition(jellyfinId) }
+
+    // Intro/credits markers for the skip button. Prefers segments captured on the download
+    // (works offline), falls back to asking the server. Empty when the setting is off.
+    suspend fun loadSkipSegments(jellyfinId: String): List<SkipSegment> {
+        if (!settings.currentSnapshot().introSkipEnabled) return emptyList()
+        downloadRepo.findById(jellyfinId)?.segmentsJson?.let { json ->
+            runCatching {
+                com.google.gson.Gson().fromJson(json, Array<SkipSegment>::class.java).toList()
+            }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { return it }
+        }
+        return runCatching { jellyfinRepo.getSkipSegments(jellyfinId) }.getOrDefault(emptyList())
+    }
+
+    // Trickplay tile metadata for scrub previews. Server-generated tiles only, so this is
+    // stream-playback + online only; returns null when disabled or unavailable.
+    suspend fun loadTrickplay(jellyfinId: String): TrickplaySpec? {
+        val s = settings.currentSnapshot()
+        if (!s.trickplayEnabled || s.jellyfinUrl.isBlank()) return null
+        val item = jellyfinRepo.getItem(jellyfinId).getOrNull() ?: return null
+        val byWidth = item.trickplay?.values?.firstOrNull()?.takeIf { it.isNotEmpty() } ?: return null
+        // Pick the resolution closest to 320px — big enough to read, small to fetch
+        val entry = byWidth.entries.minByOrNull {
+            kotlin.math.abs((it.key.toIntOrNull() ?: it.value.width) - 320)
+        } ?: return null
+        return TrickplaySpec(
+            itemId = item.id,
+            widthKey = entry.key.toIntOrNull() ?: entry.value.width,
+            info = entry.value,
+            baseUrl = s.jellyfinUrl,
+            token = s.jellyfinToken,
+        )
+    }
+
+    private val tileCache = android.util.LruCache<String, android.graphics.Bitmap>(6)
+
+    // Fetches and decodes one trickplay tile (a grid of thumbnails); cached per URL.
+    suspend fun loadTrickplayTile(spec: TrickplaySpec, tileIndex: Int): android.graphics.Bitmap? =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val url = JellyfinImageHelper.trickplayTileUrl(spec.baseUrl, spec.itemId, spec.widthKey, tileIndex, spec.token)
+            tileCache.get(url)?.let { return@withContext it }
+            runCatching {
+                val response = okHttpClient.newCall(okhttp3.Request.Builder().url(url).build()).execute()
+                response.use {
+                    if (!it.isSuccessful) return@runCatching null
+                    android.graphics.BitmapFactory.decodeStream(it.body.byteStream())
+                }
+            }.getOrNull()?.also { tileCache.put(url, it) }
+        }
 
     // Resolves the episode that should play next when `currentJellyfinId` finishes, honoring the
     // Auto-play Next Episode setting. Tries the live Jellyfin server first, then falls back to the

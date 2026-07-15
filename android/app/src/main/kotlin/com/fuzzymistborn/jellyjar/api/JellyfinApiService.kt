@@ -1,8 +1,10 @@
 package com.fuzzymistborn.jellyjar.api
 
 import com.fuzzymistborn.jellyjar.BuildConfig
+import com.fuzzymistborn.jellyjar.model.IntroSkipperSegment
 import com.fuzzymistborn.jellyjar.model.JellyfinItem
 import com.fuzzymistborn.jellyjar.model.JellyfinLibrary
+import com.fuzzymistborn.jellyjar.model.MediaSegmentsResponse
 import retrofit2.http.*
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -83,14 +85,37 @@ interface JellyfinApiService {
         @Query("ParentId") parentId: String? = null,
         @Query("IncludeItemTypes") types: String? = null,
         @Query("Recursive") recursive: Boolean = true,
-        @Query("Fields") fields: String = "Overview,MediaSources,BackdropImageTags,ImageTags,UserData",
+        @Query("Fields") fields: String = "Overview,MediaSources,BackdropImageTags,ImageTags,UserData,Genres,Trickplay",
         @Query("SortBy") sortBy: String = "SortName",
         @Query("SortOrder") sortOrder: String = "Ascending",
         @Query("StartIndex") startIndex: Int = 0,
         @Query("Limit") limit: Int = 50,
         @Query("SearchTerm") searchTerm: String? = null,
         @Query("Filters") filters: String? = null,
+        @Query("Genres") genres: String? = null,
     ): ItemsResponse
+
+    @GET("Genres")
+    suspend fun getGenres(
+        @Header("Authorization") authHeader: String,
+        @Query("ParentId") parentId: String? = null,
+        @Query("UserId") userId: String? = null,
+        @Query("SortBy") sortBy: String = "SortName",
+    ): ItemsResponse
+
+    // Jellyfin 10.9+ native media segments (intro/outro markers)
+    @GET("MediaSegments/{itemId}")
+    suspend fun getMediaSegments(
+        @Path("itemId") itemId: String,
+        @Header("Authorization") authHeader: String,
+    ): MediaSegmentsResponse
+
+    // Intro Skipper plugin fallback — returns {"Introduction": {...}, "Credits": {...}}
+    @GET("Episode/{itemId}/IntroSkipperSegments")
+    suspend fun getIntroSkipperSegments(
+        @Path("itemId") itemId: String,
+        @Header("Authorization") authHeader: String,
+    ): Map<String, IntroSkipperSegment>
 
     @POST("Users/{userId}/PlayedItems/{itemId}")
     suspend fun markPlayed(
@@ -129,7 +154,7 @@ interface JellyfinApiService {
         @Path("userId") userId: String,
         @Path("itemId") itemId: String,
         @Header("Authorization") authHeader: String,
-        @Query("Fields") fields: String = "Overview,MediaSources,BackdropImageTags,ImageTags,UserData",
+        @Query("Fields") fields: String = "Overview,MediaSources,BackdropImageTags,ImageTags,UserData,Genres,Trickplay",
     ): JellyfinItem
 }
 
@@ -155,4 +180,7 @@ object JellyfinImageHelper {
 
     fun streamUrl(baseUrl: String, itemId: String, token: String): String =
         "$baseUrl/Videos/$itemId/stream?static=true&api_key=$token"
+
+    fun trickplayTileUrl(baseUrl: String, itemId: String, width: Int, tileIndex: Int, token: String): String =
+        "$baseUrl/Videos/$itemId/Trickplay/$width/$tileIndex.jpg?api_key=$token"
 }

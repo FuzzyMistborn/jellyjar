@@ -243,6 +243,40 @@ fun LibraryScreen(
                         )
                     }
                 }
+
+                // Genre filter chips
+                if (state.genres.isNotEmpty()) {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 24.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    ) {
+                        item {
+                            FilterChip(
+                                selected = state.selectedGenre == null,
+                                onClick = { viewModel.setGenre(null) },
+                                label = { Text("All Genres", style = MaterialTheme.typography.labelSmall) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Primary,
+                                    selectedLabelColor = OnPrimary,
+                                ),
+                            )
+                        }
+                        items(state.genres) { genre ->
+                            FilterChip(
+                                selected = state.selectedGenre == genre,
+                                onClick = {
+                                    viewModel.setGenre(if (state.selectedGenre == genre) null else genre)
+                                },
+                                label = { Text(genre, style = MaterialTheme.typography.labelSmall) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Primary,
+                                    selectedLabelColor = OnPrimary,
+                                ),
+                            )
+                        }
+                    }
+                }
             }
 
             // Content

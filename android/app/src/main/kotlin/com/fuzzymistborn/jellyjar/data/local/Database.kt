@@ -26,6 +26,9 @@ data class DownloadEntity(
     val playbackPositionMs: Long = 0,
     // Order within the local download queue; only meaningful while status = QUEUED.
     val queuePosition: Long = 0,
+    // Intro/credits skip segments (JSON array of SkipSegment) captured at queue time so the
+    // skip button works during offline playback.
+    val segmentsJson: String? = null,
 )
 
 @Entity(tableName = "cached_items")
@@ -198,7 +201,7 @@ interface CachedItemDao {
 
 @Database(
     entities = [DownloadEntity::class, CachedItemEntity::class, PlaybackPositionEntity::class, FavoriteEntity::class],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class JellyJarDatabase : RoomDatabase() {

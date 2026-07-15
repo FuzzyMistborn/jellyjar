@@ -28,13 +28,21 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.media3.ui.DefaultTimeBar
+import androidx.media3.ui.TimeBar
 import com.fuzzymistborn.jellyjar.R
+import com.fuzzymistborn.jellyjar.model.SkipSegment
 import com.fuzzymistborn.jellyjar.ui.theme.OnSurface
 import com.fuzzymistborn.jellyjar.ui.theme.OnSurfaceMuted
 import com.fuzzymistborn.jellyjar.ui.theme.Primary
 import com.fuzzymistborn.jellyjar.ui.theme.Surface
 import com.fuzzymistborn.jellyjar.ui.viewmodel.NextEpisodeTarget
 import com.fuzzymistborn.jellyjar.ui.viewmodel.PlayerViewModel
+import com.fuzzymistborn.jellyjar.ui.viewmodel.TrickplaySpec
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -133,6 +141,36 @@ fun PlayerScreen(
     var controlsVisible by remember { mutableStateOf(false) }
     var showTrackSheet by remember { mutableStateOf(false) }
 
+    // ── Skip intro/credits ────────────────────────────────────────────────────
+    var skipSegments by remember { mutableStateOf<List<SkipSegment>>(emptyList()) }
+    var positionMs by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(jellyfinId) {
+        if (jellyfinId != null) skipSegments = viewModel.loadSkipSegments(jellyfinId)
+    }
+    // Position ticker drives the skip button window; cheap enough at 2 Hz
+    LaunchedEffect(skipSegments) {
+        if (skipSegments.isNotEmpty()) {
+            while (true) {
+                positionMs = player.currentPosition
+                delay(500)
+            }
+        }
+    }
+    // Hide the button just before the segment ends so it can't seek past useful content
+    val activeSegment = skipSegments.firstOrNull {
+        positionMs >= it.startMs && positionMs < it.endMs - 1_000
+    }
+
+    // ── Trickplay scrub previews ──────────────────────────────────────────────
+    var trickplaySpec by remember { mutableStateOf<TrickplaySpec?>(null) }
+    val scrubPositionMs = remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(jellyfinId) {
+        // Only makes sense for streamed playback; local files have no tiles to fetch
+        if (jellyfinId != null && !localPath.startsWith("/")) {
+            trickplaySpec = viewModel.loadTrickplay(jellyfinId)
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -154,10 +192,54 @@ fun PlayerScreen(
                     })
                     findViewById<android.widget.ImageButton>(R.id.exo_track_select)
                         ?.setOnClickListener { showTrackSheet = true }
+                    // Media3 swaps exo_progress_placeholder for a DefaultTimeBar at inflation
+                    findViewById<DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress)
+                        ?.addListener(object : TimeBar.OnScrubListener {
+                            override fun onScrubStart(timeBar: TimeBar, position: Long) {
+                                scrubPositionMs.value = position
+                            }
+                            override fun onScrubMove(timeBar: TimeBar, position: Long) {
+                                scrubPositionMs.value = position
+                            }
+                            override fun onScrubStop(timeBar: TimeBar, position: Long, canceled: Boolean) {
+                                scrubPositionMs.value = null
+                            }
+                        })
                 }
             },
             modifier = Modifier.fillMaxSize(),
         )
+
+        // Trickplay preview while scrubbing
+        val spec = trickplaySpec
+        val scrubPos = scrubPositionMs.value
+        if (spec != null && scrubPos != null) {
+            TrickplayPreview(
+                spec = spec,
+                positionMs = scrubPos,
+                viewModel = viewModel,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 120.dp),
+            )
+        }
+
+        // Skip intro / credits button
+        if (activeSegment != null) {
+            Button(
+                onClick = { player.seekTo(activeSegment.endMs) },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xE6FFFFFF),
+                    contentColor = Color.Black,
+                ),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 32.dp, bottom = 96.dp),
+            ) {
+                Text(activeSegment.label)
+            }
+        }
+
         if (controlsVisible) {
             IconButton(
                 onClick = {
@@ -249,6 +331,75 @@ private fun TrackSelectionSheet(player: ExoPlayer, onDismiss: () -> Unit) {
             }
         }
     }
+}
+
+// Shows the thumbnail nearest to `positionMs` while the user drags the seek bar. Trickplay
+// tiles are sprite sheets (tileWidth × tileHeight thumbnails per JPEG); we fetch the tile
+// containing the target thumbnail and crop it out.
+@Composable
+private fun TrickplayPreview(
+    spec: TrickplaySpec,
+    positionMs: Long,
+    viewModel: PlayerViewModel,
+    modifier: Modifier = Modifier,
+) {
+    val info = spec.info
+    val thumbsPerTile = info.tileWidth * info.tileHeight
+    val interval = info.interval.coerceAtLeast(1)
+    val thumbIndex = (positionMs / interval).toInt()
+        .coerceIn(0, (info.thumbnailCount - 1).coerceAtLeast(0))
+    val tileIndex = thumbIndex / thumbsPerTile
+
+    var tile by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(spec, tileIndex) {
+        tile = viewModel.loadTrickplayTile(spec, tileIndex)
+    }
+
+    val thumb = remember(tile, thumbIndex) {
+        val bitmap = tile ?: return@remember null
+        val indexInTile = thumbIndex % thumbsPerTile
+        val x = (indexInTile % info.tileWidth) * info.width
+        val y = (indexInTile / info.tileWidth) * info.height
+        runCatching {
+            android.graphics.Bitmap.createBitmap(
+                bitmap, x, y,
+                info.width.coerceAtMost(bitmap.width - x),
+                info.height.coerceAtMost(bitmap.height - y),
+            )
+        }.getOrNull()
+    }
+
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        if (thumb != null) {
+            Image(
+                bitmap = thumb.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier
+                    .width(200.dp)
+                    .clip(RoundedCornerShape(8.dp)),
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+        androidx.compose.material3.Surface(
+            color = Color(0xCC000000),
+            shape = RoundedCornerShape(6.dp),
+        ) {
+            Text(
+                text = formatPlayerTime(positionMs),
+                color = Color.White,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+private fun formatPlayerTime(ms: Long): String {
+    val totalSeconds = (ms / 1000).coerceAtLeast(0)
+    val h = totalSeconds / 3600
+    val m = (totalSeconds % 3600) / 60
+    val s = totalSeconds % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
 
 @Composable

@@ -82,6 +82,7 @@ class JellyfinRepository @Inject constructor(
         limit: Int = 50,
         searchTerm: String? = null,
         filters: String? = null,
+        genres: String? = null,
     ): Result<ItemsResponse> = withContext(Dispatchers.IO) {
         runCatching {
             val s = settings.currentSnapshot()
@@ -95,6 +96,7 @@ class JellyfinRepository @Inject constructor(
                 limit = limit,
                 searchTerm = searchTerm?.takeIf { it.isNotBlank() },
                 filters = filters,
+                genres = genres?.takeIf { it.isNotBlank() },
             )
             if (searchTerm.isNullOrBlank()) {
                 cachedItemDao.upsertAll(response.Items.map { it.toEntity() })
@@ -132,6 +134,53 @@ class JellyfinRepository @Inject constructor(
                 limit = limit,
             ).Items
         }
+    }
+
+    suspend fun getGenres(parentId: String? = null): Result<List<String>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val s = settings.currentSnapshot()
+            val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
+            service.getGenres(
+                authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
+                parentId = parentId,
+                userId = s.jellyfinUserId,
+            ).Items.map { it.name }
+        }
+    }
+
+    // Fetches intro/credits markers: native MediaSegments API (Jellyfin 10.9+) first, then the
+    // Intro Skipper plugin endpoint. Best-effort — returns empty on any failure.
+    suspend fun getSkipSegments(itemId: String): List<SkipSegment> = withContext(Dispatchers.IO) {
+        val s = settings.currentSnapshot()
+        if (s.jellyfinUrl.isBlank()) return@withContext emptyList()
+        val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
+        val auth = JellyfinImageHelper.authHeader(s.jellyfinToken)
+
+        val native = runCatching {
+            service.getMediaSegments(itemId, auth).items.orEmpty().mapNotNull { seg ->
+                val type = seg.type ?: return@mapNotNull null
+                val start = seg.startTicks ?: return@mapNotNull null
+                val end = seg.endTicks ?: return@mapNotNull null
+                if (type != "Intro" && type != "Outro") return@mapNotNull null
+                if (end <= start) return@mapNotNull null
+                SkipSegment(type = type, startMs = start / 10_000, endMs = end / 10_000)
+            }
+        }.getOrDefault(emptyList())
+        if (native.isNotEmpty()) return@withContext native
+
+        runCatching {
+            service.getIntroSkipperSegments(itemId, auth).mapNotNull { (key, seg) ->
+                if (seg.valid == false) return@mapNotNull null
+                val startSec = seg.introStart ?: seg.start ?: return@mapNotNull null
+                val endSec = seg.introEnd ?: seg.end ?: return@mapNotNull null
+                if (endSec <= startSec) return@mapNotNull null
+                SkipSegment(
+                    type = if (key.equals("Credits", ignoreCase = true)) "Outro" else "Intro",
+                    startMs = (startSec * 1000).toLong(),
+                    endMs = (endSec * 1000).toLong(),
+                )
+            }
+        }.getOrDefault(emptyList())
     }
 
     suspend fun getItem(itemId: String): Result<JellyfinItem> = withContext(Dispatchers.IO) {
@@ -309,6 +358,7 @@ class DownloadRepository @Inject constructor(
     private val downloadDao: DownloadDao,
     private val playbackPositionDao: PlaybackPositionDao,
     private val settings: SettingsRepository,
+    private val jellyfinRepo: JellyfinRepository,
     @param:ApplicationContext private val context: Context,
 ) {
     val downloads: Flow<List<DownloadEntity>> = downloadDao.observeAll().distinctUntilChanged()
@@ -340,6 +390,8 @@ class DownloadRepository @Inject constructor(
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             checkFreeSpace(preset, item.runtimeMinutes)
+            // Capture intro/credits markers now so the skip button works offline later
+            val segments = runCatching { jellyfinRepo.getSkipSegments(item.id) }.getOrDefault(emptyList())
             val entity = DownloadEntity(
                 jellyfinId = item.id,
                 title = item.displayTitle,
@@ -358,6 +410,7 @@ class DownloadRepository @Inject constructor(
                 seriesName = item.seriesName,
                 mediaSourcePath = mediaSourcePath,
                 queuePosition = downloadDao.maxQueuePosition() + 1,
+                segmentsJson = segments.takeIf { it.isNotEmpty() }?.let { com.google.gson.Gson().toJson(it) },
             )
             downloadDao.upsert(entity)
         }

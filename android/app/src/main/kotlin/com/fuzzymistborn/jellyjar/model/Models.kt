@@ -22,6 +22,9 @@ data class JellyfinItem(
     @SerializedName("UserData") val userData: UserData?,
     @SerializedName("SeriesId") val seriesId: String? = null,
     @SerializedName("SeasonId") val seasonId: String? = null,
+    @SerializedName("Genres") val genres: List<String>? = null,
+    // mediaSourceId → (width → tile info); present when the server has generated trickplay images
+    @SerializedName("Trickplay") val trickplay: Map<String, Map<String, TrickplayInfo>>? = null,
 ) {
     val runtimeMinutes: Int?
         get() = runTimeTicks?.let { (it / 600_000_000).toInt() }
@@ -55,6 +58,46 @@ data class AudioStream(
     @SerializedName("Channels") val channels: Int?,
     @SerializedName("Language") val language: String?,
 )
+
+data class TrickplayInfo(
+    @SerializedName("Width") val width: Int,
+    @SerializedName("Height") val height: Int,
+    @SerializedName("TileWidth") val tileWidth: Int,     // thumbnails per tile row
+    @SerializedName("TileHeight") val tileHeight: Int,   // thumbnails per tile column
+    @SerializedName("ThumbnailCount") val thumbnailCount: Int,
+    @SerializedName("Interval") val interval: Int,       // ms between thumbnails
+)
+
+// ─── Skip segments (intro/credits) ────────────────────────────────────────────
+
+// Jellyfin 10.9+ native media segments API
+data class MediaSegment(
+    @SerializedName("Type") val type: String?,           // Intro | Outro | Recap | Preview | Commercial
+    @SerializedName("StartTicks") val startTicks: Long?,
+    @SerializedName("EndTicks") val endTicks: Long?,
+)
+
+data class MediaSegmentsResponse(
+    @SerializedName("Items") val items: List<MediaSegment>?,
+)
+
+// Intro Skipper plugin fallback; field names differ between plugin versions
+data class IntroSkipperSegment(
+    @SerializedName("IntroStart") val introStart: Double?,
+    @SerializedName("IntroEnd") val introEnd: Double?,
+    @SerializedName("Start") val start: Double?,
+    @SerializedName("End") val end: Double?,
+    @SerializedName("Valid") val valid: Boolean?,
+)
+
+// Normalized form used by the player and persisted (as JSON) on downloads
+data class SkipSegment(
+    val type: String,       // "Intro" or "Outro"
+    val startMs: Long,
+    val endMs: Long,
+) {
+    val label: String get() = if (type == "Outro") "Skip Credits" else "Skip Intro"
+}
 
 data class UserData(
     @SerializedName("PlaybackPositionTicks") val playbackPositionTicks: Long?,
@@ -132,6 +175,8 @@ data class AppSettings(
     val showRecentlyAdded: Boolean = true,
     val showMyList: Boolean = true,
     val autoPlayNextEpisode: Boolean = true,
+    val introSkipEnabled: Boolean = true,
+    val trickplayEnabled: Boolean = true,
     val downloadQueuePaused: Boolean = false,
     val maxConcurrentDownloads: Int = 1,
 )

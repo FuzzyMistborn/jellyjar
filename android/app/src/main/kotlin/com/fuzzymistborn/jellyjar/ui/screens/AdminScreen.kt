@@ -358,6 +358,18 @@ fun AdminScreen(
                 checked = state.autoPlayNextEpisode,
                 onCheckedChange = { viewModel.setAutoPlayNextEpisode(it) },
             )
+            SettingsToggleRow(
+                title = "Skip Intro / Credits",
+                subtitle = "Show a skip button during intros and credits",
+                checked = state.introSkipEnabled,
+                onCheckedChange = { viewModel.setIntroSkipEnabled(it) },
+            )
+            SettingsToggleRow(
+                title = "Scrubbing Previews",
+                subtitle = "Show thumbnail previews when seeking (streaming only)",
+                checked = state.trickplayEnabled,
+                onCheckedChange = { viewModel.setTrickplayEnabled(it) },
+            )
         }
 
         // ── Admin PIN ─────────────────────────────────────────────────────────
