@@ -1,6 +1,7 @@
 package com.fuzzymistborn.jellyjar.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -8,7 +9,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -44,7 +44,7 @@ fun PinGateScreen(
     var error by remember { mutableStateOf(false) }
 
     Box(
-        modifier = Modifier.fillMaxSize().background(Background),
+        modifier = Modifier.fillMaxSize().background(BackgroundGradient),
         contentAlignment = Alignment.Center,
     ) {
         Column(
@@ -52,7 +52,7 @@ fun PinGateScreen(
             verticalArrangement = Arrangement.spacedBy(20.dp),
             modifier = Modifier.widthIn(max = 340.dp),
         ) {
-            Icon(Icons.Default.Lock, contentDescription = null, tint = Primary, modifier = Modifier.size(48.dp))
+            Icon(Icons.Default.Lock, contentDescription = null, tint = Primary, modifier = Modifier.size(IconSize.xl))
             Text("Admin Access", style = MaterialTheme.typography.headlineMedium, color = OnSurface)
 
             OutlinedTextField(
@@ -70,6 +70,7 @@ fun PinGateScreen(
                 supportingText = if (error) { { Text("Incorrect PIN") } } else null,
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
+                colors = themedTextFieldColors(),
             )
 
             Button(
@@ -106,31 +107,26 @@ fun AdminScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Background)
+            .background(BackgroundGradient)
             .verticalScroll(rememberScrollState())
             .statusBarsPadding()
             .navigationBarsPadding()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .padding(Spacing.xl),
+        verticalArrangement = Arrangement.spacedBy(Spacing.lg),
     ) {
         // Header
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(bottom = 8.dp),
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = OnSurface)
-            }
-            Spacer(Modifier.width(8.dp))
-            Text("Settings", style = MaterialTheme.typography.headlineMedium, color = OnSurface)
-        }
+        ScreenHeader(
+            title = "Settings",
+            onBack = onBack,
+            modifier = Modifier.padding(bottom = Spacing.sm),
+        )
 
         // ── Jellyfin Server ───────────────────────────────────────────────────
         SettingsCard(
             title = "Jellyfin Server",
             statusBadge = {
                 if (state.isAuthenticated) {
-                    StatusChip(label = "Connected", color = Color(0xFF4CAF50))
+                    StatusChip(label = "Connected", color = Success)
                 } else {
                     StatusChip(label = "Not connected", color = OnSurfaceMuted)
                 }
@@ -160,33 +156,33 @@ fun AdminScreen(
                 colors = ButtonDefaults.buttonColors(containerColor = Primary),
             ) {
                 if (state.isAuthenticating) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = OnPrimary, strokeWidth = 2.dp)
-                    Spacer(Modifier.width(8.dp))
+                    CircularProgressIndicator(modifier = Modifier.size(IconSize.sm), color = OnPrimary, strokeWidth = 2.dp)
+                    Spacer(Modifier.width(Spacing.sm))
                     Text("Connecting…")
                 } else {
                     Icon(
                         if (state.isAuthenticated) Icons.Default.CheckCircle else Icons.Default.Link,
                         contentDescription = null,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(IconSize.md),
                     )
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(Spacing.sm))
                     Text(if (state.isAuthenticated) "Re-authenticate" else "Connect")
                 }
             }
             AnimatedVisibility(visible = state.authError != null) {
                 state.authError?.let { err ->
                     Surface(
-                        color = Color(0x22FF4444),
-                        shape = RoundedCornerShape(8.dp),
+                        color = Error.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(Radius.sm),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Row(
-                            modifier = Modifier.padding(12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(Spacing.md),
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Icon(Icons.Default.ErrorOutline, contentDescription = null,
-                                tint = Error, modifier = Modifier.size(16.dp))
+                                tint = Error, modifier = Modifier.size(IconSize.sm))
                             Text(err, style = MaterialTheme.typography.bodySmall, color = Error)
                         }
                     }
@@ -199,7 +195,7 @@ fun AdminScreen(
             title = "Press",
             statusBadge = {
                 when (state.shimOk) {
-                    true -> StatusChip(label = "Reachable", color = Color(0xFF4CAF50))
+                    true -> StatusChip(label = "Reachable", color = Success)
                     false -> StatusChip(label = "Unreachable", color = Error)
                     null -> {}
                 }
@@ -216,18 +212,18 @@ fun AdminScreen(
                 enabled = !state.isTestingShim,
                 modifier = Modifier.fillMaxWidth(),
                 colors = when (state.shimOk) {
-                    true -> ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF4CAF50))
+                    true -> ButtonDefaults.outlinedButtonColors(contentColor = Success)
                     false -> ButtonDefaults.outlinedButtonColors(contentColor = Error)
                     null -> ButtonDefaults.outlinedButtonColors()
                 },
             ) {
                 if (state.isTestingShim) {
-                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.width(8.dp))
+                    CircularProgressIndicator(modifier = Modifier.size(IconSize.sm), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(Spacing.sm))
                     Text("Testing…")
                 } else {
-                    Icon(Icons.Default.NetworkCheck, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(8.dp))
+                    Icon(Icons.Default.NetworkCheck, contentDescription = null, modifier = Modifier.size(IconSize.sm))
+                    Spacer(Modifier.width(Spacing.sm))
                     Text("Test Connection")
                 }
             }
@@ -252,11 +248,11 @@ fun AdminScreen(
             // Folder row
             Surface(
                 color = Background,
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(Radius.sm),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Row(
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier.padding(Spacing.md),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -266,7 +262,7 @@ fun AdminScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(Icons.Default.FolderOpen, contentDescription = null,
-                            tint = Primary, modifier = Modifier.size(20.dp))
+                            tint = Primary, modifier = Modifier.size(IconSize.md))
                         Column {
                             Text("Download Folder", style = MaterialTheme.typography.bodyMedium, color = OnSurface)
                             if (state.downloadPath.isNotBlank()) {
@@ -403,13 +399,14 @@ fun AdminScreen(
                 },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
+                colors = themedTextFieldColors(),
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 Button(
                     onClick = { viewModel.savePin(newPin); newPin = "" },
                     colors = ButtonDefaults.buttonColors(containerColor = Primary),
                 ) {
-                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(IconSize.sm))
                     Spacer(Modifier.width(6.dp))
                     Text("Save PIN")
                 }
@@ -418,7 +415,7 @@ fun AdminScreen(
                         onClick = viewModel::clearPin,
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
                     ) {
-                        Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(IconSize.sm))
                         Spacer(Modifier.width(6.dp))
                         Text("Clear")
                     }
@@ -432,10 +429,10 @@ fun AdminScreen(
                 state.activeJobs.forEach { job ->
                     Surface(
                         color = Background,
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(Radius.sm),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
+                        Column(modifier = Modifier.padding(Spacing.md)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -458,12 +455,15 @@ fun AdminScreen(
                                     "${job.progress.toInt()}%",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = Primary,
-                                    modifier = Modifier.padding(start = 12.dp),
+                                    modifier = Modifier.padding(start = Spacing.md),
                                 )
                             }
                             Spacer(Modifier.height(6.dp))
+                            val animatedProgress by animateFloatAsState(
+                                targetValue = (job.progress / 100f).coerceIn(0f, 1f), label = "jobProgress",
+                            )
                             LinearProgressIndicator(
-                                progress = { (job.progress / 100f).coerceIn(0f, 1f) },
+                                progress = { animatedProgress },
                                 modifier = Modifier.fillMaxWidth(),
                                 color = Primary,
                                 trackColor = SurfaceVariant,
@@ -486,13 +486,13 @@ fun AdminScreen(
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = Primary),
             ) {
-                Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
+                Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(IconSize.md))
+                Spacer(Modifier.width(Spacing.sm))
                 Text("Save Changes")
             }
         }
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Spacing.sm))
     }
 }
 
@@ -506,19 +506,19 @@ private fun SettingsCard(
 ) {
     Surface(
         color = SurfaceVariant,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(Radius.lg),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(Spacing.lg),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(title, style = MaterialTheme.typography.titleMedium, color = Primary)
+                Text(title, style = MaterialTheme.typography.titleMedium, color = SectionHeading)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { statusBadge() }
             }
             HorizontalDivider(color = Background)
@@ -531,7 +531,7 @@ private fun SettingsCard(
 private fun StatusChip(label: String, color: Color) {
     Surface(
         color = color.copy(alpha = 0.15f),
-        shape = RoundedCornerShape(50),
+        shape = RoundedCornerShape(Radius.pill),
     ) {
         Text(
             label,
@@ -598,5 +598,6 @@ private fun SettingsTextField(
         } else null,
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
+        colors = themedTextFieldColors(),
     )
 }

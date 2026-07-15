@@ -36,9 +36,14 @@ import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.TimeBar
 import com.fuzzymistborn.jellyjar.R
 import com.fuzzymistborn.jellyjar.model.SkipSegment
+import com.fuzzymistborn.jellyjar.ui.theme.OnPrimary
 import com.fuzzymistborn.jellyjar.ui.theme.OnSurface
 import com.fuzzymistborn.jellyjar.ui.theme.OnSurfaceMuted
 import com.fuzzymistborn.jellyjar.ui.theme.Primary
+import com.fuzzymistborn.jellyjar.ui.theme.Radius
+import com.fuzzymistborn.jellyjar.ui.theme.ScrimStrong
+import com.fuzzymistborn.jellyjar.ui.theme.SectionHeading
+import com.fuzzymistborn.jellyjar.ui.theme.Spacing
 import com.fuzzymistborn.jellyjar.ui.theme.Surface
 import com.fuzzymistborn.jellyjar.ui.viewmodel.NextEpisodeTarget
 import com.fuzzymistborn.jellyjar.ui.viewmodel.PlayerViewModel
@@ -229,8 +234,8 @@ fun PlayerScreen(
             Button(
                 onClick = { player.seekTo(activeSegment.endMs) },
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xE6FFFFFF),
-                    contentColor = Color.Black,
+                    containerColor = Primary,
+                    contentColor = OnPrimary,
                 ),
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -248,7 +253,7 @@ fun PlayerScreen(
                 },
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(8.dp),
+                    .padding(Spacing.sm),
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
@@ -270,17 +275,17 @@ private fun TrackSelectionSheet(player: ExoPlayer, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Surface) {
         Column(
             modifier = Modifier
-                .padding(horizontal = 24.dp)
+                .padding(horizontal = Spacing.xl)
                 .padding(bottom = 32.dp),
         ) {
             if (audioGroups.isEmpty() && textGroups.isEmpty()) {
                 Text("No alternate tracks available",
                     style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted,
-                    modifier = Modifier.padding(vertical = 16.dp))
+                    modifier = Modifier.padding(vertical = Spacing.lg))
             }
 
             if (audioGroups.isNotEmpty()) {
-                Text("Audio", style = MaterialTheme.typography.titleMedium, color = Primary,
+                Text("Audio", style = MaterialTheme.typography.titleMedium, color = SectionHeading,
                     modifier = Modifier.padding(bottom = 4.dp))
                 audioGroups.forEachIndexed { groupIdx, group ->
                     for (trackIdx in 0 until group.length) {
@@ -298,11 +303,11 @@ private fun TrackSelectionSheet(player: ExoPlayer, onDismiss: () -> Unit) {
                         }
                     }
                 }
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(Spacing.lg))
             }
 
             if (textGroups.isNotEmpty()) {
-                Text("Subtitles", style = MaterialTheme.typography.titleMedium, color = Primary,
+                Text("Subtitles", style = MaterialTheme.typography.titleMedium, color = SectionHeading,
                     modifier = Modifier.padding(bottom = 4.dp))
                 val subtitlesDisabled = player.trackSelectionParameters.disabledTrackTypes
                     .contains(C.TRACK_TYPE_TEXT)
@@ -376,13 +381,13 @@ private fun TrickplayPreview(
                 contentDescription = null,
                 modifier = Modifier
                     .width(200.dp)
-                    .clip(RoundedCornerShape(8.dp)),
+                    .clip(RoundedCornerShape(Radius.sm)),
             )
             Spacer(Modifier.height(6.dp))
         }
         androidx.compose.material3.Surface(
-            color = Color(0xCC000000),
-            shape = RoundedCornerShape(6.dp),
+            color = ScrimStrong,
+            shape = RoundedCornerShape(Radius.sm),
         ) {
             Text(
                 text = formatPlayerTime(positionMs),
@@ -405,13 +410,13 @@ private fun formatPlayerTime(ms: Long): String {
 @Composable
 private fun TrackRow(label: String, selected: Boolean, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = Spacing.md),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, color = if (selected) Primary else OnSurface)
         if (selected) Icon(Icons.Default.Check, contentDescription = null, tint = Primary)
     }
-    HorizontalDivider(color = Color(0x22FFFFFF))
+    HorizontalDivider(color = OnSurfaceMuted.copy(alpha = 0.2f))
 }
 

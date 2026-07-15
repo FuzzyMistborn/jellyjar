@@ -9,7 +9,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -19,8 +18,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,16 +68,8 @@ fun SeasonScreen(
 
         // Gradient fade
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        0f to Color.Transparent,
-                        0.25f to Color(0xCC000000),
-                        0.45f to Background,
-                        1f to Background,
-                    )
-                )
+            modifier = Modifier.fillMaxSize()
+                .background(heroBackdropScrim(scrimStop = 0.25f, solidStop = 0.45f)),
         )
 
         LazyColumn(
@@ -89,17 +78,13 @@ fun SeasonScreen(
         ) {
             // Header
             item(key = "header") {
-                Row(
+                ScreenHeader(
+                    onBack = onBack,
                     modifier = Modifier
                         .statusBarsPadding()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .padding(horizontal = Spacing.sm, vertical = 4.dp),
                 ) {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = OnSurface)
-                    }
-                    Spacer(Modifier.width(4.dp))
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         state.seriesName?.let {
                             Text(it, style = MaterialTheme.typography.labelMedium, color = OnSurfaceMuted)
                         }
@@ -191,7 +176,7 @@ fun SeasonScreen(
                     item(key = "episodes_grid") {
                         LazyRow(
                             contentPadding = PaddingValues(horizontal = 32.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                         ) {
                             items(visibleEpisodes, key = { it.id }) { episode ->
                                 val epDownload = state.episodeDownloads[episode.id]

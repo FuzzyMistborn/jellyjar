@@ -1,6 +1,8 @@
 package com.fuzzymistborn.jellyjar.ui.screens
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -11,6 +13,64 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.fuzzymistborn.jellyjar.ui.theme.*
+
+// Dark-theme colors for FilterChip's selected state — Material3 defaults to a muted
+// secondary-container tint, so every chip in the app needs this to pick up the Primary accent.
+@Composable
+fun themedChipColors(): SelectableChipColors = FilterChipDefaults.filterChipColors(
+    selectedContainerColor = Primary,
+    selectedLabelColor = OnPrimary,
+)
+
+// Dark-theme colors for OutlinedTextField — Material3's defaults assume a light-leaning
+// palette, so every text field in the app needs this override to read correctly.
+@Composable
+fun themedTextFieldColors(): TextFieldColors = OutlinedTextFieldDefaults.colors(
+    focusedBorderColor = Primary,
+    unfocusedBorderColor = SurfaceVariant,
+    focusedContainerColor = SurfaceVariant,
+    unfocusedContainerColor = SurfaceVariant,
+    focusedTextColor = OnSurface,
+    unfocusedTextColor = OnSurface,
+    cursorColor = Primary,
+)
+
+// Shared "back arrow + title" screen header — the outer layout modifier (padding,
+// statusBarsPadding, etc.) is left to the caller since it varies with each screen's
+// surrounding layout; this only standardizes the row's internal content.
+@Composable
+fun ScreenHeader(
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+    trailingContent: (@Composable () -> Unit)? = null,
+    titleContent: @Composable RowScope.() -> Unit,
+) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onBack) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = OnSurface)
+        }
+        Spacer(Modifier.width(Spacing.sm))
+        titleContent()
+        trailingContent?.invoke()
+    }
+}
+
+@Composable
+fun ScreenHeader(
+    title: String,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+    trailingContent: (@Composable () -> Unit)? = null,
+) {
+    ScreenHeader(onBack = onBack, modifier = modifier, trailingContent = trailingContent) {
+        Text(
+            title,
+            style = MaterialTheme.typography.headlineMedium,
+            color = OnSurface,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
 
 @Composable
 fun BoxScope.DownloadErrorSnackbar(error: String?, onDismissed: () -> Unit) {
@@ -24,20 +84,33 @@ fun BoxScope.DownloadErrorSnackbar(error: String?, onDismissed: () -> Unit) {
     SnackbarHost(snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter))
 }
 
+// Themed AlertDialog base — Material3's AlertDialog defaults to a light-leaning surface, so
+// every confirmation dialog in the app needs this override to read correctly on the dark theme.
 @Composable
-fun DeleteConfirmDialog(
-    title: String = "Remove download?",
-    message: String = "This deletes the downloaded file from this device. You can download it again later.",
+fun ConfirmDialog(
+    title: String,
+    message: String,
+    confirmLabel: String = "Remove",
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
+    content: (@Composable () -> Unit)? = null,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title, style = MaterialTheme.typography.titleLarge, color = OnSurface) },
-        text = { Text(message, style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted) },
+        text = {
+            if (content != null) {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    Text(message, style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
+                    content()
+                }
+            } else {
+                Text(message, style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
+            }
+        },
         confirmButton = {
             TextButton(onClick = { onDismiss(); onConfirm() }) {
-                Text("Remove", color = Error)
+                Text(confirmLabel, color = Error)
             }
         },
         dismissButton = {
@@ -48,6 +121,20 @@ fun DeleteConfirmDialog(
 }
 
 @Composable
+fun DeleteConfirmDialog(
+    title: String = "Remove download?",
+    message: String = "This deletes the downloaded file from this device. You can download it again later.",
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) = ConfirmDialog(
+    title = title,
+    message = message,
+    confirmLabel = "Remove",
+    onConfirm = onConfirm,
+    onDismiss = onDismiss,
+)
+
+@Composable
 fun PresetPickerDialog(
     onPresetSelected: (String) -> Unit,
     onDismiss: () -> Unit,
@@ -56,7 +143,7 @@ fun PresetPickerDialog(
         onDismissRequest = onDismiss,
         title = { Text("Choose Quality", style = MaterialTheme.typography.titleLarge, color = OnSurface) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 listOf("1080p" to "Full HD · ~4GB/hr", "720p" to "HD · ~2GB/hr").forEach { (preset, desc) ->
                     OutlinedButton(
                         onClick = { onPresetSelected(preset) },
@@ -94,7 +181,7 @@ fun FullScreenError(
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(Spacing.lg),
             modifier = modifier,
         ) {
             Text(message, style = MaterialTheme.typography.bodyLarge, color = OnSurfaceMuted)
@@ -120,14 +207,14 @@ fun EmptyState(
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
             modifier = modifier,
         ) {
             Icon(
                 icon,
                 contentDescription = null,
                 tint = OnSurfaceMuted,
-                modifier = Modifier.size(64.dp),
+                modifier = Modifier.size(IconSize.xxl),
             )
             Text(title, style = MaterialTheme.typography.headlineMedium, color = OnSurfaceMuted)
             if (subtitle != null) {

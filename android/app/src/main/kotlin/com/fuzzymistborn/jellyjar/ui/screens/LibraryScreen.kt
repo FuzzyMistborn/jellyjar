@@ -1,6 +1,12 @@
 package com.fuzzymistborn.jellyjar.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -18,7 +24,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -71,15 +76,7 @@ fun LibraryScreen(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize().blur(20.dp),
                 )
-                Box(
-                    modifier = Modifier.fillMaxSize().background(
-                        Brush.verticalGradient(
-                            0f to Overlay,
-                            0.3f to Color(0xAA000000),
-                            1f to Background,
-                        )
-                    )
-                )
+                Box(modifier = Modifier.fillMaxSize().background(featuredBackdropScrim()))
             }
         }
 
@@ -90,7 +87,7 @@ fun LibraryScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                    .padding(horizontal = Spacing.xl, vertical = Spacing.lg),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -99,7 +96,7 @@ fun LibraryScreen(
                         IconButton(onClick = { viewModel.goHome() }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Home", tint = OnSurface)
                         }
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(Spacing.sm))
                     }
                     Text(
                         text = when {
@@ -112,18 +109,18 @@ fun LibraryScreen(
                     )
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm), verticalAlignment = Alignment.CenterVertically) {
                     if (!state.isOnline) {
-                        Surface(color = Color(0xFF2A2A1A), shape = RoundedCornerShape(20.dp)) {
+                        Surface(color = Warning.copy(alpha = 0.15f), shape = RoundedCornerShape(Radius.pill)) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                modifier = Modifier.padding(horizontal = Spacing.md, vertical = 6.dp),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Icon(Icons.Default.WifiOff, contentDescription = null,
-                                    tint = Color(0xFFCCAA44), modifier = Modifier.size(14.dp))
+                                    tint = Warning, modifier = Modifier.size(IconSize.sm))
                                 Text("Offline", style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFFCCAA44))
+                                    color = Warning)
                             }
                         }
                     }
@@ -153,22 +150,13 @@ fun LibraryScreen(
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 24.dp)
-                        .padding(bottom = 8.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Primary,
-                        unfocusedBorderColor = SurfaceVariant,
-                        focusedContainerColor = SurfaceVariant,
-                        unfocusedContainerColor = SurfaceVariant,
-                        focusedTextColor = OnSurface,
-                        unfocusedTextColor = OnSurface,
-                    ),
-                    shape = RoundedCornerShape(12.dp),
+                        .padding(horizontal = Spacing.xl)
+                        .padding(bottom = Spacing.sm),
+                    colors = themedTextFieldColors(),
+                    shape = RoundedCornerShape(Radius.md),
                 )
                 when {
-                    state.isGlobalSearching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Primary)
-                    }
+                    state.isGlobalSearching -> SkeletonGrid()
                     state.globalSearchQuery.isBlank() -> Unit
                     state.globalSearchResults.isEmpty() -> EmptyState(
                         icon = Icons.Default.SearchOff,
@@ -204,24 +192,17 @@ fun LibraryScreen(
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 24.dp)
-                        .padding(bottom = 8.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Primary,
-                        unfocusedBorderColor = SurfaceVariant,
-                        focusedContainerColor = SurfaceVariant,
-                        unfocusedContainerColor = SurfaceVariant,
-                        focusedTextColor = OnSurface,
-                        unfocusedTextColor = OnSurface,
-                    ),
-                    shape = RoundedCornerShape(12.dp),
+                        .padding(horizontal = Spacing.xl)
+                        .padding(bottom = Spacing.sm),
+                    colors = themedTextFieldColors(),
+                    shape = RoundedCornerShape(Radius.md),
                 )
 
                 // Sort chips
                 LazyRow(
-                    contentPadding = PaddingValues(horizontal = 24.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(bottom = 8.dp),
+                    contentPadding = PaddingValues(horizontal = Spacing.xl),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    modifier = Modifier.padding(bottom = Spacing.sm),
                 ) {
                     val options = listOf(
                         SortOrder.DEFAULT to "Default",
@@ -236,10 +217,7 @@ fun LibraryScreen(
                             selected = state.sortOrder == order,
                             onClick = { viewModel.setSortOrder(order) },
                             label = { Text(label, style = MaterialTheme.typography.labelSmall) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Primary,
-                                selectedLabelColor = OnPrimary,
-                            ),
+                            colors = themedChipColors(),
                         )
                     }
                 }
@@ -247,19 +225,16 @@ fun LibraryScreen(
                 // Genre filter chips
                 if (state.genres.isNotEmpty()) {
                     LazyRow(
-                        contentPadding = PaddingValues(horizontal = 24.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.padding(bottom = 8.dp),
+                        contentPadding = PaddingValues(horizontal = Spacing.xl),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        modifier = Modifier.padding(bottom = Spacing.sm),
                     ) {
                         item {
                             FilterChip(
                                 selected = state.selectedGenre == null,
                                 onClick = { viewModel.setGenre(null) },
                                 label = { Text("All Genres", style = MaterialTheme.typography.labelSmall) },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = Primary,
-                                    selectedLabelColor = OnPrimary,
-                                ),
+                                colors = themedChipColors(),
                             )
                         }
                         items(state.genres) { genre ->
@@ -269,10 +244,7 @@ fun LibraryScreen(
                                     viewModel.setGenre(if (state.selectedGenre == genre) null else genre)
                                 },
                                 label = { Text(genre, style = MaterialTheme.typography.labelSmall) },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = Primary,
-                                    selectedLabelColor = OnPrimary,
-                                ),
+                                colors = themedChipColors(),
                             )
                         }
                     }
@@ -319,11 +291,7 @@ fun LibraryScreen(
                         )
                     }
                 }
-                state.isLoading -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Primary)
-                    }
-                }
+                state.isLoading -> SkeletonGrid()
                 state.displayItems.isEmpty() -> {
                     EmptyState(
                         icon = if (!state.isOnline || !state.jellyfinAvailable) Icons.Default.WifiOff
@@ -372,7 +340,6 @@ private fun HomeScreen(
     onItemClick: (JellyfinItem) -> Unit,
     viewModel: LibraryViewModel,
 ) {
-    val context = LocalContext.current
     val jellyfinUrl = viewModel.state.collectAsStateWithLifecycle().value.jellyfinUrl
 
     val gridState = rememberLazyGridState()
@@ -388,31 +355,31 @@ private fun HomeScreen(
         state = gridState,
         columns = GridCells.Adaptive(minSize = 280.dp),
         contentPadding = PaddingValues(
-            start = 24.dp,
-            end = 24.dp,
-            top = 8.dp,
-            bottom = 8.dp + navBarPadding.calculateBottomPadding(),
+            start = Spacing.xl,
+            end = Spacing.xl,
+            top = Spacing.sm,
+            bottom = Spacing.sm + navBarPadding.calculateBottomPadding(),
         ),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(Spacing.lg),
         modifier = Modifier.fillMaxSize(),
     ) {
         if (isOnline && !jellyfinAvailable) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Surface(
-                    color = Color(0xFF2A1A1A),
-                    shape = RoundedCornerShape(12.dp),
+                    color = Warning.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(Radius.md),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(Icons.Default.CloudOff, contentDescription = null,
-                            tint = Color(0xFFCCAA44), modifier = Modifier.size(16.dp))
+                            tint = Warning, modifier = Modifier.size(IconSize.sm))
                         Text("Jellyfin server unreachable — retrying…",
-                            style = MaterialTheme.typography.bodySmall, color = Color(0xFFCCAA44))
+                            style = MaterialTheme.typography.bodySmall, color = Warning)
                     }
                 }
             }
@@ -426,7 +393,6 @@ private fun HomeScreen(
                         ResumeCard(
                             item = item,
                             imageUrl = viewModel.posterUrl(item.id),
-                            context = context,
                             onClick = { onResumeItemClick(item) },
                         )
                     }
@@ -442,7 +408,6 @@ private fun HomeScreen(
                         PosterCard(
                             item = item,
                             imageUrl = viewModel.posterUrl(item.id),
-                            context = context,
                             onClick = { onItemClick(item) },
                         )
                     }
@@ -458,7 +423,6 @@ private fun HomeScreen(
                         PosterCard(
                             item = item,
                             imageUrl = viewModel.posterUrl(item.id),
-                            context = context,
                             onClick = { onItemClick(item) },
                         )
                     }
@@ -481,7 +445,6 @@ private fun HomeScreen(
 private fun ResumeCard(
     item: JellyfinItem,
     imageUrl: String,
-    context: android.content.Context,
     onClick: () -> Unit,
 ) {
     val progressFraction = item.userData?.playbackPositionTicks?.let { ticks ->
@@ -489,25 +452,13 @@ private fun ResumeCard(
         if (runtimeTicks > 0) (ticks.toFloat() / runtimeTicks).coerceIn(0f, 0.99f) else null
     }
     Column(modifier = Modifier.width(130.dp)) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(2f / 3f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(SurfaceVariant)
-                .clickable(onClick = onClick),
+        PosterImage(
+            imageUrl = imageUrl,
+            contentDescription = item.name,
+            modifier = Modifier.fillMaxWidth(),
+            cacheKey = "poster_${item.id}",
+            onClick = onClick,
         ) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(imageUrl)
-                    .memoryCacheKey("poster_${item.id}")
-                    .diskCacheKey("poster_${item.id}")
-                    .crossfade(300)
-                    .build(),
-                contentDescription = item.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
             if (progressFraction != null) {
                 LinearProgressIndicator(
                     progress = { progressFraction },
@@ -537,11 +488,11 @@ private fun HomeSectionRow(
         Text(
             title,
             style = MaterialTheme.typography.titleMedium,
-            color = Primary,
+            color = SectionHeading,
             modifier = Modifier.padding(bottom = 10.dp),
         )
         LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             content = content,
         )
     }
@@ -551,30 +502,16 @@ private fun HomeSectionRow(
 private fun PosterCard(
     item: JellyfinItem?,
     imageUrl: String,
-    context: android.content.Context,
     onClick: () -> Unit,
 ) {
     Column(modifier = Modifier.width(110.dp)) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(2f / 3f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(SurfaceVariant)
-                .clickable(onClick = onClick),
-        ) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(imageUrl)
-                    .memoryCacheKey("poster_${item?.id ?: imageUrl}")
-                    .diskCacheKey("poster_${item?.id ?: imageUrl}")
-                    .crossfade(300)
-                    .build(),
-                contentDescription = item?.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
+        PosterImage(
+            imageUrl = imageUrl,
+            contentDescription = item?.name,
+            modifier = Modifier.fillMaxWidth(),
+            cacheKey = "poster_${item?.id ?: imageUrl}",
+            onClick = onClick,
+        )
         if (item != null) {
             Spacer(Modifier.height(4.dp))
             Text(
@@ -597,7 +534,7 @@ private fun LibraryTile(library: JellyfinLibrary, jellyfinUrl: String, onClick: 
         modifier = Modifier
             .fillMaxWidth()
             .height(160.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(Radius.md))
             .background(SurfaceVariant)
             .clickable(onClick = onClick),
     ) {
@@ -618,11 +555,7 @@ private fun LibraryTile(library: JellyfinLibrary, jellyfinUrl: String, onClick: 
             modifier = Modifier.fillMaxSize(),
             onError = { if (!usePrimary) usePrimary = true },
         )
-        Box(
-            modifier = Modifier.fillMaxSize().background(
-                Brush.verticalGradient(0f to Color(0x44000000), 1f to Color(0xCC000000))
-            )
-        )
+        Box(modifier = Modifier.fillMaxSize().background(tileScrim()))
         Text(
             text = library.name ?: "",
             style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold, fontSize = 26.sp),
@@ -638,17 +571,17 @@ private fun DownloadsTile(onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .height(160.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(Radius.md))
             .background(SurfaceVariant)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
             Icon(Icons.Default.DownloadDone, contentDescription = null,
-                tint = Primary, modifier = Modifier.size(40.dp))
+                tint = Primary, modifier = Modifier.size(IconSize.xl))
             Text("Downloads",
                 style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
                 color = OnSurface)
@@ -672,7 +605,6 @@ private fun MediaGrid(
 ) {
     val gridState = rememberLazyGridState()
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val context = LocalContext.current
 
     val shouldLoadMore = remember {
         derivedStateOf {
@@ -695,20 +627,19 @@ private fun MediaGrid(
             state = gridState,
             columns = GridCells.Adaptive(minSize = 140.dp),
             contentPadding = PaddingValues(
-                start = 24.dp,
-                end = 24.dp,
-                top = 8.dp,
-                bottom = 8.dp + navBarPadding.calculateBottomPadding(),
+                start = Spacing.xl,
+                end = Spacing.xl,
+                top = Spacing.sm,
+                bottom = Spacing.sm + navBarPadding.calculateBottomPadding(),
             ),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
             modifier = Modifier.fillMaxSize(),
         ) {
             items(items, key = { it.id }) { item ->
                 MediaCard(
                     item = item,
                     imageUrl = viewModel.posterUrl(item.id),
-                    context = context,
                     downloadStatus = downloadStatuses[item.id],
                     onClick = { onItemClick(item) },
                     onFocus = { onItemFocus(item) },
@@ -716,8 +647,8 @@ private fun MediaGrid(
             }
             if (state.isLoadingMore) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
-                    Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Primary, modifier = Modifier.size(32.dp))
+                    Box(Modifier.fillMaxWidth().padding(Spacing.lg), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = Primary, modifier = Modifier.size(IconSize.lg))
                     }
                 }
             }
@@ -729,44 +660,31 @@ private fun MediaGrid(
 private fun MediaCard(
     item: JellyfinItem,
     imageUrl: String,
-    context: android.content.Context,
     downloadStatus: String?,
     onClick: () -> Unit,
     onFocus: () -> Unit,
 ) {
     Column(
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(Radius.sm))
             .clickable { onFocus(); onClick() }
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(2f / 3f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(SurfaceVariant)
+        PosterImage(
+            imageUrl = imageUrl,
+            contentDescription = item.name,
+            modifier = Modifier.fillMaxWidth(),
+            cacheKey = "poster_${item.id}",
         ) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(imageUrl)
-                    .memoryCacheKey("poster_${item.id}")
-                    .diskCacheKey("poster_${item.id}")
-                    .crossfade(300)
-                    .build(),
-                contentDescription = item.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
             item.communityRating?.let { rating ->
                 Surface(
                     modifier = Modifier.align(Alignment.TopEnd).padding(6.dp),
-                    color = Color(0xCC000000),
-                    shape = RoundedCornerShape(4.dp),
+                    color = ScrimStrong,
+                    shape = RoundedCornerShape(Radius.sm),
                 ) {
                     Text(
                         text = "★ ${"%.1f".format(rating)}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFFFFCC44),
+                        color = Accent,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
                     )
                 }
@@ -775,34 +693,34 @@ private fun MediaCard(
             if (item.userData?.played == true) {
                 Surface(
                     modifier = Modifier.align(Alignment.TopStart).padding(6.dp),
-                    color = Color(0xCC000000),
-                    shape = RoundedCornerShape(50),
+                    color = ScrimStrong,
+                    shape = RoundedCornerShape(Radius.pill),
                 ) {
                     Icon(
                         Icons.Default.CheckCircle,
                         contentDescription = "Watched",
                         tint = Primary,
-                        modifier = Modifier.padding(3.dp).size(14.dp),
+                        modifier = Modifier.padding(3.dp).size(IconSize.sm),
                     )
                 }
             }
             // Download status badge
             if (downloadStatus != null) {
                 val (badgeIcon, badgeColor) = when (downloadStatus) {
-                    DownloadStatus.COMPLETE.name -> Icons.Default.DownloadDone to Color(0xFF4CAF50)
+                    DownloadStatus.COMPLETE.name -> Icons.Default.DownloadDone to Success
                     DownloadStatus.FAILED.name -> Icons.Default.Warning to Error
                     else -> Icons.Default.Downloading to Primary
                 }
                 Surface(
                     modifier = Modifier.align(Alignment.BottomStart).padding(4.dp),
-                    color = Color(0xCC000000),
-                    shape = RoundedCornerShape(50),
+                    color = ScrimStrong,
+                    shape = RoundedCornerShape(Radius.pill),
                 ) {
                     Icon(
                         badgeIcon,
                         contentDescription = null,
                         tint = badgeColor,
-                        modifier = Modifier.padding(4.dp).size(14.dp),
+                        modifier = Modifier.padding(4.dp).size(IconSize.sm),
                     )
                 }
             }
@@ -813,5 +731,66 @@ private fun MediaCard(
         item.year?.let {
             Text(text = it.toString(), style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
         }
+    }
+}
+
+// ─── Skeleton loading placeholders ─────────────────────────────────────────────
+
+@Composable
+private fun rememberShimmerAlpha(): Float {
+    val transition = rememberInfiniteTransition(label = "shimmer")
+    val alpha by transition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 0.7f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "shimmerAlpha",
+    )
+    return alpha
+}
+
+@Composable
+private fun SkeletonCard(modifier: Modifier = Modifier) {
+    val alpha = rememberShimmerAlpha()
+    Column(modifier = modifier) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(2f / 3f)
+                .clip(RoundedCornerShape(Radius.sm))
+                .background(SurfaceVariant.copy(alpha = alpha)),
+        )
+        Spacer(Modifier.height(6.dp))
+        Box(
+            Modifier
+                .fillMaxWidth(0.8f)
+                .height(Spacing.md)
+                .clip(RoundedCornerShape(Radius.sm))
+                .background(SurfaceVariant.copy(alpha = alpha)),
+        )
+        Spacer(Modifier.height(4.dp))
+        Box(
+            Modifier
+                .fillMaxWidth(0.4f)
+                .height(10.dp)
+                .clip(RoundedCornerShape(Radius.sm))
+                .background(SurfaceVariant.copy(alpha = alpha)),
+        )
+    }
+}
+
+@Composable
+private fun SkeletonGrid() {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = 140.dp),
+        contentPadding = PaddingValues(horizontal = Spacing.xl, vertical = Spacing.sm),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+        modifier = Modifier.fillMaxSize(),
+        userScrollEnabled = false,
+    ) {
+        items(18) { SkeletonCard() }
     }
 }

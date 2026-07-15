@@ -1,6 +1,7 @@
 package com.fuzzymistborn.jellyjar.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,7 +20,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
@@ -79,18 +79,7 @@ fun DetailScreen(
         }
 
         // Gradient fade to background
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        0f to Color.Transparent,
-                        0.35f to Color(0xCC000000),
-                        0.55f to Background,
-                        1f to Background,
-                    )
-                )
-        )
+        Box(modifier = Modifier.fillMaxSize().background(heroBackdropScrim()))
 
         val item = state.item
 
@@ -101,7 +90,7 @@ fun DetailScreen(
             item(key = "back") {
                 IconButton(
                     onClick = onBack,
-                    modifier = Modifier.statusBarsPadding().padding(12.dp),
+                    modifier = Modifier.statusBarsPadding().padding(Spacing.md),
                 ) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = OnSurface)
                 }
@@ -131,10 +120,10 @@ fun DetailScreen(
                             )
                         }
 
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(Spacing.sm))
 
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             item.year?.let {
@@ -146,14 +135,14 @@ fun DetailScreen(
                             item.communityRating?.let {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(Icons.Default.Star, contentDescription = null,
-                                        tint = Color(0xFFFFCC44), modifier = Modifier.size(14.dp))
+                                        tint = Accent, modifier = Modifier.size(IconSize.sm))
                                     Spacer(Modifier.width(4.dp))
                                     Text("${"%.1f".format(it)}", style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
                                 }
                             }
                         }
 
-                        Spacer(Modifier.height(16.dp))
+                        Spacer(Modifier.height(Spacing.lg))
 
                         item.overview?.let {
                             Text(
@@ -187,41 +176,22 @@ fun DetailScreen(
                             }
 
                             Row(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 if (hasPosition && resumeAction != null) {
-                                    Button(
-                                        onClick = resumeAction,
-                                        colors = ButtonDefaults.buttonColors(containerColor = Primary),
-                                        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp),
-                                    ) {
-                                        Icon(Icons.Default.PlayArrow, contentDescription = null)
-                                        Spacer(Modifier.width(8.dp))
-                                        Text("Resume")
-                                    }
+                                    PrimaryActionButton("Resume", Icons.Default.PlayArrow, resumeAction)
                                 }
                                 if (playFromStartAction != null) {
                                     val isSecondary = hasPosition && resumeAction != null
                                     if (isSecondary) {
-                                        OutlinedButton(
+                                        SecondaryActionButton(
+                                            icon = Icons.Default.PlayArrow,
                                             onClick = playFromStartAction,
-                                            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp),
-                                        ) {
-                                            Icon(Icons.Default.PlayArrow, contentDescription = null)
-                                            Spacer(Modifier.width(8.dp))
-                                            Text("Play")
-                                        }
+                                            text = "Play",
+                                        )
                                     } else {
-                                        Button(
-                                            onClick = playFromStartAction,
-                                            colors = ButtonDefaults.buttonColors(containerColor = Primary),
-                                            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp),
-                                        ) {
-                                            Icon(Icons.Default.PlayArrow, contentDescription = null)
-                                            Spacer(Modifier.width(8.dp))
-                                            Text("Play")
-                                        }
+                                        PrimaryActionButton("Play", Icons.Default.PlayArrow, playFromStartAction)
                                     }
                                 }
                                 IconButton(onClick = { viewModel.toggleFavorite() }) {
@@ -239,14 +209,11 @@ fun DetailScreen(
                                     )
                                 }
                                 when {
-                                    dl == null && state.isOnline -> OutlinedButton(
+                                    dl == null && state.isOnline -> SecondaryActionButton(
+                                        icon = Icons.Default.Download,
                                         onClick = { showPresetDialog = true },
-                                        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp),
-                                    ) {
-                                        Icon(Icons.Default.Download, contentDescription = null)
-                                        Spacer(Modifier.width(8.dp))
-                                        Text("Download")
-                                    }
+                                        text = "Download",
+                                    )
                                     dl != null && dl.status in listOf(
                                         DownloadStatus.QUEUED.name,
                                         DownloadStatus.TRANSCODING.name,
@@ -254,31 +221,25 @@ fun DetailScreen(
                                     ) ->
                                         DownloadProgressButton(dl.status, dl.progress)
                                     dl?.status == DownloadStatus.COMPLETE.name ->
-                                        OutlinedButton(
+                                        SecondaryActionButton(
+                                            icon = Icons.Default.Delete,
                                             onClick = { showDeleteConfirm = true },
-                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
-                                        ) {
-                                            Icon(Icons.Default.Delete, contentDescription = null)
-                                            Spacer(Modifier.width(8.dp))
-                                            Text("Remove")
-                                        }
+                                            text = "Remove",
+                                            contentColor = Error,
+                                        )
                                     dl?.status == DownloadStatus.FAILED.name -> {
                                         if (state.isOnline) {
-                                            OutlinedButton(
+                                            SecondaryActionButton(
+                                                icon = Icons.Default.Refresh,
                                                 onClick = { viewModel.retryDownload(item.id) },
-                                                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp),
-                                            ) {
-                                                Icon(Icons.Default.Refresh, contentDescription = null)
-                                                Spacer(Modifier.width(8.dp))
-                                                Text("Retry")
-                                            }
+                                                text = "Retry",
+                                            )
                                         }
-                                        OutlinedButton(
+                                        SecondaryActionButton(
+                                            icon = Icons.Default.Delete,
                                             onClick = { showDeleteConfirm = true },
-                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
-                                        ) {
-                                            Icon(Icons.Default.Delete, contentDescription = null)
-                                        }
+                                            contentColor = Error,
+                                        )
                                     }
                                     else -> {}
                                 }
@@ -291,37 +252,26 @@ fun DetailScreen(
                 if (item.type == "Series" && state.seasons.isNotEmpty()) {
                     item(key = "seasons_header") {
                         Column {
-                            Spacer(Modifier.height(24.dp))
+                            Spacer(Modifier.height(Spacing.xl))
                             Text(
                                 text = "Seasons",
                                 style = MaterialTheme.typography.titleMedium,
-                                color = Primary,
+                                color = SectionHeading,
                                 modifier = Modifier.padding(horizontal = 32.dp),
                             )
                             Spacer(Modifier.height(10.dp))
                             androidx.compose.foundation.lazy.LazyRow(
                                 contentPadding = PaddingValues(horizontal = 32.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                             ) {
                                 itemsIndexed(state.seasons) { index, season ->
                                     Column(modifier = Modifier.width(110.dp)) {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .aspectRatio(2f / 3f)
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(SurfaceVariant)
-                                                .clickable { onSeasonClick(season.id, item.id) },
+                                        PosterImage(
+                                            imageUrl = viewModel.posterUrl(season.id),
+                                            contentDescription = season.name,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            onClick = { onSeasonClick(season.id, item.id) },
                                         ) {
-                                            AsyncImage(
-                                                model = ImageRequest.Builder(LocalContext.current)
-                                                    .data(viewModel.posterUrl(season.id))
-                                                    .crossfade(300)
-                                                    .build(),
-                                                contentDescription = season.name,
-                                                contentScale = ContentScale.Crop,
-                                                modifier = Modifier.fillMaxSize(),
-                                            )
                                             SeasonDownloadBadge(
                                                 queuingProgress = state.seasonDownloadProgress[season.id],
                                                 episodeIds = state.seasonEpisodeIds[season.id],
@@ -384,18 +334,19 @@ fun DetailScreen(
 
 @Composable
 private fun DownloadProgressButton(status: String, progress: Float) {
+    val animatedProgress by animateFloatAsState(targetValue = progress / 100f, label = "downloadProgress")
     Surface(
         color = SurfaceVariant,
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(Radius.sm),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             CircularProgressIndicator(
-                progress = { progress / 100f },
-                modifier = Modifier.size(20.dp),
+                progress = { animatedProgress },
+                modifier = Modifier.size(IconSize.md),
                 strokeWidth = 2.dp,
                 color = Primary,
             )
@@ -421,16 +372,16 @@ private fun SeasonDownloadBadge(
 ) {
     if (queuingProgress != null) {
         Surface(
-            color = Color(0xCC000000),
-            shape = RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp),
+            color = ScrimStrong,
+            shape = RoundedCornerShape(bottomStart = Radius.sm, bottomEnd = Radius.sm),
             modifier = modifier.fillMaxWidth(),
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp, color = Primary)
+                CircularProgressIndicator(modifier = Modifier.size(IconSize.xs), strokeWidth = 2.dp, color = Primary)
                 Text("Queuing…", style = MaterialTheme.typography.labelSmall, color = Color.White)
             }
         }
@@ -454,20 +405,20 @@ private fun SeasonDownloadBadge(
         else -> "$downloadedCount/${ids.size} downloaded"
     }
     Surface(
-        color = Color(0xCC000000),
-        shape = RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp),
+        color = ScrimStrong,
+        shape = RoundedCornerShape(bottomStart = Radius.sm, bottomEnd = Radius.sm),
         modifier = modifier.fillMaxWidth(),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
                 if (allDownloaded) Icons.Default.DownloadDone else Icons.Default.Download,
                 contentDescription = null,
-                tint = if (allDownloaded) Color(0xFF88CC88) else OnSurfaceMuted,
-                modifier = Modifier.size(12.dp),
+                tint = if (allDownloaded) Success else OnSurfaceMuted,
+                modifier = Modifier.size(IconSize.xs),
             )
             Text(
                 label,
@@ -496,37 +447,27 @@ internal fun EpisodeRow(
     var showPresetDialog by remember { mutableStateOf(false) }
 
     Surface(
-        color = Color(0x88000000),
-        shape = RoundedCornerShape(10.dp),
+        color = ScrimSoft,
+        shape = RoundedCornerShape(Radius.md),
         modifier = modifier.fillMaxWidth().clickable(onClick = onClick),
     ) {
         Row(
             modifier = Modifier.padding(10.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Thumbnail
-            Box(
-                modifier = Modifier
-                    .width(120.dp)
-                    .aspectRatio(16f / 9f)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Background),
+            PosterImage(
+                imageUrl = thumbnailUrl,
+                contentDescription = episode.name,
+                modifier = Modifier.width(120.dp),
+                aspectRatio = 16f / 9f,
             ) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(thumbnailUrl)
-                        .crossfade(300)
-                        .build(),
-                    contentDescription = episode.name,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
                 episode.indexNumber?.let { epNum ->
                     Surface(
                         modifier = Modifier.align(Alignment.TopStart).padding(3.dp),
-                        color = Color(0xCC000000),
-                        shape = RoundedCornerShape(3.dp),
+                        color = ScrimStrong,
+                        shape = RoundedCornerShape(Radius.sm),
                     ) {
                         Text(
                             "E${epNum.toString().padStart(2, '0')}",
@@ -539,14 +480,14 @@ internal fun EpisodeRow(
                 if (episode.userData?.played == true) {
                     Surface(
                         modifier = Modifier.align(Alignment.TopEnd).padding(3.dp),
-                        color = Color(0xCC000000),
-                        shape = RoundedCornerShape(50),
+                        color = ScrimStrong,
+                        shape = RoundedCornerShape(Radius.pill),
                     ) {
                         Icon(
                             Icons.Default.CheckCircle,
                             contentDescription = "Watched",
                             tint = Primary,
-                            modifier = Modifier.padding(2.dp).size(14.dp),
+                            modifier = Modifier.padding(2.dp).size(IconSize.sm),
                         )
                     }
                 }
@@ -578,7 +519,7 @@ internal fun EpisodeRow(
                     episode.communityRating?.let {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Star, contentDescription = null,
-                                tint = Color(0xFFFFCC44), modifier = Modifier.size(11.dp))
+                                tint = Accent, modifier = Modifier.size(IconSize.xs))
                             Spacer(Modifier.width(2.dp))
                             Text("${"%.1f".format(it)}", style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
                         }
@@ -612,14 +553,7 @@ internal fun EpisodeRow(
                             else -> null
                         }
                         if (resumeAction != null) {
-                            OutlinedButton(
-                                onClick = resumeAction,
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            ) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Resume", style = MaterialTheme.typography.labelSmall)
-                            }
+                            CompactActionButton(icon = Icons.Default.PlayArrow, onClick = resumeAction, text = "Resume")
                         }
                     }
                     val playFromStartAction: (() -> Unit)? = when {
@@ -629,32 +563,25 @@ internal fun EpisodeRow(
                         else -> null
                     }
                     if (playFromStartAction != null) {
-                        OutlinedButton(
-                            onClick = playFromStartAction,
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Play", style = MaterialTheme.typography.labelSmall)
-                        }
+                        CompactActionButton(icon = Icons.Default.PlayArrow, onClick = playFromStartAction, text = "Play")
                     }
                     when {
-                        download == null && isOnline -> OutlinedButton(
+                        download == null && isOnline -> CompactActionButton(
+                            icon = Icons.Default.Download,
                             onClick = { showPresetDialog = true },
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                        ) {
-                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Download", style = MaterialTheme.typography.labelSmall)
-                        }
+                            text = "Download",
+                        )
                         download != null && download.status in listOf(
                             DownloadStatus.QUEUED.name,
                             DownloadStatus.TRANSCODING.name,
                             DownloadStatus.DOWNLOADING.name,
                         ) -> {
+                            val animatedProgress by animateFloatAsState(
+                                targetValue = download.progress / 100f, label = "episodeProgress",
+                            )
                             CircularProgressIndicator(
-                                progress = { download.progress / 100f },
-                                modifier = Modifier.size(14.dp),
+                                progress = { animatedProgress },
+                                modifier = Modifier.size(IconSize.sm),
                                 strokeWidth = 2.dp,
                                 color = Primary,
                             )
@@ -666,31 +593,16 @@ internal fun EpisodeRow(
                             )
                         }
                         download?.status == DownloadStatus.COMPLETE.name ->
-                            OutlinedButton(
-                                onClick = onDeleteClick,
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            ) {
-                                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(14.dp))
-                            }
+                            CompactActionButton(icon = Icons.Default.Delete, onClick = onDeleteClick, contentColor = Error)
                         download?.status == DownloadStatus.FAILED.name -> {
                             if (isOnline) {
-                                OutlinedButton(
+                                CompactActionButton(
+                                    icon = Icons.Default.Refresh,
                                     onClick = { onDownloadClick("retry") },
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                ) {
-                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Retry", style = MaterialTheme.typography.labelSmall)
-                                }
+                                    text = "Retry",
+                                )
                             }
-                            OutlinedButton(
-                                onClick = onDeleteClick,
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            ) {
-                                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(14.dp))
-                            }
+                            CompactActionButton(icon = Icons.Default.Delete, onClick = onDeleteClick, contentColor = Error)
                         }
                         else -> {}
                     }
@@ -725,41 +637,31 @@ internal fun EpisodeThumb(
     var showPresetDialog by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.width(200.dp)) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(SurfaceVariant)
-                .clickable(onClick = onClick),
+        PosterImage(
+            imageUrl = thumbnailUrl,
+            contentDescription = episode.name,
+            modifier = Modifier.fillMaxWidth(),
+            aspectRatio = 16f / 9f,
+            onClick = onClick,
         ) {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(thumbnailUrl)
-                    .crossfade(300)
-                    .build(),
-                contentDescription = episode.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Surface(
-                    color = Color(0x88000000),
-                    shape = RoundedCornerShape(50),
+                    color = ScrimSoft,
+                    shape = RoundedCornerShape(Radius.pill),
                 ) {
                     Icon(
                         Icons.Default.PlayArrow,
                         contentDescription = null,
                         tint = OnSurface,
-                        modifier = Modifier.padding(6.dp).size(22.dp),
+                        modifier = Modifier.padding(6.dp).size(IconSize.md),
                     )
                 }
             }
             episode.indexNumber?.let { epNum ->
                 Surface(
                     modifier = Modifier.align(Alignment.TopStart).padding(4.dp),
-                    color = Color(0xCC000000),
-                    shape = RoundedCornerShape(4.dp),
+                    color = ScrimStrong,
+                    shape = RoundedCornerShape(Radius.sm),
                 ) {
                     Text(
                         "E${epNum.toString().padStart(2, '0')}",
@@ -772,14 +674,14 @@ internal fun EpisodeThumb(
             if (episode.userData?.played == true) {
                 Surface(
                     modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
-                    color = Color(0xCC000000),
-                    shape = RoundedCornerShape(50),
+                    color = ScrimStrong,
+                    shape = RoundedCornerShape(Radius.pill),
                 ) {
                     Icon(
                         Icons.Default.CheckCircle,
                         contentDescription = "Watched",
                         tint = Primary,
-                        modifier = Modifier.padding(2.dp).size(16.dp),
+                        modifier = Modifier.padding(2.dp).size(IconSize.sm),
                     )
                 }
             }
@@ -824,15 +726,12 @@ internal fun EpisodeThumb(
                     else -> null
                 }
                 if (resumeAction != null) {
-                    OutlinedButton(
+                    CompactActionButton(
+                        icon = Icons.Default.PlayArrow,
                         onClick = resumeAction,
                         modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                    ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Resume", style = MaterialTheme.typography.labelSmall)
-                    }
+                        text = "Resume",
+                    )
                 }
             }
             val playFromStartAction: (() -> Unit)? = when {
@@ -842,34 +741,31 @@ internal fun EpisodeThumb(
                 else -> null
             }
             if (playFromStartAction != null) {
-                OutlinedButton(
+                CompactActionButton(
+                    icon = Icons.Default.PlayArrow,
                     onClick = playFromStartAction,
                     modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Play", style = MaterialTheme.typography.labelSmall)
-                }
+                    text = "Play",
+                )
             }
             when {
-                download == null && isOnline -> OutlinedButton(
+                download == null && isOnline -> CompactActionButton(
+                    icon = Icons.Default.Download,
                     onClick = { showPresetDialog = true },
                     modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                ) {
-                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Download", style = MaterialTheme.typography.labelSmall)
-                }
+                    text = "Download",
+                )
                 download != null && download.status in listOf(
                     DownloadStatus.QUEUED.name,
                     DownloadStatus.TRANSCODING.name,
                     DownloadStatus.DOWNLOADING.name,
                 ) -> {
+                    val animatedProgress by animateFloatAsState(
+                        targetValue = download.progress / 100f, label = "episodeThumbProgress",
+                    )
                     CircularProgressIndicator(
-                        progress = { download.progress / 100f },
-                        modifier = Modifier.size(14.dp),
+                        progress = { animatedProgress },
+                        modifier = Modifier.size(IconSize.sm),
                         strokeWidth = 2.dp,
                         color = Primary,
                     )
@@ -881,29 +777,12 @@ internal fun EpisodeThumb(
                     )
                 }
                 download?.status == DownloadStatus.COMPLETE.name ->
-                    OutlinedButton(
-                        onClick = onDeleteClick,
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                    ) {
-                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(14.dp))
-                    }
+                    CompactActionButton(icon = Icons.Default.Delete, onClick = onDeleteClick, contentColor = Error)
                 download?.status == DownloadStatus.FAILED.name -> {
                     if (isOnline) {
-                        OutlinedButton(
-                            onClick = { onDownloadClick("retry") },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                        ) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
-                        }
+                        CompactActionButton(icon = Icons.Default.Refresh, onClick = { onDownloadClick("retry") })
                     }
-                    OutlinedButton(
-                        onClick = onDeleteClick,
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                    ) {
-                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(14.dp))
-                    }
+                    CompactActionButton(icon = Icons.Default.Delete, onClick = onDeleteClick, contentColor = Error)
                 }
                 else -> {}
             }

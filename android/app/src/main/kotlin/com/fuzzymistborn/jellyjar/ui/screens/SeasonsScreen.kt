@@ -14,12 +14,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
-import coil.compose.AsyncImage
 import com.fuzzymistborn.jellyjar.model.JellyfinItem
 import com.fuzzymistborn.jellyjar.ui.theme.*
 import com.fuzzymistborn.jellyjar.ui.viewmodel.SeasonsViewModel
@@ -35,7 +32,7 @@ fun SeasonsScreen(
 
     val state by viewModel.state.collectAsStateWithLifecycle()
 
-    Box(modifier = Modifier.fillMaxSize().background(Background)) {
+    Box(modifier = Modifier.fillMaxSize().background(BackgroundGradient)) {
         Column(modifier = Modifier.fillMaxSize()) {
 
             // Top bar
@@ -43,7 +40,7 @@ fun SeasonsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = Spacing.lg, vertical = Spacing.md),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = {
@@ -55,7 +52,7 @@ fun SeasonsScreen(
                 }) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = OnSurface)
                 }
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(Spacing.sm))
                 Text(
                     text = when {
                         state.selectedSeasonIndex != null ->
@@ -77,9 +74,9 @@ fun SeasonsScreen(
                 // Season poster grid
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(minSize = 140.dp),
-                    contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(horizontal = Spacing.xl, vertical = Spacing.sm),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.md),
                 ) {
                     itemsIndexed(state.seasons, key = { _, s -> s.id }) { index, season ->
                         SeasonCard(
@@ -98,9 +95,9 @@ fun SeasonsScreen(
                 } else {
                     LazyVerticalGrid(
                         columns = GridCells.Adaptive(minSize = 220.dp),
-                        contentPadding = PaddingValues(16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(Spacing.lg),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.md),
                     ) {
                         items(state.episodes, key = { it.id }) { episode ->
                             EpisodeCard(
@@ -124,23 +121,14 @@ private fun SeasonCard(
 ) {
     Column(
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(Radius.sm))
             .clickable(onClick = onClick)
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(2f / 3f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(SurfaceVariant),
-        ) {
-            AsyncImage(
-                model = posterUrl,
-                contentDescription = season.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
+        PosterImage(
+            imageUrl = posterUrl,
+            contentDescription = season.name,
+            modifier = Modifier.fillMaxWidth(),
+        )
         Spacer(Modifier.height(6.dp))
         Text(
             text = season.name,
@@ -167,36 +155,29 @@ private fun EpisodeCard(
 ) {
     Column(
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(Radius.sm))
             .clickable(onClick = onClick)
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(SurfaceVariant),
+        PosterImage(
+            imageUrl = thumbnailUrl,
+            contentDescription = episode.name,
+            modifier = Modifier.fillMaxWidth(),
+            aspectRatio = 16f / 9f,
         ) {
-            AsyncImage(
-                model = thumbnailUrl,
-                contentDescription = episode.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
             // Play overlay
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
                 Surface(
-                    color = Color(0x88000000),
-                    shape = RoundedCornerShape(50),
+                    color = ScrimSoft,
+                    shape = RoundedCornerShape(Radius.pill),
                 ) {
                     Icon(
                         Icons.Default.PlayArrow,
                         contentDescription = "Play",
                         tint = OnSurface,
-                        modifier = Modifier.padding(8.dp).size(28.dp),
+                        modifier = Modifier.padding(Spacing.sm).size(IconSize.lg),
                     )
                 }
             }
@@ -204,8 +185,8 @@ private fun EpisodeCard(
             episode.indexNumber?.let { epNum ->
                 Surface(
                     modifier = Modifier.align(Alignment.TopStart).padding(6.dp),
-                    color = Color(0xCC000000),
-                    shape = RoundedCornerShape(4.dp),
+                    color = ScrimStrong,
+                    shape = RoundedCornerShape(Radius.sm),
                 ) {
                     Text(
                         text = "E${epNum.toString().padStart(2, '0')}",

@@ -6,7 +6,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -36,24 +35,19 @@ fun StorageScreen(
     var showDeleteOldest by remember { mutableStateOf(false) }
     var showDeleteAll by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.fillMaxSize().background(Background)) {
-        Row(
+    Column(modifier = Modifier.fillMaxSize().background(BackgroundGradient)) {
+        ScreenHeader(
+            title = "Storage",
+            onBack = onBack,
             modifier = Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = OnSurface)
-            }
-            Spacer(Modifier.width(4.dp))
-            Text("Storage", style = MaterialTheme.typography.headlineMedium, color = OnSurface)
-        }
+                .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+        )
 
         LazyColumn(
-            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(start = Spacing.xl, end = Spacing.xl, bottom = Spacing.xl),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
             modifier = Modifier.fillMaxSize(),
         ) {
             item {
@@ -70,20 +64,20 @@ fun StorageScreen(
 
             item {
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm),
                 ) {
                     OutlinedButton(
                         onClick = { showDeleteWatched = true },
                         enabled = state.watchedItems.isNotEmpty(),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        contentPadding = PaddingValues(horizontal = Spacing.md, vertical = 6.dp),
                     ) {
                         Text("Delete Watched", style = MaterialTheme.typography.labelMedium)
                     }
                     OutlinedButton(
                         onClick = { showDeleteOldest = true },
                         enabled = state.items.isNotEmpty(),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        contentPadding = PaddingValues(horizontal = Spacing.md, vertical = 6.dp),
                     ) {
                         Text("Delete Oldest…", style = MaterialTheme.typography.labelMedium)
                     }
@@ -91,7 +85,7 @@ fun StorageScreen(
                         onClick = { showDeleteAll = true },
                         enabled = state.items.isNotEmpty(),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        contentPadding = PaddingValues(horizontal = Spacing.md, vertical = 6.dp),
                     ) {
                         Text("Delete Everything", style = MaterialTheme.typography.labelMedium)
                     }
@@ -101,8 +95,8 @@ fun StorageScreen(
             if (state.items.isNotEmpty()) {
                 item {
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        modifier = Modifier.padding(top = Spacing.sm),
                     ) {
                         SortChip("Largest", state.sort == StorageSort.SIZE) { viewModel.setSort(StorageSort.SIZE) }
                         SortChip("Newest", state.sort == StorageSort.NEWEST) { viewModel.setSort(StorageSort.NEWEST) }
@@ -131,10 +125,10 @@ fun StorageScreen(
     if (showDeleteWatched) {
         ConfirmDialog(
             title = "Delete watched downloads?",
-            text = "${state.watchedItems.size} watched item${if (state.watchedItems.size != 1) "s" else ""} " +
+            message = "${state.watchedItems.size} watched item${if (state.watchedItems.size != 1) "s" else ""} " +
                 "will be deleted, freeing ${formatBytes(state.watchedBytes)}.",
             confirmLabel = "Delete",
-            onConfirm = { viewModel.deleteWatched(); showDeleteWatched = false },
+            onConfirm = viewModel::deleteWatched,
             onDismiss = { showDeleteWatched = false },
         )
     }
@@ -142,7 +136,7 @@ fun StorageScreen(
     if (showDeleteOldest) {
         DeleteOldestDialog(
             items = state.items,
-            onConfirm = { count -> viewModel.deleteOldest(count); showDeleteOldest = false },
+            onConfirm = { count -> viewModel.deleteOldest(count) },
             onDismiss = { showDeleteOldest = false },
         )
     }
@@ -150,10 +144,10 @@ fun StorageScreen(
     if (showDeleteAll) {
         ConfirmDialog(
             title = "Delete everything?",
-            text = "All ${state.items.size} downloads (${formatBytes(state.totalBytes)}) will be " +
+            message = "All ${state.items.size} downloads (${formatBytes(state.totalBytes)}) will be " +
                 "removed from this device. Media on the server is not affected.",
             confirmLabel = "Delete All",
-            onConfirm = { viewModel.deleteEverything(); showDeleteAll = false },
+            onConfirm = viewModel::deleteEverything,
             onDismiss = { showDeleteAll = false },
         )
     }
@@ -169,8 +163,8 @@ private fun StorageSummaryCard(
     episodeCount: Int,
     episodeBytes: Long,
 ) {
-    Surface(color = SurfaceVariant, shape = RoundedCornerShape(12.dp), modifier = Modifier.padding(top = 8.dp)) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Surface(color = SurfaceVariant, shape = RoundedCornerShape(Radius.md), modifier = Modifier.padding(top = Spacing.sm)) {
+        Column(modifier = Modifier.padding(Spacing.lg), verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
             // Device storage bar: JellyJar downloads · everything else · free
             val otherBytes = (deviceTotalBytes - freeBytes - usedBytes).coerceAtLeast(0)
             Row(
@@ -187,7 +181,7 @@ private fun StorageSummaryCard(
                 Box(Modifier.weight(otherWeight).fillMaxHeight().background(OnSurfaceMuted.copy(alpha = 0.5f)))
                 Box(Modifier.weight(freeWeight).fillMaxHeight().background(Background))
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.lg)) {
                 LegendDot(Primary, "JellyJar ${formatBytes(usedBytes)}")
                 LegendDot(OnSurfaceMuted.copy(alpha = 0.5f), "Other ${formatBytes(otherBytes)}")
                 LegendDot(Background, "Free ${formatBytes(freeBytes)}")
@@ -204,7 +198,7 @@ private fun StorageSummaryCard(
 @Composable
 private fun LegendDot(color: Color, label: String) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Box(Modifier.size(8.dp).clip(RoundedCornerShape(4.dp)).background(color))
+        Box(Modifier.size(Spacing.sm).clip(RoundedCornerShape(4.dp)).background(color))
         Text(label, style = MaterialTheme.typography.labelSmall, color = OnSurfaceMuted)
     }
 }
@@ -217,7 +211,7 @@ private fun SummaryRow(icon: androidx.compose.ui.graphics.vector.ImageVector, la
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = Primary, modifier = Modifier.size(18.dp))
+            Icon(icon, contentDescription = null, tint = Primary, modifier = Modifier.size(IconSize.md))
             Text(label, style = MaterialTheme.typography.bodyMedium, color = OnSurface)
         }
         Text(value, style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
@@ -230,24 +224,25 @@ private fun SortChip(label: String, selected: Boolean, onClick: () -> Unit) {
         selected = selected,
         onClick = onClick,
         label = { Text(label, style = MaterialTheme.typography.labelMedium) },
+        colors = themedChipColors(),
     )
 }
 
 @Composable
 private fun StorageItemRow(entity: DownloadEntity, isWatched: Boolean, onDelete: () -> Unit) {
-    Surface(color = SurfaceVariant, shape = RoundedCornerShape(12.dp)) {
+    Surface(color = SurfaceVariant, shape = RoundedCornerShape(Radius.md)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = Spacing.md, vertical = Spacing.sm),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
             Icon(
                 if (entity.type == "Movie") Icons.Default.Movie else Icons.Default.Tv,
                 contentDescription = entity.type,
                 tint = OnSurfaceMuted,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(IconSize.md),
             )
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -257,7 +252,7 @@ private fun StorageItemRow(entity: DownloadEntity, isWatched: Boolean, onDelete:
                     maxLines = 2,
                 )
                 Spacer(Modifier.height(2.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     Text(
                         formatBytes(entity.sizeBytes),
                         style = MaterialTheme.typography.labelSmall,
@@ -290,49 +285,23 @@ private fun DeleteOldestDialog(
     val oldest = remember(items) { items.sortedBy { it.addedAt } }
     val freedBytes = oldest.take(count).sumOf { it.sizeBytes }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Delete oldest downloads") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Delete the $count oldest download${if (count != 1) "s" else ""}, freeing ${formatBytes(freedBytes)}.")
-                if (items.size > 1) {
-                    Slider(
-                        value = count.toFloat(),
-                        onValueChange = { count = it.roundToInt().coerceIn(1, items.size) },
-                        valueRange = 1f..items.size.toFloat(),
-                        steps = (items.size - 2).coerceAtLeast(0),
-                    )
-                }
+    ConfirmDialog(
+        title = "Delete oldest downloads",
+        message = "Delete the $count oldest download${if (count != 1) "s" else ""}, freeing ${formatBytes(freedBytes)}.",
+        confirmLabel = "Delete",
+        onConfirm = { onConfirm(count) },
+        onDismiss = onDismiss,
+        content = if (items.size > 1) {
+            {
+                Slider(
+                    value = count.toFloat(),
+                    onValueChange = { count = it.roundToInt().coerceIn(1, items.size) },
+                    valueRange = 1f..items.size.toFloat(),
+                    steps = (items.size - 2).coerceAtLeast(0),
+                    colors = SliderDefaults.colors(thumbColor = Primary, activeTrackColor = Primary),
+                )
             }
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(count) }) { Text("Delete", color = Error) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    )
-}
-
-@Composable
-private fun ConfirmDialog(
-    title: String,
-    text: String,
-    confirmLabel: String,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = { Text(text) },
-        confirmButton = {
-            TextButton(onClick = onConfirm) { Text(confirmLabel, color = Error) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
+        } else null,
     )
 }
 
