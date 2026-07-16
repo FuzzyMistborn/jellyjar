@@ -216,7 +216,7 @@ object JellyfinImageHelper {
         "$baseUrl/Items/$itemId/Images/Primary?maxWidth=$maxWidth&quality=90"
 
     fun backdropImageUrl(baseUrl: String, itemId: String, index: Int = 0): String =
-        "$baseUrl/Items/$itemId/Images/Backdrop/$index?quality=85"
+        "$baseUrl/Items/$itemId/Images/Backdrop/$index?quality=96&maxWidth=1920"
 
     fun logoImageUrl(baseUrl: String, itemId: String): String =
         "$baseUrl/Items/$itemId/Images/Logo?quality=90"
