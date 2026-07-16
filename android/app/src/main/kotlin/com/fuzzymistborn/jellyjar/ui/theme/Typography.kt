@@ -16,8 +16,8 @@ val JellyJarTypography = Typography(
     // Large display — movie title on detail screen
     displayMedium = TextStyle(
         fontWeight = FontWeight.Bold,
-        fontSize = 36.sp,
-        lineHeight = 40.sp,
+        fontSize = 40.sp,
+        lineHeight = 44.sp,
         letterSpacing = (-0.5).sp,
     ),
     displaySmall = TextStyle(
@@ -72,10 +72,13 @@ val JellyJarTypography = Typography(
         lineHeight = 18.sp,
         color = OnSurfaceMuted,
     ),
-    // Labels / badges
+    // Labels / badges — labelLarge is Button's default text style, sized up so primary
+    // actions (Play/Download/Resume) read with real visual weight rather than blending
+    // into secondary metadata text.
     labelLarge = TextStyle(
         fontWeight = FontWeight.Medium,
-        fontSize = 13.sp,
+        fontSize = 16.sp,
+        lineHeight = 20.sp,
         letterSpacing = 0.25.sp,
     ),
     labelMedium = TextStyle(

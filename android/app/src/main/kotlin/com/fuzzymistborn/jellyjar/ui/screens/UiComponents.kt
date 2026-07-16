@@ -202,6 +202,8 @@ fun EmptyState(
     icon: ImageVector,
     title: String,
     subtitle: String? = null,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -219,6 +221,12 @@ fun EmptyState(
             Text(title, style = MaterialTheme.typography.headlineMedium, color = OnSurfaceMuted)
             if (subtitle != null) {
                 Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
+            }
+            if (actionLabel != null && onAction != null) {
+                Spacer(Modifier.height(Spacing.sm))
+                OutlinedButton(onClick = onAction) {
+                    Text(actionLabel)
+                }
             }
         }
     }

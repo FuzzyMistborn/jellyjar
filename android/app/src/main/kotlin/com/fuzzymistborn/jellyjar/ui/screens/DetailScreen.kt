@@ -81,8 +81,10 @@ fun DetailScreen(
             )
         }
 
-        // Gradient fade to background
+        // Gradient fade to background, plus a vignette darkening the edges so the backdrop
+        // reads as a cinematic frame rather than a flat rectangle behind the text.
         Box(modifier = Modifier.fillMaxSize().background(heroBackdropScrim()))
+        Box(modifier = Modifier.fillMaxSize().background(vignetteScrim()))
 
         val item = state.item
 
@@ -130,17 +132,17 @@ fun DetailScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             item.year?.let {
-                                Text(it.toString(), style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+                                Text(it.toString(), style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
                             }
                             item.runtimeMinutes?.let {
-                                Text("${it}m", style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+                                Text("${it}m", style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
                             }
                             item.communityRating?.let {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(Icons.Default.Star, contentDescription = null,
                                         tint = Accent, modifier = Modifier.size(IconSize.sm))
                                     Spacer(Modifier.width(4.dp))
-                                    Text("${"%.1f".format(it)}", style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+                                    Text("${"%.1f".format(it)}", style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
                                 }
                             }
                         }
@@ -150,7 +152,7 @@ fun DetailScreen(
                         item.overview?.let {
                             Text(
                                 text = it,
-                                style = MaterialTheme.typography.bodyMedium,
+                                style = MaterialTheme.typography.bodyLarge,
                                 color = OnSurface.copy(alpha = 0.85f),
                                 modifier = Modifier.widthIn(max = 600.dp),
                             )
@@ -267,14 +269,14 @@ fun DetailScreen(
                 if (item.type == "Series" && state.seasons.isNotEmpty()) {
                     item(key = "seasons_header") {
                         Column {
-                            Spacer(Modifier.height(Spacing.xl))
+                            Spacer(Modifier.height(40.dp))
                             Text(
                                 text = "Seasons",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = SectionHeading,
                                 modifier = Modifier.padding(horizontal = 32.dp),
                             )
-                            Spacer(Modifier.height(10.dp))
+                            Spacer(Modifier.height(Spacing.md))
                             androidx.compose.foundation.lazy.LazyRow(
                                 contentPadding = PaddingValues(horizontal = 32.dp),
                                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),

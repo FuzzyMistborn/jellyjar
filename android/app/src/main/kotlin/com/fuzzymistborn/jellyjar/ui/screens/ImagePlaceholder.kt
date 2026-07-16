@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Movie
@@ -26,6 +27,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.fuzzymistborn.jellyjar.ui.theme.Elevation
 import com.fuzzymistborn.jellyjar.ui.theme.IconSize
 import com.fuzzymistborn.jellyjar.ui.theme.OnSurfaceMuted
 import com.fuzzymistborn.jellyjar.ui.theme.Radius
@@ -67,6 +69,7 @@ fun PosterImage(
 
     var boxModifier = modifier
         .aspectRatio(aspectRatio)
+        .shadow(elevation = Elevation.poster, shape = RoundedCornerShape(cornerRadius), clip = false)
         .clip(RoundedCornerShape(cornerRadius))
         .background(SurfaceVariant)
     if (onClick != null) boxModifier = boxModifier.clickable(onClick = onClick)

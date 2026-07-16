@@ -139,17 +139,35 @@ environment:
 - ✅ Device storage info (free/used space + per-item file size) in Admin → Downloads and Downloads screen
 - ✅ Library tile artwork loading (backdrop → primary image fallback)
 
-## Newer Features (implemented, not yet run on device)
+## Newer Features
 - **Skip intro/credits**: `JellyfinRepository.getSkipSegments()` tries the native MediaSegments API (Jellyfin 10.9+) then falls back to the Intro Skipper plugin endpoint (`/Episode/{id}/IntroSkipperSegments`). Segments are captured at queue time into `DownloadEntity.segmentsJson` so the skip button also works for offline playback. PlayerScreen polls position (2 Hz) and shows a "Skip Intro"/"Skip Credits" button during segments. Toggle: Admin → Playback → "Skip Intro / Credits" (`introSkipEnabled`)
 - **Trickplay scrub previews**: streaming-only (tiles come from the server). `PlayerViewModel.loadTrickplay()` picks the resolution nearest 320px from the item's `Trickplay` field; PlayerScreen attaches a `TimeBar.OnScrubListener` to `exo_progress` and crops the thumbnail out of the fetched sprite-sheet tile (LruCache of 6 tiles). Toggle: Admin → Playback → "Scrubbing Previews" (`trickplayEnabled`)
 - **Genre filter**: server-side (`Genres` query param on `/Users/{id}/Items` — client-side filtering would break pagination). Genre list fetched per-library from `/Genres?ParentId=`; chips render below the sort chips in the library grid. Changing genre reloads the library
 - DB schema is now **version 6** (`segmentsJson` on downloads); destructive migration wipes existing download records on upgrade
+- ✅ Full download→file→playback pipeline, offline playback from Downloads home tile, download queue (reorder/pause/resume/prioritize/concurrency), and the Storage management screen have all been run and confirmed working on device
 
-## In Progress / Not Yet Tested
-- ⏳ Full download→file→playback pipeline end-to-end
-- ⏳ Offline playback from Downloads home tile
-- ⏳ Download queue (reorder/pause/resume/prioritize/concurrency) — implemented, not yet run on device
-- ⏳ Storage management screen (Downloads → storage icon) — implemented, not yet run on device
+## UI Polish
+
+Implemented, based on a design review pass (see "Good to Do" below for the rest of that review):
+- Richer backdrops: vignette darkening (`vignetteScrim()` in `Theme.kt`) layered over the existing scrims on both the Library featured backdrop and Detail hero backdrop; featured backdrop blur increased 20dp → 28dp
+- Poster depth: shared `PosterImage` composable now casts a subtle shadow (`Elevation.poster`, 4dp) instead of reading as a flat rounded rectangle
+- More breathing room: bigger vertical gaps between home-screen sections (Continue Watching/Recently Added/My List/Libraries), and before the Seasons row on Detail
+- Typography hierarchy: Detail screen movie title bumped 36sp→40sp, metadata row (year/runtime/rating) 12sp→14sp, overview text 14sp→16sp, and all default button labels (`labelLarge`) 13sp→16sp so primary actions read with more weight; genre/sort chip labels 11sp→12sp
+- Download badges: the poster grid's download-status badge now shows a live percentage next to the icon while downloading, plus a thin progress bar across the bottom of the poster (mirrors the pattern already used for playback-resume progress)
+- Skeleton loaders: already implemented pre-review (`SkeletonGrid`/`SkeletonCard` in `LibraryScreen.kt`, shimmer via `rememberShimmerAlpha`) — no changes needed there
+- Empty states: `EmptyState` (`UiComponents.kt`) gained an optional action button; the Downloads screen's empty state now reuses the shared composable (previously hand-rolled and inconsistent with Library's) with a subtitle and a "Browse Library" action
+
+### Good to Do (from the same review, not yet implemented)
+Roughly in priority order:
+- **Detail Screen redesign** — bigger hero section, logo art replacing text titles more prominently, stronger visual hierarchy below the fold (cast/director/HDR/audio metadata), related-movies row. Highest single-screen leverage since users spend the most time here deciding what to watch, but it's a real project, not a tweak — check Jellyfin logo-art coverage across the library before committing, since a spotty logo library means inconsistent blank-title screens
+- **Tablet/landscape layout** — biggest structural gap since the app is tablet-first; Detail and Library currently use the same stacked layout as a phone would. Should be scoped together with the Detail redesign above rather than done twice
+- **Dynamic color accents from backdrop art** (e.g. via Android's Palette API) — buttons/chips picking up a dominant color per title instead of always blue
+- **Mixed poster sizes** for hierarchy (large Continue Watching cards, medium Recently Added, landscape banners for collections) — hold until the tablet layout work above happens, or it'll get redone
+- **Shared element / animated transitions** between poster taps and Detail screen
+- **Floating/visually-separated download action** distinct from the Play button stack
+- **Artwork-first library navigation** — check `LibraryScreen.kt`'s `LibraryTile` first, since backdrop art on library tiles is already implemented; this may be partially done
+- **Admin dashboard aesthetic** — lowest priority, nobody but the developer sees this screen
+- **Brand personality touches** (splash animation, organic corner treatments) — cosmetic, do last
 
 ## Server Details
 - Jellyfin: `http://192.168.50.24:8096`

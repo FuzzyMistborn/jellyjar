@@ -35,6 +35,7 @@ data class LibraryState(
     val jellyfinUrl: String = "",
     val jellyfinToken: String = "",
     val downloadStatuses: Map<String, String> = emptyMap(),
+    val downloadProgress: Map<String, Float> = emptyMap(),
     val searchQuery: String = "",
     val sortOrder: SortOrder = SortOrder.DEFAULT,
     val genres: List<String> = emptyList(),
@@ -116,7 +117,10 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             downloadRepo.downloads.collect { downloads ->
                 _state.update {
-                    it.copy(downloadStatuses = downloads.associateBy({ it.jellyfinId }, { it.status }))
+                    it.copy(
+                        downloadStatuses = downloads.associateBy({ it.jellyfinId }, { it.status }),
+                        downloadProgress = downloads.associateBy({ it.jellyfinId }, { it.progress }),
+                    )
                 }
             }
         }

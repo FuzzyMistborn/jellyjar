@@ -47,24 +47,13 @@ fun DownloadsScreen(
             )
 
             if (!hasContent) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(Spacing.md),
-                    ) {
-                        Icon(
-                            Icons.Default.DownloadDone,
-                            contentDescription = null,
-                            tint = OnSurfaceMuted,
-                            modifier = Modifier.size(IconSize.xxl),
-                        )
-                        Text(
-                            "No downloads yet",
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = OnSurfaceMuted,
-                        )
-                    }
-                }
+                EmptyState(
+                    icon = Icons.Default.DownloadDone,
+                    title = "No downloads yet",
+                    subtitle = "Download movies and shows to watch offline.",
+                    actionLabel = "Browse Library",
+                    onAction = onBack,
+                )
             } else {
                 LazyColumn(
                     contentPadding = PaddingValues(start = Spacing.xl, end = Spacing.xl, bottom = Spacing.xl),

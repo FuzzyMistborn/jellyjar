@@ -62,6 +62,12 @@ object IconSize {
     val xxl = 64.dp  // empty state icon
 }
 
+// Shadow elevation for poster/media cards — gives them depth against the dark background
+// instead of reading as flat rounded rectangles.
+object Elevation {
+    val poster = 4.dp
+}
+
 // Full-screen background — diagonal gradient from dark indigo to near-black
 val BackgroundGradient = Brush.linearGradient(
     colors = listOf(
@@ -87,6 +93,15 @@ fun featuredBackdropScrim(): Brush = Brush.verticalGradient(
 
 // Simple top-to-bottom darkening scrim for text legibility over tile/poster art.
 fun tileScrim(): Brush = Brush.verticalGradient(0f to ScrimSoft, 1f to ScrimStrong)
+
+// Darkens the corners/edges of a full-bleed backdrop while leaving the center bright —
+// layered on top of the vertical scrims above to make hero art read as a vignette rather
+// than a flat gradient (Netflix/Apple TV-style backdrop treatment).
+fun vignetteScrim(): Brush = Brush.radialGradient(
+    0f to Color.Transparent,
+    0.6f to Color.Transparent,
+    1f to ScrimStrong,
+)
 
 private val DarkColors = darkColorScheme(
     primary = Primary,

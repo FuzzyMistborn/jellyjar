@@ -74,9 +74,10 @@ fun LibraryScreen(
                         .build(),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().blur(20.dp),
+                    modifier = Modifier.fillMaxSize().blur(28.dp),
                 )
                 Box(modifier = Modifier.fillMaxSize().background(featuredBackdropScrim()))
+                Box(modifier = Modifier.fillMaxSize().background(vignetteScrim()))
             }
         }
 
@@ -166,6 +167,7 @@ fun LibraryScreen(
                         items = state.globalSearchResults,
                         isRefreshing = false,
                         downloadStatuses = state.downloadStatuses,
+                        downloadProgress = state.downloadProgress,
                         onItemClick = onItemClick,
                         onItemFocus = viewModel::setFeatured,
                         onRefresh = {},
@@ -216,7 +218,7 @@ fun LibraryScreen(
                         FilterChip(
                             selected = state.sortOrder == order,
                             onClick = { viewModel.setSortOrder(order) },
-                            label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                            label = { Text(label, style = MaterialTheme.typography.labelMedium) },
                             colors = themedChipColors(),
                         )
                     }
@@ -275,12 +277,19 @@ fun LibraryScreen(
                 }
                 state.showingDownloads -> {
                     if (state.items.isEmpty() && !state.isLoading) {
-                        EmptyState(icon = Icons.Default.VideoLibrary, title = "No downloads yet")
+                        EmptyState(
+                            icon = Icons.Default.DownloadDone,
+                            title = "No downloads yet",
+                            subtitle = "Download movies and shows to watch offline.",
+                            actionLabel = "Browse Library",
+                            onAction = { viewModel.goHome() },
+                        )
                     } else {
                         MediaGrid(
                             items = state.displayItems,
                             isRefreshing = false,
                             downloadStatuses = state.downloadStatuses,
+                            downloadProgress = state.downloadProgress,
                             onItemClick = { item ->
                                 val localPath = item.mediaSources?.firstOrNull()?.path
                                 if (localPath != null) onPlayOffline(localPath) else onItemClick(item)
@@ -301,6 +310,9 @@ fun LibraryScreen(
                             !state.isOnline || !state.jellyfinAvailable -> "No downloaded content"
                             else -> "No content found"
                         },
+                        subtitle = if (!state.isOnline || !state.jellyfinAvailable) {
+                            "Only downloaded items are available while offline."
+                        } else null,
                     )
                 }
                 else -> {
@@ -308,6 +320,7 @@ fun LibraryScreen(
                         items = state.displayItems,
                         isRefreshing = state.isRefreshing,
                         downloadStatuses = state.downloadStatuses,
+                        downloadProgress = state.downloadProgress,
                         onItemClick = onItemClick,
                         onItemFocus = viewModel::setFeatured,
                         onRefresh = viewModel::refresh,
@@ -361,7 +374,7 @@ private fun HomeScreen(
             bottom = Spacing.sm + navBarPadding.calculateBottomPadding(),
         ),
         horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
-        verticalArrangement = Arrangement.spacedBy(Spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xl),
         modifier = Modifier.fillMaxSize(),
     ) {
         if (isOnline && !jellyfinAvailable) {
@@ -489,7 +502,7 @@ private fun HomeSectionRow(
             title,
             style = MaterialTheme.typography.titleMedium,
             color = SectionHeading,
-            modifier = Modifier.padding(bottom = 10.dp),
+            modifier = Modifier.padding(bottom = Spacing.md),
         )
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -598,6 +611,7 @@ private fun MediaGrid(
     items: List<JellyfinItem>,
     isRefreshing: Boolean,
     downloadStatuses: Map<String, String>,
+    downloadProgress: Map<String, Float> = emptyMap(),
     onItemClick: (JellyfinItem) -> Unit,
     onItemFocus: (JellyfinItem) -> Unit,
     onRefresh: () -> Unit,
@@ -641,6 +655,7 @@ private fun MediaGrid(
                     item = item,
                     imageUrl = viewModel.posterUrl(item.id),
                     downloadStatus = downloadStatuses[item.id],
+                    downloadProgress = downloadProgress[item.id],
                     onClick = { onItemClick(item) },
                     onFocus = { onItemFocus(item) },
                 )
@@ -661,6 +676,7 @@ private fun MediaCard(
     item: JellyfinItem,
     imageUrl: String,
     downloadStatus: String?,
+    downloadProgress: Float? = null,
     onClick: () -> Unit,
     onFocus: () -> Unit,
 ) {
@@ -704,8 +720,10 @@ private fun MediaCard(
                     )
                 }
             }
-            // Download status badge
+            // Download status badge — icon-only once complete/failed, otherwise a
+            // percentage so the grid can be scanned without opening each item.
             if (downloadStatus != null) {
+                val isActive = downloadStatus != DownloadStatus.COMPLETE.name && downloadStatus != DownloadStatus.FAILED.name
                 val (badgeIcon, badgeColor) = when (downloadStatus) {
                     DownloadStatus.COMPLETE.name -> Icons.Default.DownloadDone to Success
                     DownloadStatus.FAILED.name -> Icons.Default.Warning to Error
@@ -716,11 +734,29 @@ private fun MediaCard(
                     color = ScrimStrong,
                     shape = RoundedCornerShape(Radius.pill),
                 ) {
-                    Icon(
-                        badgeIcon,
-                        contentDescription = null,
-                        tint = badgeColor,
-                        modifier = Modifier.padding(4.dp).size(IconSize.sm),
+                    Row(
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(badgeIcon, contentDescription = null, tint = badgeColor, modifier = Modifier.size(IconSize.sm))
+                        if (isActive && downloadProgress != null && downloadProgress > 0f) {
+                            Spacer(Modifier.width(3.dp))
+                            Text(
+                                text = "${downloadProgress.toInt()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = badgeColor,
+                                modifier = Modifier.padding(end = 2.dp),
+                            )
+                        }
+                    }
+                }
+                // Thin progress bar across the bottom of the poster for at-a-glance scanning.
+                if (isActive && downloadProgress != null && downloadProgress > 0f) {
+                    LinearProgressIndicator(
+                        progress = { downloadProgress / 100f },
+                        modifier = Modifier.fillMaxWidth().height(3.dp).align(Alignment.BottomCenter),
+                        color = Primary,
+                        trackColor = Color.Transparent,
                     )
                 }
             }
