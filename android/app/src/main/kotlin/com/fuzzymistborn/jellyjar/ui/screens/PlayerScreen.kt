@@ -18,7 +18,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -64,17 +63,21 @@ fun PlayerScreen(
     val context = LocalContext.current
     val activity = context as? Activity
 
-    // Enter full-screen immersive mode
+    // Enter full-screen immersive mode. The app runs edge-to-edge for its whole lifetime
+    // (enableEdgeToEdge() in MainActivity.onCreate, decorFitsSystemWindows=false) and every
+    // screen's header manually clears the status bar via statusBarsPadding(). This is a single-
+    // Activity app, so don't flip decorFitsSystemWindows back to true on dispose — that would
+    // revert the *entire* window out of edge-to-edge mode, racing against every other screen's
+    // own inset handling and intermittently leaving a header rendered under the status bar/
+    // notification-pulldown area after backing out of a video. Only toggle system bar visibility.
     DisposableEffect(Unit) {
         val window = activity?.window ?: return@DisposableEffect onDispose {}
-        WindowCompat.setDecorFitsSystemWindows(window, false)
         val controller = WindowInsetsControllerCompat(window, window.decorView)
         controller.hide(WindowInsetsCompat.Type.systemBars())
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onDispose {
             controller.show(WindowInsetsCompat.Type.systemBars())
-            WindowCompat.setDecorFitsSystemWindows(window, true)
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }

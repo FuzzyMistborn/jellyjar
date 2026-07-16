@@ -83,6 +83,15 @@ class DownloadWorker @AssistedInject constructor(
             while (polling) {
                 val result = downloadRepo.pollJobStatus(jobId)
                 if (result.isFailure) {
+                    val error = result.exceptionOrNull()
+                    // Job no longer exists on Press (deleted/stopped there directly, or evicted
+                    // by CLEANUP_AFTER_DAYS) — this is permanent, not a transient network blip,
+                    // so clear it immediately instead of retrying with backoff for minutes/hours.
+                    if (error is retrofit2.HttpException && error.code() == 404) {
+                        downloadRepo.markFailed(jobId)
+                        postResultNotification(jobId, success = false)
+                        return Result.failure()
+                    }
                     if (attempts++ > 3) {
                         return if (runAttemptCount < MAX_RETRY_ATTEMPTS) {
                             Result.retry()

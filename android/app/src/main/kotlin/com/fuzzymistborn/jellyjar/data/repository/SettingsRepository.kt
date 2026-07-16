@@ -86,6 +86,17 @@ class SettingsRepository @Inject constructor(
         }
     }
 
+    // Persists shimUrl/downloadPath/wifiOnly in a single DataStore transaction so
+    // callers (e.g. AdminViewModel.saveAll) don't race the settings Flow with
+    // intermediate, partially-saved emissions between separate edit() calls.
+    suspend fun saveAdminSettings(shimUrl: String, downloadPath: String, wifiOnly: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.SHIM_URL] = shimUrl
+            prefs[Keys.DOWNLOAD_PATH] = downloadPath
+            prefs[Keys.WIFI_ONLY] = wifiOnly
+        }
+    }
+
     suspend fun setPin(pin: String) {
         context.dataStore.edit { prefs ->
             prefs[Keys.PARENTAL_PIN_HASH] = hashPin(pin)

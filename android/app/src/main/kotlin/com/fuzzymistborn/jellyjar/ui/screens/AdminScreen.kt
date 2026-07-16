@@ -298,7 +298,13 @@ fun AdminScreen(
                 title = "Wi-Fi Only",
                 subtitle = "Pause downloads on mobile data",
                 checked = state.wifiOnly,
-                onCheckedChange = { viewModel.setWifiOnly(it); viewModel.saveAll() },
+                onCheckedChange = {
+                    viewModel.setWifiOnly(it)
+                    viewModel.saveAll()
+                    savedUrl.value = state.jellyfinUrl
+                    savedShimUrl.value = state.shimUrl
+                    savedDownloadPath.value = state.downloadPath
+                },
             )
 
             // Simultaneous downloads (queue concurrency)

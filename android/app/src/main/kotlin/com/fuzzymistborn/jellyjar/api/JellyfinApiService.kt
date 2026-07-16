@@ -64,13 +64,17 @@ data class DirectPlayProfile(
     val AudioCodec: String = "aac,mp3,ac3,eac3,flac,alac,opus,vorbis,pcm_s16le,pcm_s24le",
 )
 
+// Protocol="hls" (not "http"): a progressive-http transcode is generated on the fly with no
+// Content-Length, so ExoPlayer can never seek in it — the scrub bar sits permanently disabled.
+// HLS transcodes are segmented with known durations in the playlist, so seeking works even
+// while ffmpeg is still transcoding ahead of the playhead.
 data class TranscodingProfile(
     val Type: String = "Video",
-    val Container: String = "mp4",
+    val Container: String = "ts",
     val VideoCodec: String = "h264",
     val AudioCodec: String = "aac",
     val Context: String = "Streaming",
-    val Protocol: String = "http",
+    val Protocol: String = "hls",
 )
 
 data class DeviceProfile(

@@ -832,9 +832,11 @@ class AdminViewModel @Inject constructor(
     }
 
     fun saveAll() = viewModelScope.launch {
-        settings.saveShimUrl(ensureScheme(_state.value.shimUrl))
-        settings.saveDownloadPath(_state.value.downloadPath)
-        settings.saveWifiOnly(_state.value.wifiOnly)
+        settings.saveAdminSettings(
+            shimUrl = ensureScheme(_state.value.shimUrl),
+            downloadPath = _state.value.downloadPath,
+            wifiOnly = _state.value.wifiOnly,
+        )
         refreshStorageInfo()
     }
 

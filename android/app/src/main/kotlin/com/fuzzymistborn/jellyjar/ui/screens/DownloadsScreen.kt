@@ -38,11 +38,7 @@ fun DownloadsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    // Extra vertical clearance beyond the status bar itself — on gesture-nav
-                    // devices the swipe-down-for-notifications zone can extend a bit past the
-                    // physical status bar, making a trailing icon button sitting right at that
-                    // edge hard to tap reliably.
-                    .padding(horizontal = Spacing.md, vertical = Spacing.lg),
+                    .padding(horizontal = Spacing.md, vertical = Spacing.sm),
                 trailingContent = {
                     IconButton(onClick = onStorageClick) {
                         Icon(Icons.Default.Storage, contentDescription = "Manage Storage", tint = OnSurface)
