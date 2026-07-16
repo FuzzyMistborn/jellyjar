@@ -81,10 +81,8 @@ fun DetailScreen(
             )
         }
 
-        // Gradient fade to background, plus a vignette darkening the edges so the backdrop
-        // reads as a cinematic frame rather than a flat rectangle behind the text.
+        // Gradient fade to background
         Box(modifier = Modifier.fillMaxSize().background(heroBackdropScrim()))
-        Box(modifier = Modifier.fillMaxSize().background(vignetteScrim()))
 
         val item = state.item
 
