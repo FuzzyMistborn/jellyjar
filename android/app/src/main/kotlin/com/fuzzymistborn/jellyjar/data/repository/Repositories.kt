@@ -28,7 +28,9 @@ import com.fuzzymistborn.jellyjar.data.local.PlaybackPositionEntity
 import com.fuzzymistborn.jellyjar.model.*
 import com.fuzzymistborn.jellyjar.worker.DownloadWorker
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -517,7 +519,7 @@ class DownloadRepository @Inject constructor(
     // Opens a Server-Sent Events connection to Press for real-time job updates instead of
     // polling — used by DownloadWorker as the primary path, falling back to pollJobStatus()
     // if Press doesn't support /stream or the connection drops.
-    fun streamJobStatus(jobId: String): Flow<TranscodeJob> = kotlinx.coroutines.flow.callbackFlow {
+    fun streamJobStatus(jobId: String): Flow<TranscodeJob> = callbackFlow {
         val url = settings.currentSnapshot().shimUrl
         val baseUrl = if (url.isBlank()) "https://placeholder.invalid" else url.trimEnd('/')
         val gson = com.google.gson.Gson()
@@ -541,7 +543,7 @@ class DownloadRepository @Inject constructor(
             }
         }
         val eventSource = okhttp3.sse.EventSources.createFactory(okHttpClient).newEventSource(request, listener)
-        kotlinx.coroutines.channels.awaitClose { eventSource.cancel() }
+        awaitClose { eventSource.cancel() }
     }
 
     // callbackFlow's collector runs on the caller's dispatcher; applyJobUpdate touches Room,
