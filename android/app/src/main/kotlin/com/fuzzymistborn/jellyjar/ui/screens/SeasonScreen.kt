@@ -16,8 +16,8 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,11 +61,12 @@ fun SeasonScreen(
                 .crossfade(300)
                 .build(),
             contentDescription = null,
-            contentScale = ContentScale.Crop,
+            contentScale = ContentScale.FillWidth,
+            alignment = Alignment.TopCenter,
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.45f)
-                .blur(2.dp),
+                .clip(RectangleShape),
         )
 
         // Gradient fade
