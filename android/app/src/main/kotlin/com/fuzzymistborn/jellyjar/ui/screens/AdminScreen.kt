@@ -21,6 +21,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.fuzzymistborn.jellyjar.BuildConfig
 import com.fuzzymistborn.jellyjar.ui.theme.*
 import com.fuzzymistborn.jellyjar.ui.viewmodel.AdminViewModel
 
@@ -502,6 +503,14 @@ fun AdminScreen(
         }
 
         Spacer(Modifier.height(Spacing.sm))
+
+        Text(
+            "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+            style = MaterialTheme.typography.labelSmall,
+            color = OnSurfaceMuted,
+            modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.sm),
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
     }
 }
 
