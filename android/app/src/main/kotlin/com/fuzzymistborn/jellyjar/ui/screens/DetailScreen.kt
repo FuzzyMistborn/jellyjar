@@ -19,6 +19,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,10 +72,12 @@ fun DetailScreen(
                     .crossfade(300)
                     .build(),
                 contentDescription = null,
-                contentScale = ContentScale.Crop,
+                contentScale = ContentScale.FillWidth,
+                alignment = Alignment.TopCenter,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.65f),
+                    .fillMaxHeight(0.65f)
+                    .clip(RectangleShape),
             )
         }
 
