@@ -42,21 +42,19 @@ data class MediaSource(
     @SerializedName("Path") val path: String?,
     @SerializedName("Size") val size: Long?,
     @SerializedName("Container") val container: String?,
-    @SerializedName("VideoStreams") val videoStreams: List<VideoStream>?,
-    @SerializedName("AudioStreams") val audioStreams: List<AudioStream>?,
+    @SerializedName("MediaStreams") val mediaStreams: List<MediaStream>?,
 )
 
-data class VideoStream(
+// A single stream within a MediaSource — Jellyfin returns one flat list per source with a
+// Type discriminator ("Video"/"Audio"/"Subtitle"), not separate video/audio arrays.
+data class MediaStream(
+    @SerializedName("Type") val type: String?,
     @SerializedName("Codec") val codec: String?,
     @SerializedName("Width") val width: Int?,
     @SerializedName("Height") val height: Int?,
-    @SerializedName("BitRate") val bitRate: Long?,
-)
-
-data class AudioStream(
-    @SerializedName("Codec") val codec: String?,
+    @SerializedName("VideoRange") val videoRange: String?,
+    @SerializedName("ChannelLayout") val channelLayout: String?,
     @SerializedName("Channels") val channels: Int?,
-    @SerializedName("Language") val language: String?,
 )
 
 data class TrickplayInfo(

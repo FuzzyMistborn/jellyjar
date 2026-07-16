@@ -366,7 +366,7 @@ class LibraryViewModel @Inject constructor(
         indexNumber = null, parentIndexNumber = null,
         mediaSources = if (localPath.isNotBlank()) listOf(
             MediaSource(id = jellyfinId, path = localPath, size = sizeBytes,
-                        container = "mp4", videoStreams = null, audioStreams = null)
+                        container = "mp4", mediaStreams = null)
         ) else null,
         imageTags = null,
         backdropImageTags = null, userData = null,

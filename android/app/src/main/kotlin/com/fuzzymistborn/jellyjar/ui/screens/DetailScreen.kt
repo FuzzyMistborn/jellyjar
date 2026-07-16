@@ -32,6 +32,7 @@ import coil.request.ImageRequest
 import kotlinx.coroutines.launch
 import com.fuzzymistborn.jellyjar.model.DownloadStatus
 import com.fuzzymistborn.jellyjar.model.JellyfinItem
+import com.fuzzymistborn.jellyjar.model.MediaSource
 import com.fuzzymistborn.jellyjar.ui.theme.*
 import com.fuzzymistborn.jellyjar.ui.viewmodel.DetailViewModel
 
@@ -99,12 +100,25 @@ fun DetailScreen(
                 }
             }
 
-            item(key = "hero_spacer") { Spacer(Modifier.height(120.dp)) }
+            item(key = "hero_spacer") { Spacer(Modifier.height(100.dp)) }
 
             // Metadata block
             if (item != null) {
                 item(key = "metadata") {
-                    Column(modifier = Modifier.padding(horizontal = 32.dp)) {
+                    BoxWithConstraints(modifier = Modifier.padding(horizontal = 32.dp)) {
+                        val isWide = maxWidth >= 600.dp
+
+                        Row {
+                            if (isWide) {
+                                PosterImage(
+                                    imageUrl = viewModel.posterUrl(item.id),
+                                    contentDescription = item.name,
+                                    modifier = Modifier.width(220.dp),
+                                )
+                                Spacer(Modifier.width(Spacing.xl))
+                            }
+
+                            Column(modifier = if (isWide) Modifier.weight(1f) else Modifier.fillMaxWidth()) {
                         var logoLoaded by remember { mutableStateOf(false) }
                         AsyncImage(
                             model = ImageRequest.Builder(LocalContext.current)
@@ -112,7 +126,7 @@ fun DetailScreen(
                                 .crossfade(300)
                                 .build(),
                             contentDescription = item.name,
-                            modifier = Modifier.heightIn(max = 80.dp).widthIn(max = 300.dp),
+                            modifier = Modifier.heightIn(max = 110.dp).widthIn(max = 320.dp),
                             onSuccess = { logoLoaded = true },
                         )
                         if (!logoLoaded) {
@@ -154,6 +168,11 @@ fun DetailScreen(
                                 color = OnSurface.copy(alpha = 0.85f),
                                 modifier = Modifier.widthIn(max = 600.dp),
                             )
+                        }
+
+                        if (!item.mediaSources.isNullOrEmpty()) {
+                            Spacer(Modifier.height(Spacing.md))
+                            TechSpecRow(item.mediaSources)
                         }
 
                         Spacer(Modifier.height(28.dp))
@@ -260,7 +279,9 @@ fun DetailScreen(
                                 }
                             }
                         }
-                    }
+                            } // metadata Column
+                        } // Row (poster + metadata)
+                    } // BoxWithConstraints
                 }
 
                 // Seasons section — tap navigates to dedicated SeasonScreen
@@ -344,6 +365,50 @@ fun DetailScreen(
             onConfirm = { viewModel.deleteDownload(itemId) },
             onDismiss = { showDeleteConfirm = false },
         )
+    }
+}
+
+// Resolution/HDR/audio-format chips derived from the first media source's video and audio
+// streams — only meaningful for movies/episodes, which carry their own MediaSources.
+@Composable
+private fun TechSpecRow(mediaSources: List<MediaSource>) {
+    val streams = mediaSources.firstOrNull()?.mediaStreams ?: return
+    val video = streams.firstOrNull { it.type == "Video" }
+    val audio = streams.firstOrNull { it.type == "Audio" }
+
+    val resolution = video?.height?.let {
+        when {
+            it >= 2000 -> "4K"
+            it >= 1000 -> "1080p"
+            it >= 700 -> "720p"
+            else -> "${it}p"
+        }
+    }
+    val isHdr = video?.videoRange?.contains("HDR", ignoreCase = true) == true
+    val audioLabel = audio?.channelLayout ?: audio?.channels?.let {
+        when (it) {
+            8 -> "7.1"
+            6 -> "5.1"
+            2 -> "Stereo"
+            1 -> "Mono"
+            else -> "${it}ch"
+        }
+    }
+
+    val chips = listOfNotNull(resolution, "HDR".takeIf { isHdr }, audioLabel)
+    if (chips.isEmpty()) return
+
+    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        chips.forEach { label ->
+            Surface(color = SurfaceVariant, shape = RoundedCornerShape(Radius.sm)) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = OnSurfaceMuted,
+                    modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 4.dp),
+                )
+            }
+        }
     }
 }
 

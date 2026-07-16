@@ -338,7 +338,7 @@ class JellyfinRepository @Inject constructor(
         seriesName = seriesName, seasonName = seasonName,
         indexNumber = indexNumber, parentIndexNumber = parentIndexNumber,
         mediaSources = mediaSourcePath?.let { path ->
-            listOf(MediaSource(id = id, path = path, size = null, container = null, videoStreams = null, audioStreams = null))
+            listOf(MediaSource(id = id, path = path, size = null, container = null, mediaStreams = null))
         },
         imageTags = null, backdropImageTags = null,
         userData = UserData(playbackPositionTicks = null, played = played, playCount = 0),
