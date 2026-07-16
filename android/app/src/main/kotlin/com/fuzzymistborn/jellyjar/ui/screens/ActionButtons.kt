@@ -14,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.fuzzymistborn.jellyjar.ui.theme.IconSize
 import com.fuzzymistborn.jellyjar.ui.theme.Primary
@@ -35,7 +36,7 @@ fun PrimaryActionButton(
     ) {
         Icon(icon, contentDescription = null)
         Spacer(Modifier.width(Spacing.sm))
-        Text(text)
+        Text(text, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -62,7 +63,7 @@ fun SecondaryActionButton(
         Icon(icon, contentDescription = null)
         if (text != null) {
             Spacer(Modifier.width(Spacing.sm))
-            Text(text)
+            Text(text, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -89,7 +90,7 @@ fun CompactActionButton(
         Icon(icon, contentDescription = null, modifier = Modifier.size(IconSize.sm))
         if (text != null) {
             Spacer(Modifier.width(4.dp))
-            Text(text, style = MaterialTheme.typography.labelSmall)
+            Text(text, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

@@ -30,6 +30,7 @@ class SettingsRepository @Inject constructor(
         val PIN_ENABLED = stringPreferencesKey("pin_enabled")
         val EPISODE_VIEW_GRID = booleanPreferencesKey("episode_view_grid")
         val WIFI_ONLY = booleanPreferencesKey("wifi_only")
+        val STREAM_OVER_CELLULAR = booleanPreferencesKey("stream_over_cellular")
         val SHOW_CONTINUE_WATCHING = booleanPreferencesKey("show_continue_watching")
         val SHOW_RECENTLY_ADDED = booleanPreferencesKey("show_recently_added")
         val SHOW_MY_LIST = booleanPreferencesKey("show_my_list")
@@ -51,6 +52,7 @@ class SettingsRepository @Inject constructor(
             isPinEnabled = prefs[Keys.PIN_ENABLED] == "true",
             episodeViewGrid = prefs[Keys.EPISODE_VIEW_GRID] ?: true,
             wifiOnly = prefs[Keys.WIFI_ONLY] ?: false,
+            streamOverCellular = prefs[Keys.STREAM_OVER_CELLULAR] ?: false,
             showContinueWatching = prefs[Keys.SHOW_CONTINUE_WATCHING] ?: true,
             showRecentlyAdded = prefs[Keys.SHOW_RECENTLY_ADDED] ?: true,
             showMyList = prefs[Keys.SHOW_MY_LIST] ?: true,
@@ -106,6 +108,10 @@ class SettingsRepository @Inject constructor(
         context.dataStore.edit { prefs ->
             prefs[Keys.WIFI_ONLY] = wifiOnly
         }
+    }
+
+    suspend fun saveStreamOverCellular(enabled: Boolean) {
+        context.dataStore.edit { prefs -> prefs[Keys.STREAM_OVER_CELLULAR] = enabled }
     }
 
     suspend fun saveShowContinueWatching(show: Boolean) {

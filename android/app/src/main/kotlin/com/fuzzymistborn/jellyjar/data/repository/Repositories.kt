@@ -278,6 +278,31 @@ class JellyfinRepository @Inject constructor(
             ?.firstOrNull()
     }
 
+    // Negotiates playback with Jellyfin instead of always assuming direct-play. Stock ExoPlayer
+    // has no DTS/DTS-HD MA or TrueHD decoder, so those audio codecs are excluded from the
+    // DeviceProfile's DirectPlayProfiles — Jellyfin responds with a TranscodingUrl (audio-only
+    // remux) for sources with that audio, and a normal direct-play source otherwise. Falls back
+    // to the plain direct-play URL if PlaybackInfo fails for any reason (e.g. older server).
+    suspend fun getStreamUrl(itemId: String): String = withContext(Dispatchers.IO) {
+        val s = settings.currentSnapshot()
+        val fallback = JellyfinImageHelper.streamUrl(s.jellyfinUrl, itemId, s.jellyfinToken)
+        runCatching {
+            val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
+            val response = service.getPlaybackInfo(
+                itemId = itemId,
+                authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
+                userId = s.jellyfinUserId,
+            )
+            val source = response.MediaSources.firstOrNull() ?: return@runCatching fallback
+            val transcodingUrl = source.TranscodingUrl
+            if (!source.SupportsDirectPlay && !source.SupportsDirectStream && transcodingUrl != null) {
+                s.jellyfinUrl.trimEnd('/') + transcodingUrl
+            } else {
+                fallback
+            }
+        }.getOrDefault(fallback)
+    }
+
     fun primaryImageUrl(itemId: String, baseUrl: String): String =
         JellyfinImageHelper.primaryImageUrl(baseUrl, itemId)
 

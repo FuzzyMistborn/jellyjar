@@ -51,6 +51,49 @@ data class PlaybackStopRequest(
     val MediaSourceId: String? = null,
 )
 
+// ─── Playback info / device profile negotiation ───────────────────────────────
+// Lets Jellyfin decide direct-play vs transcode per MediaSource instead of the client always
+// assuming direct-play. Needed because stock ExoPlayer has no DTS/DTS-HD MA or TrueHD decoder —
+// omitting those from DirectPlayProfiles' AudioCodec list makes the server transcode just the
+// audio (remux) for those files while everything else still direct-plays.
+
+data class DirectPlayProfile(
+    val Type: String = "Video",
+    val Container: String = "mp4,mkv,avi,mov,webm,m4v,ts,m2ts",
+    val VideoCodec: String = "h264,hevc,vp9,av1,mpeg4,mpeg2video",
+    val AudioCodec: String = "aac,mp3,ac3,eac3,flac,alac,opus,vorbis,pcm_s16le,pcm_s24le",
+)
+
+data class TranscodingProfile(
+    val Type: String = "Video",
+    val Container: String = "mp4",
+    val VideoCodec: String = "h264",
+    val AudioCodec: String = "aac",
+    val Context: String = "Streaming",
+    val Protocol: String = "http",
+)
+
+data class DeviceProfile(
+    val MaxStreamingBitrate: Int = 120_000_000,
+    val DirectPlayProfiles: List<DirectPlayProfile> = listOf(DirectPlayProfile()),
+    val TranscodingProfiles: List<TranscodingProfile> = listOf(TranscodingProfile()),
+)
+
+data class PlaybackInfoRequest(
+    val DeviceProfile: DeviceProfile = DeviceProfile(),
+)
+
+data class PlaybackMediaSource(
+    val Id: String,
+    val SupportsDirectPlay: Boolean = false,
+    val SupportsDirectStream: Boolean = false,
+    val TranscodingUrl: String? = null,
+)
+
+data class PlaybackInfoResponse(
+    val MediaSources: List<PlaybackMediaSource> = emptyList(),
+)
+
 // ─── Item list wrappers ───────────────────────────────────────────────────────
 
 data class ItemsResponse(
@@ -148,6 +191,14 @@ interface JellyfinApiService {
         @Header("Authorization") authHeader: String,
         @Body body: PlaybackStopRequest,
     )
+
+    @POST("Items/{itemId}/PlaybackInfo")
+    suspend fun getPlaybackInfo(
+        @Path("itemId") itemId: String,
+        @Header("Authorization") authHeader: String,
+        @Query("UserId") userId: String,
+        @Body body: PlaybackInfoRequest = PlaybackInfoRequest(),
+    ): PlaybackInfoResponse
 
     @GET("Users/{userId}/Items/{itemId}")
     suspend fun getItem(

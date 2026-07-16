@@ -20,6 +20,8 @@ class NetworkMonitor @Inject constructor(
     private val connectivityManager =
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
+    // Any usable internet connection (Wi-Fi, cellular, ethernet, ...) — used to gate library
+    // browsing, which should work over cellular.
     val isOnline: Flow<Boolean> = callbackFlow {
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) { trySend(true) }
@@ -29,7 +31,6 @@ class NetworkMonitor @Inject constructor(
 
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
             .build()
 
         connectivityManager.registerNetworkCallback(request, callback)
@@ -38,7 +39,33 @@ class NetworkMonitor @Inject constructor(
         awaitClose { connectivityManager.unregisterNetworkCallback(callback) }
     }.distinctUntilChanged()
 
+    // Specifically Wi-Fi — used to gate streaming/playback, which defaults to Wi-Fi-only unless
+    // the user opts into "Stream over Cellular".
+    val isWifi: Flow<Boolean> = callbackFlow {
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) { trySend(true) }
+            override fun onLost(network: Network) { trySend(isCurrentlyWifi()) }
+            override fun onUnavailable() { trySend(false) }
+        }
+
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .build()
+
+        connectivityManager.registerNetworkCallback(request, callback)
+        trySend(isCurrentlyWifi())
+
+        awaitClose { connectivityManager.unregisterNetworkCallback(callback) }
+    }.distinctUntilChanged()
+
     fun isCurrentlyConnected(): Boolean {
+        val network = connectivityManager.activeNetwork ?: return false
+        val caps = connectivityManager.getNetworkCapabilities(network) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    fun isCurrentlyWifi(): Boolean {
         val network = connectivityManager.activeNetwork ?: return false
         val caps = connectivityManager.getNetworkCapabilities(network) ?: return false
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&

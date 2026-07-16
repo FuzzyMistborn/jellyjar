@@ -29,6 +29,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import kotlinx.coroutines.launch
 import com.fuzzymistborn.jellyjar.model.DownloadStatus
 import com.fuzzymistborn.jellyjar.model.JellyfinItem
 import com.fuzzymistborn.jellyjar.ui.theme.*
@@ -58,6 +59,7 @@ fun DetailScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     var showPresetDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
 
     Box(modifier = Modifier.fillMaxSize().background(BackgroundGradient)) {
 
@@ -163,15 +165,27 @@ fun DetailScreen(
                             val resumeAction: (() -> Unit)? = when {
                                 dl?.status == DownloadStatus.COMPLETE.name && offlinePositionMs > 0L ->
                                     { { onPlayClick(dl.localPath, dl.jellyfinId, offlinePositionMs) } }
-                                state.isOnline && streamPositionMs > 0L ->
-                                    { { onStreamClick(viewModel.streamUrl(item.id), item.id, streamPositionMs) } }
+                                state.canStream && streamPositionMs > 0L ->
+                                    {
+                                        {
+                                            coroutineScope.launch {
+                                                onStreamClick(viewModel.streamUrl(item.id), item.id, streamPositionMs)
+                                            }
+                                        }
+                                    }
                                 else -> null
                             }
                             val playFromStartAction: (() -> Unit)? = when {
                                 dl?.status == DownloadStatus.COMPLETE.name ->
                                     { { onPlayClick(dl.localPath, dl.jellyfinId, 0L) } }
-                                state.isOnline ->
-                                    { { onStreamClick(viewModel.streamUrl(item.id), item.id, 0L) } }
+                                state.canStream ->
+                                    {
+                                        {
+                                            coroutineScope.launch {
+                                                onStreamClick(viewModel.streamUrl(item.id), item.id, 0L)
+                                            }
+                                        }
+                                    }
                                 else -> null
                             }
 
@@ -437,6 +451,7 @@ internal fun EpisodeRow(
     thumbnailUrl: String,
     download: com.fuzzymistborn.jellyjar.data.local.DownloadEntity?,
     isOnline: Boolean,
+    canStream: Boolean = isOnline,
     onClick: () -> Unit,
     onStreamClick: ((startMs: Long) -> Unit)? = null,
     onDownloadClick: (preset: String) -> Unit,
@@ -548,7 +563,7 @@ internal fun EpisodeRow(
                         val resumeAction: (() -> Unit)? = when {
                             download?.status == DownloadStatus.COMPLETE.name && offlinePos > 0L ->
                                 { { onPlayOfflineClick(download.localPath, download.jellyfinId, offlinePos) } }
-                            isOnline && onStreamClick != null && streamPos > 0L ->
+                            canStream && onStreamClick != null && streamPos > 0L ->
                                 { { onStreamClick(streamPos) } }
                             else -> null
                         }
@@ -559,7 +574,7 @@ internal fun EpisodeRow(
                     val playFromStartAction: (() -> Unit)? = when {
                         download?.status == DownloadStatus.COMPLETE.name ->
                             { { onPlayOfflineClick(download.localPath, download.jellyfinId, 0L) } }
-                        isOnline && onStreamClick != null -> { { onStreamClick(0L) } }
+                        canStream && onStreamClick != null -> { { onStreamClick(0L) } }
                         else -> null
                     }
                     if (playFromStartAction != null) {
@@ -628,6 +643,7 @@ internal fun EpisodeThumb(
     thumbnailUrl: String,
     download: com.fuzzymistborn.jellyjar.data.local.DownloadEntity?,
     isOnline: Boolean,
+    canStream: Boolean = isOnline,
     onClick: () -> Unit,
     onStreamClick: ((startMs: Long) -> Unit)? = null,
     onDownloadClick: (preset: String) -> Unit,
@@ -721,7 +737,7 @@ internal fun EpisodeThumb(
                 val resumeAction: (() -> Unit)? = when {
                     download?.status == DownloadStatus.COMPLETE.name && offlinePos > 0L ->
                         { { onPlayOfflineClick(download.localPath, download.jellyfinId, offlinePos) } }
-                    isOnline && onStreamClick != null && streamPos > 0L ->
+                    canStream && onStreamClick != null && streamPos > 0L ->
                         { { onStreamClick(streamPos) } }
                     else -> null
                 }
@@ -737,7 +753,7 @@ internal fun EpisodeThumb(
             val playFromStartAction: (() -> Unit)? = when {
                 download?.status == DownloadStatus.COMPLETE.name ->
                     { { onPlayOfflineClick(download.localPath, download.jellyfinId, 0L) } }
-                isOnline && onStreamClick != null -> { { onStreamClick(0L) } }
+                canStream && onStreamClick != null -> { { onStreamClick(0L) } }
                 else -> null
             }
             if (playFromStartAction != null) {

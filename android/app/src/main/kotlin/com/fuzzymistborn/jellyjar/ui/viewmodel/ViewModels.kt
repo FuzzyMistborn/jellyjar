@@ -383,6 +383,8 @@ data class DetailState(
     val isLoadingEpisodes: Boolean = false,
     val isLoading: Boolean = false,
     val isOnline: Boolean = true,
+    val isWifi: Boolean = true,
+    val streamOverCellular: Boolean = false,
     val error: String? = null,
     val downloadError: String? = null,
     val jellyfinUrl: String = "",
@@ -391,7 +393,11 @@ data class DetailState(
     val streamPositionMs: Long = 0L,
     val isFavorite: Boolean = false,
     val isPlayed: Boolean = false,
-)
+) {
+    // Streaming/direct-play requires Wi-Fi unless the user opted into cellular streaming;
+    // library browsing and download-queueing stay gated on plain isOnline.
+    val canStream: Boolean get() = isOnline && (isWifi || streamOverCellular)
+}
 
 @HiltViewModel
 class DetailViewModel @Inject constructor(
@@ -407,9 +413,14 @@ class DetailViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            networkMonitor.isOnline.collect { online ->
-                _state.update { it.copy(isOnline = online) }
-            }
+            combine(
+                networkMonitor.isOnline,
+                networkMonitor.isWifi,
+                settings.settings.map { it.streamOverCellular },
+            ) { online, wifi, overCellular -> Triple(online, wifi, overCellular) }
+                .collect { (online, wifi, overCellular) ->
+                    _state.update { it.copy(isOnline = online, isWifi = wifi, streamOverCellular = overCellular) }
+                }
         }
         viewModelScope.launch {
             favoriteRepo.favoriteIds.collect { ids ->
@@ -590,8 +601,7 @@ class DetailViewModel @Inject constructor(
     fun logoUrl(itemId: String) =
         JellyfinImageHelper.logoImageUrl(_state.value.jellyfinUrl, itemId)
 
-    fun streamUrl(itemId: String) =
-        JellyfinImageHelper.streamUrl(_state.value.jellyfinUrl, itemId, _state.value.jellyfinToken)
+    suspend fun streamUrl(itemId: String) = jellyfinRepo.getStreamUrl(itemId)
 
     fun posterUrl(itemId: String) =
         JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId)
@@ -625,6 +635,7 @@ data class AdminState(
     val storageInfo: String? = null,
     val activeJobs: List<JobSummary> = emptyList(),
     val wifiOnly: Boolean = false,
+    val streamOverCellular: Boolean = false,
     val showContinueWatching: Boolean = true,
     val showRecentlyAdded: Boolean = true,
     val showMyList: Boolean = true,
@@ -660,6 +671,7 @@ class AdminViewModel @Inject constructor(
                         hasCredentials = hasCredentials,
                         settingsLoaded = true,
                         wifiOnly = s.wifiOnly,
+                        streamOverCellular = s.streamOverCellular,
                         showContinueWatching = s.showContinueWatching,
                         showRecentlyAdded = s.showRecentlyAdded,
                         showMyList = s.showMyList,
@@ -766,6 +778,11 @@ class AdminViewModel @Inject constructor(
     }
 
     fun setWifiOnly(v: Boolean) = _state.update { it.copy(wifiOnly = v) }
+
+    fun setStreamOverCellular(v: Boolean) {
+        _state.update { it.copy(streamOverCellular = v) }
+        viewModelScope.launch { settings.saveStreamOverCellular(v) }
+    }
 
     fun setShowContinueWatching(v: Boolean) {
         _state.update { it.copy(showContinueWatching = v) }
@@ -1055,12 +1072,16 @@ data class SeasonState(
     val episodeDownloads: Map<String, DownloadEntity> = emptyMap(),
     val isLoading: Boolean = false,
     val isOnline: Boolean = true,
+    val isWifi: Boolean = true,
+    val streamOverCellular: Boolean = false,
     val episodeViewGrid: Boolean = true,
     val error: String? = null,
     val downloadError: String? = null,
     val jellyfinUrl: String = "",
     val jellyfinToken: String = "",
-)
+) {
+    val canStream: Boolean get() = isOnline && (isWifi || streamOverCellular)
+}
 
 @HiltViewModel
 class SeasonViewModel @Inject constructor(
@@ -1075,9 +1096,14 @@ class SeasonViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            networkMonitor.isOnline.collect { online ->
-                _state.update { it.copy(isOnline = online) }
-            }
+            combine(
+                networkMonitor.isOnline,
+                networkMonitor.isWifi,
+                settings.settings.map { it.streamOverCellular },
+            ) { online, wifi, overCellular -> Triple(online, wifi, overCellular) }
+                .collect { (online, wifi, overCellular) ->
+                    _state.update { it.copy(isOnline = online, isWifi = wifi, streamOverCellular = overCellular) }
+                }
         }
         viewModelScope.launch {
             downloadRepo.downloads.collect { all ->
@@ -1189,8 +1215,7 @@ class SeasonViewModel @Inject constructor(
     fun thumbnailUrl(itemId: String) =
         JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId, maxWidth = 500)
 
-    fun streamUrl(itemId: String) =
-        JellyfinImageHelper.streamUrl(_state.value.jellyfinUrl, itemId, _state.value.jellyfinToken)
+    suspend fun streamUrl(itemId: String) = jellyfinRepo.getStreamUrl(itemId)
 }
 
 // ─── Player ViewModel ─────────────────────────────────────────────────────────
@@ -1283,8 +1308,7 @@ class PlayerViewModel @Inject constructor(
             return if (dl?.status == com.fuzzymistborn.jellyjar.model.DownloadStatus.COMPLETE.name) {
                 NextEpisodeTarget.Local(dl.localPath, next.id)
             } else {
-                val s = settings.currentSnapshot()
-                NextEpisodeTarget.Stream(JellyfinImageHelper.streamUrl(s.jellyfinUrl, next.id, s.jellyfinToken), next.id)
+                NextEpisodeTarget.Stream(jellyfinRepo.getStreamUrl(next.id), next.id)
             }
         }
 
@@ -1398,6 +1422,5 @@ class SeasonsViewModel @Inject constructor(
     fun thumbnailUrl(itemId: String) =
         JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId, maxWidth = 500)
 
-    fun streamUrl(itemId: String) =
-        JellyfinImageHelper.streamUrl(_state.value.jellyfinUrl, itemId, _state.value.jellyfinToken)
+    suspend fun streamUrl(itemId: String) = jellyfinRepo.getStreamUrl(itemId)
 }

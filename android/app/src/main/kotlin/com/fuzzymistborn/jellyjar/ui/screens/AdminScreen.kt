@@ -369,6 +369,12 @@ fun AdminScreen(
                 checked = state.trickplayEnabled,
                 onCheckedChange = { viewModel.setTrickplayEnabled(it) },
             )
+            SettingsToggleRow(
+                title = "Stream over Cellular",
+                subtitle = "Allow streaming/playback on mobile data (browsing always works)",
+                checked = state.streamOverCellular,
+                onCheckedChange = { viewModel.setStreamOverCellular(it) },
+            )
         }
 
         // ── Admin PIN ─────────────────────────────────────────────────────────

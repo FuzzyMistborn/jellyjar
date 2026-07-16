@@ -171,6 +171,7 @@ data class AppSettings(
     val isPinEnabled: Boolean = false,
     val episodeViewGrid: Boolean = true,
     val wifiOnly: Boolean = false,
+    val streamOverCellular: Boolean = false,
     val showContinueWatching: Boolean = true,
     val showRecentlyAdded: Boolean = true,
     val showMyList: Boolean = true,

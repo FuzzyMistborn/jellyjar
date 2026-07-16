@@ -28,6 +28,7 @@ import coil.request.ImageRequest
 import com.fuzzymistborn.jellyjar.model.DownloadStatus
 import com.fuzzymistborn.jellyjar.ui.theme.*
 import com.fuzzymistborn.jellyjar.ui.viewmodel.SeasonViewModel
+import kotlinx.coroutines.launch
 
 @Composable
 fun SeasonScreen(
@@ -42,6 +43,7 @@ fun SeasonScreen(
     LaunchedEffect(seasonId) { viewModel.load(seasonId, seriesId) }
 
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val coroutineScope = rememberCoroutineScope()
 
     val visibleEpisodes = remember(state.episodes, state.episodeDownloads, state.isOnline) {
         if (state.isOnline) state.episodes
@@ -185,8 +187,13 @@ fun SeasonScreen(
                                     thumbnailUrl = viewModel.thumbnailUrl(episode.id),
                                     download = epDownload,
                                     isOnline = state.isOnline,
+                                    canStream = state.canStream,
                                     onClick = { onEpisodeClick(episode.id) },
-                                    onStreamClick = { startMs -> onStreamClick(viewModel.streamUrl(episode.id), episode.id, startMs) },
+                                    onStreamClick = { startMs ->
+                                        coroutineScope.launch {
+                                            onStreamClick(viewModel.streamUrl(episode.id), episode.id, startMs)
+                                        }
+                                    },
                                     onDownloadClick = { preset ->
                                         if (preset == "retry") viewModel.retryEpisodeDownload(episode.id)
                                         else viewModel.queueEpisodeDownload(episode, preset)
@@ -205,8 +212,13 @@ fun SeasonScreen(
                             thumbnailUrl = viewModel.thumbnailUrl(episode.id),
                             download = epDownload,
                             isOnline = state.isOnline,
+                            canStream = state.canStream,
                             onClick = { onEpisodeClick(episode.id) },
-                            onStreamClick = { startMs -> onStreamClick(viewModel.streamUrl(episode.id), episode.id, startMs) },
+                            onStreamClick = { startMs ->
+                                coroutineScope.launch {
+                                    onStreamClick(viewModel.streamUrl(episode.id), episode.id, startMs)
+                                }
+                            },
                             onDownloadClick = { preset ->
                                 if (preset == "retry") viewModel.retryEpisodeDownload(episode.id)
                                 else viewModel.queueEpisodeDownload(episode, preset)

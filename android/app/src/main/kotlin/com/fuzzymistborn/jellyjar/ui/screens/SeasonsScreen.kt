@@ -20,6 +20,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.fuzzymistborn.jellyjar.model.JellyfinItem
 import com.fuzzymistborn.jellyjar.ui.theme.*
 import com.fuzzymistborn.jellyjar.ui.viewmodel.SeasonsViewModel
+import kotlinx.coroutines.launch
 
 @Composable
 fun SeasonsScreen(
@@ -31,6 +32,7 @@ fun SeasonsScreen(
     LaunchedEffect(seriesId) { viewModel.load(seriesId) }
 
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val coroutineScope = rememberCoroutineScope()
 
     Box(modifier = Modifier.fillMaxSize().background(BackgroundGradient)) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -103,7 +105,11 @@ fun SeasonsScreen(
                             EpisodeCard(
                                 episode = episode,
                                 thumbnailUrl = viewModel.thumbnailUrl(episode.id),
-                                onClick = { onEpisodeClick(viewModel.streamUrl(episode.id)) },
+                                onClick = {
+                                    coroutineScope.launch {
+                                        onEpisodeClick(viewModel.streamUrl(episode.id))
+                                    }
+                                },
                             )
                         }
                     }
