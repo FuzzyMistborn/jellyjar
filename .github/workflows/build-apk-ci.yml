@@ -40,7 +40,7 @@ jobs:
         run: ./gradlew assembleDebug -PversionName=ci-${{ github.sha }}
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jellyjar-debug-${{ github.sha }}
           path: android/app/build/outputs/apk/debug/app-debug.apk
