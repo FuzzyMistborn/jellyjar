@@ -298,7 +298,10 @@ class JellyfinRepository @Inject constructor(
             if (!source.SupportsDirectPlay && !source.SupportsDirectStream && transcodingUrl != null) {
                 s.jellyfinUrl.trimEnd('/') + transcodingUrl
             } else {
-                fallback
+                JellyfinImageHelper.streamUrl(
+                    s.jellyfinUrl, itemId, s.jellyfinToken,
+                    container = source.Container, mediaSourceId = source.Id,
+                )
             }
         }.getOrDefault(fallback)
     }
@@ -497,22 +500,60 @@ class DownloadRepository @Inject constructor(
         downloadDao.updateQueuePosition(neighbor.jellyfinId, a)
     }
 
+    private suspend fun applyJobUpdate(job: TranscodeJob) {
+        val entity = downloadDao.findByShimJobId(job.job_id) ?: return
+        val status = when (job.status) {
+            "queued", "running" -> DownloadStatus.TRANSCODING.name
+            "complete" -> DownloadStatus.DOWNLOADING.name
+            "failed" -> DownloadStatus.FAILED.name
+            else -> entity.status
+        }
+        val newProgress = job.progress ?: 0f
+        if (entity.status != status || entity.progress != newProgress) {
+            downloadDao.updateProgress(entity.jellyfinId, newProgress, status)
+        }
+    }
+
+    // Opens a Server-Sent Events connection to Press for real-time job updates instead of
+    // polling — used by DownloadWorker as the primary path, falling back to pollJobStatus()
+    // if Press doesn't support /stream or the connection drops.
+    fun streamJobStatus(jobId: String): Flow<TranscodeJob> = kotlinx.coroutines.flow.callbackFlow {
+        val url = settings.currentSnapshot().shimUrl
+        val baseUrl = if (url.isBlank()) "https://placeholder.invalid" else url.trimEnd('/')
+        val gson = com.google.gson.Gson()
+        val request = Request.Builder().url("$baseUrl/jobs/$jobId/stream").build()
+        val listener = object : okhttp3.sse.EventSourceListener() {
+            override fun onEvent(eventSource: okhttp3.sse.EventSource, id: String?, type: String?, data: String) {
+                runCatching { gson.fromJson(data, TranscodeJob::class.java) }
+                    .onSuccess { job ->
+                        applyJobUpdateBlocking(job)
+                        trySend(job)
+                        if (job.status == "complete" || job.status == "failed") close()
+                    }
+            }
+
+            override fun onClosed(eventSource: okhttp3.sse.EventSource) {
+                close()
+            }
+
+            override fun onFailure(eventSource: okhttp3.sse.EventSource, t: Throwable?, response: okhttp3.Response?) {
+                close(t ?: java.io.IOException("SSE connection failed"))
+            }
+        }
+        val eventSource = okhttp3.sse.EventSources.createFactory(okHttpClient).newEventSource(request, listener)
+        kotlinx.coroutines.channels.awaitClose { eventSource.cancel() }
+    }
+
+    // callbackFlow's collector runs on the caller's dispatcher; applyJobUpdate touches Room,
+    // so hop to IO for the DB write without blocking the SSE listener thread.
+    private fun applyJobUpdateBlocking(job: TranscodeJob) {
+        kotlinx.coroutines.runBlocking(Dispatchers.IO) { applyJobUpdate(job) }
+    }
+
     suspend fun pollJobStatus(jobId: String): Result<TranscodeJob> = withContext(Dispatchers.IO) {
         runCatching {
             val job = shimService().getJob(jobId)
-            val entity = downloadDao.findByShimJobId(jobId)
-            if (entity != null) {
-                val status = when (job.status) {
-                    "queued", "running" -> DownloadStatus.TRANSCODING.name
-                    "complete" -> DownloadStatus.DOWNLOADING.name
-                    "failed" -> DownloadStatus.FAILED.name
-                    else -> entity.status
-                }
-                val newProgress = job.progress ?: 0f
-                if (entity.status != status || entity.progress != newProgress) {
-                    downloadDao.updateProgress(entity.jellyfinId, newProgress, status)
-                }
-            }
+            applyJobUpdate(job)
             job
         }
     }

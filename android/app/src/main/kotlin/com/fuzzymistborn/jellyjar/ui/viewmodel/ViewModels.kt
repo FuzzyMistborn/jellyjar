@@ -43,6 +43,7 @@ data class LibraryState(
     val showContinueWatching: Boolean = true,
     val showRecentlyAdded: Boolean = true,
     val showMyList: Boolean = true,
+    val genreFilterEnabled: Boolean = true,
     val globalSearchActive: Boolean = false,
     val globalSearchQuery: String = "",
     val globalSearchResults: List<JellyfinItem> = emptyList(),
@@ -106,7 +107,7 @@ class LibraryViewModel @Inject constructor(
             settings.settings.collect { s ->
                 val prevToken = _state.value.jellyfinToken
                 val prevUrl = _state.value.jellyfinUrl
-                _state.update { it.copy(jellyfinUrl = s.jellyfinUrl, jellyfinToken = s.jellyfinToken, showContinueWatching = s.showContinueWatching, showRecentlyAdded = s.showRecentlyAdded, showMyList = s.showMyList) }
+                _state.update { it.copy(jellyfinUrl = s.jellyfinUrl, jellyfinToken = s.jellyfinToken, showContinueWatching = s.showContinueWatching, showRecentlyAdded = s.showRecentlyAdded, showMyList = s.showMyList, genreFilterEnabled = s.genreFilterEnabled) }
                 val tokenBecameAvailable = prevToken.isBlank() && s.jellyfinToken.isNotBlank()
                 val urlChanged = prevUrl != s.jellyfinUrl && s.jellyfinToken.isNotBlank()
                 if ((tokenBecameAvailable || urlChanged) && _state.value.isOnline && !_state.value.showingDownloads) {
@@ -646,6 +647,7 @@ data class AdminState(
     val autoPlayNextEpisode: Boolean = true,
     val introSkipEnabled: Boolean = true,
     val trickplayEnabled: Boolean = true,
+    val genreFilterEnabled: Boolean = true,
     val maxConcurrentDownloads: Int = 1,
 )
 
@@ -682,6 +684,7 @@ class AdminViewModel @Inject constructor(
                         autoPlayNextEpisode = s.autoPlayNextEpisode,
                         introSkipEnabled = s.introSkipEnabled,
                         trickplayEnabled = s.trickplayEnabled,
+                        genreFilterEnabled = s.genreFilterEnabled,
                         maxConcurrentDownloads = s.maxConcurrentDownloads,
                     )
                 }
@@ -816,6 +819,11 @@ class AdminViewModel @Inject constructor(
     fun setTrickplayEnabled(v: Boolean) {
         _state.update { it.copy(trickplayEnabled = v) }
         viewModelScope.launch { settings.saveTrickplayEnabled(v) }
+    }
+
+    fun setGenreFilterEnabled(v: Boolean) {
+        _state.update { it.copy(genreFilterEnabled = v) }
+        viewModelScope.launch { settings.saveGenreFilterEnabled(v) }
     }
 
     fun setMaxConcurrentDownloads(v: Int) {

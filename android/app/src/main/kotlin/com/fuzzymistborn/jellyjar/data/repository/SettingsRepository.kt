@@ -37,6 +37,7 @@ class SettingsRepository @Inject constructor(
         val AUTO_PLAY_NEXT_EPISODE = booleanPreferencesKey("auto_play_next_episode")
         val INTRO_SKIP_ENABLED = booleanPreferencesKey("intro_skip_enabled")
         val TRICKPLAY_ENABLED = booleanPreferencesKey("trickplay_enabled")
+        val GENRE_FILTER_ENABLED = booleanPreferencesKey("genre_filter_enabled")
         val DOWNLOAD_QUEUE_PAUSED = booleanPreferencesKey("download_queue_paused")
         val MAX_CONCURRENT_DOWNLOADS = intPreferencesKey("max_concurrent_downloads")
     }
@@ -59,6 +60,7 @@ class SettingsRepository @Inject constructor(
             autoPlayNextEpisode = prefs[Keys.AUTO_PLAY_NEXT_EPISODE] ?: true,
             introSkipEnabled = prefs[Keys.INTRO_SKIP_ENABLED] ?: true,
             trickplayEnabled = prefs[Keys.TRICKPLAY_ENABLED] ?: true,
+            genreFilterEnabled = prefs[Keys.GENRE_FILTER_ENABLED] ?: true,
             downloadQueuePaused = prefs[Keys.DOWNLOAD_QUEUE_PAUSED] ?: false,
             maxConcurrentDownloads = (prefs[Keys.MAX_CONCURRENT_DOWNLOADS] ?: 1).coerceIn(1, 2),
         )
@@ -136,6 +138,10 @@ class SettingsRepository @Inject constructor(
 
     suspend fun saveTrickplayEnabled(enabled: Boolean) {
         context.dataStore.edit { prefs -> prefs[Keys.TRICKPLAY_ENABLED] = enabled }
+    }
+
+    suspend fun saveGenreFilterEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs -> prefs[Keys.GENRE_FILTER_ENABLED] = enabled }
     }
 
     suspend fun saveDownloadQueuePaused(paused: Boolean) {

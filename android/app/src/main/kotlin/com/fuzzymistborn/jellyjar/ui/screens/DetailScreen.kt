@@ -228,6 +228,18 @@ fun DetailScreen(
                                         PrimaryActionButton("Play", Icons.Default.PlayArrow, playFromStartAction)
                                     }
                                 }
+                            }
+
+                            Spacer(Modifier.height(Spacing.sm))
+
+                            // Separate row for the secondary/status actions — on narrow screens
+                            // these previously overflowed off-screen when combined with the play
+                            // row above, clipping the watched/download buttons and squeezing the
+                            // favorite icon's touch target into its neighbor.
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 IconButton(onClick = { viewModel.toggleFavorite() }) {
                                     Icon(
                                         if (state.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,

@@ -11,7 +11,7 @@ from typing import Optional
 from datetime import datetime, timedelta
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -77,6 +77,15 @@ _active_processes: dict[str, asyncio.subprocess.Process] = {}
 
 # Keeps strong references to transcode tasks restarted at startup (asyncio only holds weak ones).
 _resume_tasks: list[asyncio.Task] = []
+
+# Per-job SSE subscribers, so /jobs/{id}/stream can push updates the moment a job changes
+# instead of clients polling on a timer.
+_subscribers: dict[str, list[asyncio.Queue]] = {}
+
+
+def _publish(job_id: str) -> None:
+    for q in _subscribers.get(job_id, []):
+        q.put_nowait(None)
 
 
 async def resume_interrupted_jobs():
@@ -374,6 +383,7 @@ async def stream_progress(process: asyncio.subprocess.Process, job_id: str, dura
                 jobs[job_id]["eta_seconds"] = round(remaining_us / 1_000_000 / speed, 1)
 
             jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+            _publish(job_id)
 
 
 async def run_transcode(job_id: str, source: str, output: str, preset: dict, duration_us: Optional[float]):
@@ -384,6 +394,7 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
         jobs[job_id]["status"] = "running"
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
         _save_jobs()
+        _publish(job_id)
 
         cmd = build_ffmpeg_command(source, output, preset)
 
@@ -450,6 +461,7 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
         if job_id in jobs:
             jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
             _save_jobs()
+            _publish(job_id)
 
 
 def _validate_transcode_request(req: TranscodeRequest) -> tuple[Path, dict]:
@@ -633,11 +645,41 @@ async def delete_job(job_id: str):
     output_path = job.get("output_path")
     del jobs[job_id]
     _save_jobs()
+    _publish(job_id)
 
     if output_path and Path(output_path).exists():
         Path(output_path).unlink()
 
     return {"deleted": job_id}
+
+
+@app.get("/jobs/{job_id}/stream")
+async def stream_job(job_id: str):
+    """Server-Sent Events stream of job status, pushed the moment it changes (progress, fps,
+    speed, status transitions) instead of making clients poll on a timer."""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    async def event_gen():
+        q: asyncio.Queue = asyncio.Queue()
+        _subscribers.setdefault(job_id, []).append(q)
+        try:
+            yield f"data: {json.dumps(_to_job_status(jobs[job_id]).model_dump())}\n\n"
+            while True:
+                try:
+                    await asyncio.wait_for(q.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"  # keep-alive so proxies/NAT don't drop the idle connection
+                    continue
+                if job_id not in jobs:
+                    break
+                yield f"data: {json.dumps(_to_job_status(jobs[job_id]).model_dump())}\n\n"
+                if jobs[job_id]["status"] in ("complete", "failed"):
+                    break
+        finally:
+            _subscribers.get(job_id, []).remove(q)
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
 @app.get("/health")

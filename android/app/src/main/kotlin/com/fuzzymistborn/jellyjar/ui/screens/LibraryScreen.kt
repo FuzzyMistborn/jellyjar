@@ -225,7 +225,7 @@ fun LibraryScreen(
                 }
 
                 // Genre filter chips
-                if (state.genres.isNotEmpty()) {
+                if (state.genreFilterEnabled && state.genres.isNotEmpty()) {
                     LazyRow(
                         contentPadding = PaddingValues(horizontal = Spacing.xl),
                         horizontalArrangement = Arrangement.spacedBy(Spacing.sm),

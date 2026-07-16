@@ -85,6 +85,7 @@ data class PlaybackInfoRequest(
 
 data class PlaybackMediaSource(
     val Id: String,
+    val Container: String? = null,
     val SupportsDirectPlay: Boolean = false,
     val SupportsDirectStream: Boolean = false,
     val TranscodingUrl: String? = null,
@@ -229,8 +230,21 @@ object JellyfinImageHelper {
     fun unauthHeader(): String =
         """MediaBrowser Client="JellyJar", Device="Android", DeviceId="jellyjar-android", Version="$version""""
 
-    fun streamUrl(baseUrl: String, itemId: String, token: String): String =
-        "$baseUrl/Videos/$itemId/stream?static=true&api_key=$token"
+    // Without a container extension in the path, Jellyfin can't guarantee a byte-range-capable,
+    // Content-Length response for /stream — it may fall back to chunked transfer, which
+    // ExoPlayer reports as non-seekable (the scrub bar won't drag at all). Passing the actual
+    // source container + MediaSourceId gets a proper static file response that is seekable.
+    fun streamUrl(
+        baseUrl: String,
+        itemId: String,
+        token: String,
+        container: String? = null,
+        mediaSourceId: String? = null,
+    ): String {
+        val ext = container?.let { ".$it" } ?: ""
+        val mediaSourceParam = mediaSourceId?.let { "&mediaSourceId=$it" } ?: ""
+        return "$baseUrl/Videos/$itemId/stream$ext?static=true$mediaSourceParam&api_key=$token"
+    }
 
     fun trickplayTileUrl(baseUrl: String, itemId: String, width: Int, tileIndex: Int, token: String): String =
         "$baseUrl/Videos/$itemId/Trickplay/$width/$tileIndex.jpg?api_key=$token"

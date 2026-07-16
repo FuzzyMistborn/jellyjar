@@ -60,40 +60,61 @@ class DownloadWorker @AssistedInject constructor(
         createNotificationChannel()
         setForeground(createForegroundInfo("Waiting for transcode…", 0))
 
-        // Poll until transcode is complete
-        var job: TranscodeJob? = null
-        var attempts = 0
-        var polling = true
-        while (polling) {
-            val result = downloadRepo.pollJobStatus(jobId)
-            if (result.isFailure) {
-                if (attempts++ > 3) {
-                    return if (runAttemptCount < MAX_RETRY_ATTEMPTS) {
-                        Result.retry()
-                    } else {
-                        downloadRepo.markFailed(jobId)
-                        postResultNotification(jobId, success = false)
-                        Result.failure()
+        // Prefer a live SSE stream for smooth, low-latency progress; only falls back to polling
+        // if Press doesn't support /stream (older deployment) or the connection drops.
+        var job: TranscodeJob? = runCatching {
+            var terminal: TranscodeJob? = null
+            downloadRepo.streamJobStatus(jobId).collect { j ->
+                when (j.status) {
+                    "complete", "failed" -> terminal = j
+                    else -> {
+                        val progress = (j.progress ?: 0f).toInt()
+                        setForeground(createForegroundInfo("Transcoding $progress%", progress))
                     }
                 }
-                delay(5_000)
-                continue
             }
-            job = result.getOrNull()!!
-            when (job.status) {
-                "complete" -> polling = false
-                "failed" -> {
-                    postResultNotification(jobId, success = false)
-                    return Result.failure(workDataOf("error" to (job.error ?: "Transcode failed")))
-                }
-                else -> {
-                    val progress = (job.progress ?: 0f).toInt()
-                    setForeground(createForegroundInfo("Transcoding $progress%", progress))
+            terminal
+        }.getOrNull()
+
+        if (job == null) {
+            // Poll until transcode is complete
+            var attempts = 0
+            var polling = true
+            while (polling) {
+                val result = downloadRepo.pollJobStatus(jobId)
+                if (result.isFailure) {
+                    if (attempts++ > 3) {
+                        return if (runAttemptCount < MAX_RETRY_ATTEMPTS) {
+                            Result.retry()
+                        } else {
+                            downloadRepo.markFailed(jobId)
+                            postResultNotification(jobId, success = false)
+                            Result.failure()
+                        }
+                    }
                     delay(5_000)
+                    continue
+                }
+                job = result.getOrNull()!!
+                when (job!!.status) {
+                    "complete" -> polling = false
+                    "failed" -> {
+                        postResultNotification(jobId, success = false)
+                        return Result.failure(workDataOf("error" to (job!!.error ?: "Transcode failed")))
+                    }
+                    else -> {
+                        val progress = (job!!.progress ?: 0f).toInt()
+                        setForeground(createForegroundInfo("Transcoding $progress%", progress))
+                        delay(5_000)
+                    }
                 }
             }
         }
         if (job == null) return Result.failure()
+        if (job!!.status == "failed") {
+            postResultNotification(jobId, success = false)
+            return Result.failure(workDataOf("error" to (job!!.error ?: "Transcode failed")))
+        }
 
         setForeground(createForegroundInfo("Downloading…", 0))
         downloadRepo.downloadFile(jobId, downloadPath, filename).onFailure {

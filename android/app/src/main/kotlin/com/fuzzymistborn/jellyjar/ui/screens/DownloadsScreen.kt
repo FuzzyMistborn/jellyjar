@@ -38,7 +38,11 @@ fun DownloadsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                    // Extra vertical clearance beyond the status bar itself — on gesture-nav
+                    // devices the swipe-down-for-notifications zone can extend a bit past the
+                    // physical status bar, making a trailing icon button sitting right at that
+                    // edge hard to tap reliably.
+                    .padding(horizontal = Spacing.md, vertical = Spacing.lg),
                 trailingContent = {
                     IconButton(onClick = onStorageClick) {
                         Icon(Icons.Default.Storage, contentDescription = "Manage Storage", tint = OnSurface)
@@ -140,6 +144,16 @@ fun DownloadsScreen(
                             item {
                                 Text(
                                     "Queue paused — items already in progress will finish",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = OnSurfaceMuted,
+                                    modifier = Modifier.padding(bottom = 4.dp),
+                                )
+                            }
+                        } else if (state.active.isNotEmpty()) {
+                            item {
+                                Text(
+                                    "Waiting for Press — ${state.active.size} " +
+                                        "item${if (state.active.size != 1) "s" else ""} transcoding",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = OnSurfaceMuted,
                                     modifier = Modifier.padding(bottom = 4.dp),

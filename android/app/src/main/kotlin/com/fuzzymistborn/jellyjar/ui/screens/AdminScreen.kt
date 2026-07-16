@@ -348,6 +348,12 @@ fun AdminScreen(
                 checked = state.showMyList,
                 onCheckedChange = { viewModel.setShowMyList(it) },
             )
+            SettingsToggleRow(
+                title = "Genre Filter",
+                subtitle = "Show genre chips when browsing a library",
+                checked = state.genreFilterEnabled,
+                onCheckedChange = { viewModel.setGenreFilterEnabled(it) },
+            )
         }
 
         // ── Playback ──────────────────────────────────────────────────────────
