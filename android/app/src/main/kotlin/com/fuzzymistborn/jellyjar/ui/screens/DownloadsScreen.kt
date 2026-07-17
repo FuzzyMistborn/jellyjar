@@ -323,53 +323,61 @@ private fun QueuedDownloadCard(
     onCancel: () -> Unit,
 ) {
     Surface(color = SurfaceVariant, shape = RoundedCornerShape(Radius.md)) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = Spacing.md, vertical = Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
-            Text(
-                "$position",
-                style = MaterialTheme.typography.titleMedium,
-                color = OnSurfaceMuted,
-                modifier = Modifier.widthIn(min = Spacing.xl),
-            )
-            Column(modifier = Modifier.weight(1f)) {
+            // Title gets the full card width — the reorder controls used to sit alongside it
+            // in one row, crushing the title down to a sliver on portrait-width screens.
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                Text(
+                    "$position",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = OnSurfaceMuted,
+                    modifier = Modifier.widthIn(min = Spacing.xl),
+                )
                 Text(
                     entity.title,
                     style = MaterialTheme.typography.titleMedium,
                     color = OnSurface,
                     maxLines = 2,
+                    modifier = Modifier.weight(1f),
                 )
-                Spacer(Modifier.height(2.dp))
+                IconButton(onClick = onCancel, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Cancel", tint = OnSurfaceMuted)
+                }
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Text(
                     "Waiting · ${entity.preset}",
                     style = MaterialTheme.typography.bodySmall,
                     color = OnSurfaceMuted,
                 )
-            }
-            IconButton(onClick = onPrioritize, enabled = !isFirst) {
-                Icon(
-                    Icons.Default.KeyboardDoubleArrowUp, contentDescription = "Move to top",
-                    tint = if (isFirst) OnSurfaceMuted.copy(alpha = 0.3f) else Primary,
-                )
-            }
-            IconButton(onClick = onMoveUp, enabled = !isFirst) {
-                Icon(
-                    Icons.Default.KeyboardArrowUp, contentDescription = "Move up",
-                    tint = if (isFirst) OnSurfaceMuted.copy(alpha = 0.3f) else OnSurfaceMuted,
-                )
-            }
-            IconButton(onClick = onMoveDown, enabled = !isLast) {
-                Icon(
-                    Icons.Default.KeyboardArrowDown, contentDescription = "Move down",
-                    tint = if (isLast) OnSurfaceMuted.copy(alpha = 0.3f) else OnSurfaceMuted,
-                )
-            }
-            IconButton(onClick = onCancel) {
-                Icon(Icons.Default.Close, contentDescription = "Cancel", tint = OnSurfaceMuted)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onPrioritize, enabled = !isFirst, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Default.KeyboardDoubleArrowUp, contentDescription = "Move to top",
+                            tint = if (isFirst) OnSurfaceMuted.copy(alpha = 0.3f) else Primary,
+                        )
+                    }
+                    IconButton(onClick = onMoveUp, enabled = !isFirst, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Default.KeyboardArrowUp, contentDescription = "Move up",
+                            tint = if (isFirst) OnSurfaceMuted.copy(alpha = 0.3f) else OnSurfaceMuted,
+                        )
+                    }
+                    IconButton(onClick = onMoveDown, enabled = !isLast, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Default.KeyboardArrowDown, contentDescription = "Move down",
+                            tint = if (isLast) OnSurfaceMuted.copy(alpha = 0.3f) else OnSurfaceMuted,
+                        )
+                    }
+                }
             }
         }
     }
