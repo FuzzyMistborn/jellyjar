@@ -342,6 +342,22 @@ def build_ffmpeg_command(source: str, output: str, preset: dict, encoder: str | 
     ]
 
 
+async def _drain_stderr(process: asyncio.subprocess.Process) -> bytes:
+    """Continuously reads ffmpeg's stderr while it runs and keeps only the tail.
+
+    ffmpeg writes verbose per-frame status to stderr by default. If nothing reads that
+    pipe while the process runs, the OS pipe buffer fills and ffmpeg blocks on the write —
+    which also freezes the `-progress pipe:1` stdout stream the progress bar depends on.
+    """
+    tail = b""
+    while True:
+        chunk = await process.stderr.read(8192)
+        if not chunk:
+            break
+        tail = (tail + chunk)[-2000:]
+    return tail
+
+
 async def stream_progress(process: asyncio.subprocess.Process, job_id: str, duration_us: Optional[float]) -> None:
     """Read ffmpeg's `-progress pipe:1` output and update progress/fps/speed/eta on the job."""
     current_us = None
@@ -405,21 +421,23 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
                 stderr=asyncio.subprocess.PIPE,
             )
             _active_processes[job_id] = process
-            await stream_progress(process, job_id, duration_us)
+            _, stderr_bytes = await asyncio.gather(
+                stream_progress(process, job_id, duration_us),
+                _drain_stderr(process),
+            )
             await process.wait()
             _active_processes.pop(job_id, None)
 
             if job_id not in jobs:
                 return  # cancelled mid-transcode; delete_job already removed the output file
 
-            stderr_bytes = await process.stderr.read()
             if process.returncode == 0:
                 jobs[job_id]["status"] = "complete"
                 jobs[job_id]["output_path"] = output
                 jobs[job_id]["progress"] = 100.0
                 jobs[job_id]["eta_seconds"] = 0.0
             else:
-                error_text = stderr_bytes.decode()[-1000:]
+                error_text = stderr_bytes.decode(errors="replace")[-1000:]
                 if _active_encoder != "libx264":
                     # Hardware encoder failed at runtime — fall back to libx264
                     print(f"[Press] {_active_encoder} failed (rc={process.returncode}), retrying with libx264", flush=True)
@@ -430,14 +448,17 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
                         stderr=asyncio.subprocess.PIPE,
                     )
                     _active_processes[job_id] = sw_process
-                    await stream_progress(sw_process, job_id, duration_us)
+                    _, sw_stderr_bytes = await asyncio.gather(
+                        stream_progress(sw_process, job_id, duration_us),
+                        _drain_stderr(sw_process),
+                    )
                     await sw_process.wait()
                     _active_processes.pop(job_id, None)
 
                     if job_id not in jobs:
                         return  # cancelled during fallback retry
 
-                    sw_stderr = (await sw_process.stderr.read()).decode()[-1000:]
+                    sw_stderr = sw_stderr_bytes.decode(errors="replace")[-1000:]
                     if sw_process.returncode == 0:
                         jobs[job_id]["status"] = "complete"
                         jobs[job_id]["output_path"] = output

@@ -102,10 +102,8 @@ fun AdminScreen(
     // Track whether URL/shim fields have unsaved changes
     val savedUrl = remember { mutableStateOf(state.jellyfinUrl) }
     val savedShimUrl = remember { mutableStateOf(state.shimUrl) }
-    val savedDownloadPath = remember { mutableStateOf(state.downloadPath) }
     val isDirty = state.jellyfinUrl != savedUrl.value ||
-        state.shimUrl != savedShimUrl.value ||
-        state.downloadPath != savedDownloadPath.value
+        state.shimUrl != savedShimUrl.value
 
     Column(
         modifier = Modifier
@@ -303,7 +301,6 @@ fun AdminScreen(
                     viewModel.saveAll()
                     savedUrl.value = state.jellyfinUrl
                     savedShimUrl.value = state.shimUrl
-                    savedDownloadPath.value = state.downloadPath
                 },
             )
 
@@ -503,7 +500,6 @@ fun AdminScreen(
                     viewModel.saveAll()
                     savedUrl.value = state.jellyfinUrl
                     savedShimUrl.value = state.shimUrl
-                    savedDownloadPath.value = state.downloadPath
                 },
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = Primary),

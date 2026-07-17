@@ -709,7 +709,10 @@ class AdminViewModel @Inject constructor(
     fun setUsername(v: String) = _state.update { it.copy(username = v) }
     fun setPassword(v: String) = _state.update { it.copy(password = v) }
     fun setShimUrl(v: String) = _state.update { it.copy(shimUrl = v) }
-    fun setDownloadPath(v: String) = _state.update { it.copy(downloadPath = v) }
+    fun setDownloadPath(v: String) {
+        _state.update { it.copy(downloadPath = v) }
+        viewModelScope.launch { settings.saveDownloadPath(v) }
+    }
 
     fun authenticate() = viewModelScope.launch {
         _state.update { it.copy(isAuthenticating = true, authError = null) }
