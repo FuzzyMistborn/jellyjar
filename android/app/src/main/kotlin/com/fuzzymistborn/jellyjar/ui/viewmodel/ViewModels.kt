@@ -424,7 +424,11 @@ class DetailViewModel @Inject constructor(
                 settings.settings.map { it.streamOverCellular },
             ) { online, wifi, overCellular -> Triple(online, wifi, overCellular) }
                 .collect { (online, wifi, overCellular) ->
+                    val wasOffline = !_state.value.isOnline
                     _state.update { it.copy(isOnline = online, isWifi = wifi, streamOverCellular = overCellular) }
+                    if (online && wasOffline) {
+                        _state.value.item?.id?.let { loadItem(it) }
+                    }
                 }
         }
         viewModelScope.launch {
@@ -905,15 +909,26 @@ class DownloadsViewModel @Inject constructor(
                 val newEtas = mutableMapOf<String, Int?>()
                 all.filter { d -> d.status in activeStatusNames }.forEach { d ->
                     val prev = progressSamples[d.jellyfinId]
-                    val eta: Int? = if (prev != null && d.progress > prev.first && d.progress < 100f) {
+                    if (prev != null && d.progress > prev.first && d.progress < 100f) {
                         val elapsedMs = now - prev.second
-                        if (elapsedMs > 0) {
+                        val eta = if (elapsedMs > 0) {
                             val rate = (d.progress - prev.first) / elapsedMs.toFloat()
                             ((100f - d.progress) / rate / 60000f).toInt().coerceAtLeast(1)
-                        } else null
-                    } else null
-                    newEtas[d.jellyfinId] = eta
-                    progressSamples[d.jellyfinId] = d.progress to now
+                        } else {
+                            _state.value.etaByJellyfinId[d.jellyfinId]
+                        }
+                        newEtas[d.jellyfinId] = eta
+                        progressSamples[d.jellyfinId] = d.progress to now
+                    } else if (prev == null) {
+                        newEtas[d.jellyfinId] = null
+                        progressSamples[d.jellyfinId] = d.progress to now
+                    } else {
+                        // This item's progress hasn't advanced since the last emission of the shared
+                        // downloads Flow (likely triggered by a different concurrent download ticking).
+                        // Keep the last known ETA and baseline instead of resetting — otherwise ETA
+                        // flickers/disappears whenever 2+ downloads are active at once.
+                        newEtas[d.jellyfinId] = _state.value.etaByJellyfinId[d.jellyfinId]
+                    }
                 }
 
                 val completed = all.filter { d -> d.status == com.fuzzymistborn.jellyjar.model.DownloadStatus.COMPLETE.name }
@@ -1082,6 +1097,7 @@ class StorageViewModel @Inject constructor(
 // ─── Season ViewModel ─────────────────────────────────────────────────────────
 
 data class SeasonState(
+    val seasonId: String? = null,
     val seriesId: String? = null,
     val seriesName: String? = null,
     val seasonName: String? = null,
@@ -1119,7 +1135,13 @@ class SeasonViewModel @Inject constructor(
                 settings.settings.map { it.streamOverCellular },
             ) { online, wifi, overCellular -> Triple(online, wifi, overCellular) }
                 .collect { (online, wifi, overCellular) ->
+                    val wasOffline = !_state.value.isOnline
                     _state.update { it.copy(isOnline = online, isWifi = wifi, streamOverCellular = overCellular) }
+                    if (online && wasOffline) {
+                        val seasonId = _state.value.seasonId
+                        val seriesId = _state.value.seriesId
+                        if (seasonId != null && seriesId != null) load(seasonId, seriesId)
+                    }
                 }
         }
         viewModelScope.launch {
@@ -1130,7 +1152,7 @@ class SeasonViewModel @Inject constructor(
     }
 
     fun load(seasonId: String, seriesId: String) = viewModelScope.launch {
-        _state.update { it.copy(isLoading = true, seriesId = seriesId) }
+        _state.update { it.copy(isLoading = true, seasonId = seasonId, seriesId = seriesId) }
         val s = settings.settings.first()
         _state.update { it.copy(jellyfinUrl = s.jellyfinUrl, jellyfinToken = s.jellyfinToken, episodeViewGrid = s.episodeViewGrid) }
 

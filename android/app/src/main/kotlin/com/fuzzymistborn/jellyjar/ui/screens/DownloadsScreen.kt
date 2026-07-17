@@ -184,7 +184,7 @@ fun DownloadsScreen(
                         items(state.completed, key = { it.jellyfinId }) { entity ->
                             CompletedDownloadCard(
                                 entity = entity,
-                                thumbnailUrl = entity.thumbnailPath
+                                thumbnailUrl = entity.thumbnailPath?.let { "file://$it" }
                                     ?: viewModel.thumbnailUrl(entity.jellyfinId),
                                 onPlay = { onPlayClick(entity.localPath, entity.jellyfinId) },
                                 onDelete = { viewModel.removeDownload(entity.jellyfinId) },

@@ -138,7 +138,10 @@
 </div>
 
 <div class="panel">
-  <h2>History</h2>
+  <div class="panel-header">
+    <h2>History</h2>
+    <button class="danger" id="delete-all-history" onclick="deleteAllHistory()" style="display:none">Delete All</button>
+  </div>
   <table id="history-table">
     <thead>
       <tr><th>Title</th><th>ID</th><th>Status</th><th>Output</th><th>Finished</th><th></th></tr>
@@ -173,6 +176,8 @@ const queuedBody = document.getElementById('queued-body');
 const queuedEmpty = document.getElementById('queued-empty');
 const historyBody = document.getElementById('history-body');
 const historyEmpty = document.getElementById('history-empty');
+const deleteAllHistoryBtn = document.getElementById('delete-all-history');
+let historyJobIds = [];
 const presetsBody = document.getElementById('presets-body');
 const healthEl = document.getElementById('health');
 const queueSummaryEl = document.getElementById('queue-summary');
@@ -286,6 +291,8 @@ async function refreshJobs() {
     </tr>`).join('');
 
   historyEmpty.style.display = history.length ? 'none' : 'block';
+  deleteAllHistoryBtn.style.display = history.length ? 'inline-block' : 'none';
+  historyJobIds = history.map(job => job.job_id);
   historyBody.innerHTML = history.map(job => {
     const outputName = job.output_path ? job.output_path.split('/').pop() : '—';
     const outputCell = job.status === 'complete'
@@ -308,6 +315,13 @@ async function refreshJobs() {
 async function deleteJob(id) {
   if (!confirm('Delete this job and its output file?')) return;
   await fetch(`/jobs/${id}`, { method: 'DELETE' });
+  refreshJobs();
+}
+
+async function deleteAllHistory() {
+  if (!historyJobIds.length) return;
+  if (!confirm(`Delete all ${historyJobIds.length} history job(s) and their output files?`)) return;
+  await Promise.all(historyJobIds.map(id => fetch(`/jobs/${id}`, { method: 'DELETE' })));
   refreshJobs();
 }
 

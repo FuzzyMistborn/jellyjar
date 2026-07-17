@@ -185,7 +185,8 @@ fun SeasonScreen(
                                 val epDownload = state.episodeDownloads[episode.id]
                                 EpisodeThumb(
                                     episode = episode,
-                                    thumbnailUrl = viewModel.thumbnailUrl(episode.id),
+                                    thumbnailUrl = epDownload?.thumbnailPath?.let { "file://$it" }
+                                        ?: viewModel.thumbnailUrl(episode.id),
                                     download = epDownload,
                                     isOnline = state.isOnline,
                                     canStream = state.canStream,
@@ -210,7 +211,8 @@ fun SeasonScreen(
                         val epDownload = state.episodeDownloads[episode.id]
                         EpisodeRow(
                             episode = episode,
-                            thumbnailUrl = viewModel.thumbnailUrl(episode.id),
+                            thumbnailUrl = epDownload?.thumbnailPath?.let { "file://$it" }
+                                ?: viewModel.thumbnailUrl(episode.id),
                             download = epDownload,
                             isOnline = state.isOnline,
                             canStream = state.canStream,

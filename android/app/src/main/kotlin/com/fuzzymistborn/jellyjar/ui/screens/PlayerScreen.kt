@@ -80,6 +80,11 @@ fun PlayerScreen(
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onDispose {
             controller.show(WindowInsetsCompat.Type.systemBars())
+            // WindowInsetsControllerCompat.show() doesn't always trigger an immediate
+            // relayout, so the next screen's statusBarsPadding() can read a stale (zero)
+            // inset for one frame and render its header under the status bar. Forcing a
+            // fresh insets pass here closes that race.
+            window.decorView.requestApplyInsets()
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
