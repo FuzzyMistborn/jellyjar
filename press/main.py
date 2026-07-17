@@ -763,7 +763,7 @@ async def get_presets():
 
 
 # ─── Web UI + preset management ──────────────────────────────────────────────
-# In-memory only, like `jobs` — edits reset on container restart.
+# Preset edits persist to $CONFIG_ROOT/presets.json (see save_presets), same as jobs.json.
 
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 

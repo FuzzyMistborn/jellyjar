@@ -14,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -99,11 +100,13 @@ fun AdminScreen(
 
     LaunchedEffect(Unit) { viewModel.checkJellyfinConnection() }
 
-    // Track whether URL/shim fields have unsaved changes
-    val savedUrl = remember { mutableStateOf(state.jellyfinUrl) }
-    val savedShimUrl = remember { mutableStateOf(state.shimUrl) }
-    val isDirty = state.jellyfinUrl != savedUrl.value ||
-        state.shimUrl != savedShimUrl.value
+    // No explicit Save button — everything persists as it changes; the Press URL commits on
+    // focus loss / test / leaving the screen, so catch system back as well as the header arrow.
+    val leaveScreen = {
+        viewModel.commitShimUrl()
+        onBack()
+    }
+    androidx.activity.compose.BackHandler(onBack = leaveScreen)
 
     Column(
         modifier = Modifier
@@ -118,7 +121,7 @@ fun AdminScreen(
         // Header
         ScreenHeader(
             title = "Settings",
-            onBack = onBack,
+            onBack = leaveScreen,
             modifier = Modifier.padding(bottom = Spacing.sm),
         )
 
@@ -208,6 +211,7 @@ fun AdminScreen(
                 placeholder = "192.168.1.x:8090",
                 value = state.shimUrl,
                 onValueChange = viewModel::setShimUrl,
+                onFocusLost = viewModel::commitShimUrl,
             )
             OutlinedButton(
                 onClick = viewModel::testShim,
@@ -296,12 +300,7 @@ fun AdminScreen(
                 title = "Wi-Fi Only",
                 subtitle = "Pause downloads on mobile data",
                 checked = state.wifiOnly,
-                onCheckedChange = {
-                    viewModel.setWifiOnly(it)
-                    viewModel.saveAll()
-                    savedUrl.value = state.jellyfinUrl
-                    savedShimUrl.value = state.shimUrl
-                },
+                onCheckedChange = { viewModel.setWifiOnly(it) },
             )
 
             // Simultaneous downloads (queue concurrency)
@@ -493,23 +492,6 @@ fun AdminScreen(
             }
         }
 
-        // Save button — only shown when there are unsaved field changes
-        AnimatedVisibility(visible = isDirty) {
-            Button(
-                onClick = {
-                    viewModel.saveAll()
-                    savedUrl.value = state.jellyfinUrl
-                    savedShimUrl.value = state.shimUrl
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Primary),
-            ) {
-                Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(IconSize.md))
-                Spacer(Modifier.width(Spacing.sm))
-                Text("Save Changes")
-            }
-        }
-
         Spacer(Modifier.height(Spacing.sm))
 
         Text(
@@ -599,8 +581,10 @@ private fun SettingsTextField(
     onValueChange: (String) -> Unit,
     placeholder: String = "",
     isPassword: Boolean = false,
+    onFocusLost: (() -> Unit)? = null,
 ) {
     var passwordVisible by remember { mutableStateOf(false) }
+    var hadFocus by remember { mutableStateOf(false) }
 
     OutlinedTextField(
         value = value,
@@ -623,7 +607,12 @@ private fun SettingsTextField(
             }
         } else null,
         singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { focusState ->
+                if (focusState.isFocused) hadFocus = true
+                else if (hadFocus) onFocusLost?.invoke()
+            },
         colors = themedTextFieldColors(),
     )
 }

@@ -580,7 +580,10 @@ class DownloadRepository @Inject constructor(
                     val doc = tree.findFile(filename)
                         ?: tree.createFile("video/mp4", filename)
                         ?: error("Cannot create file in: $destinationDir")
-                    val stream = context.contentResolver.openOutputStream(doc.uri)
+                    // "wt" truncates an existing file — findFile() can return one left by an
+                    // interrupted attempt; plain "w" would leave stale trailing bytes if the new
+                    // write is shorter, corrupting the MP4.
+                    val stream = context.contentResolver.openOutputStream(doc.uri, "wt")
                         ?: error("Cannot open output stream for: ${doc.uri}")
                     // Convert the document URI to a real file path so ExoPlayer can read it.
                     // ContentResolver.open* on document URIs from tree access is blocked by

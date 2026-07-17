@@ -94,12 +94,15 @@ class LibraryViewModel @Inject constructor(
         }
         // Retry Jellyfin with backoff when online but server is unreachable; stops once available
         viewModelScope.launch {
-            var delayMs = 30_000L
-            while (!_state.value.jellyfinAvailable) {
-                kotlinx.coroutines.delay(delayMs)
-                if (_state.value.isOnline && !_state.value.jellyfinAvailable && !_state.value.showingDownloads) {
-                    loadLibrary()
-                    delayMs = (delayMs * 2).coerceAtMost(300_000L)
+            _state.map { it.jellyfinAvailable }.distinctUntilChanged().collectLatest { available ->
+                if (available) return@collectLatest
+                var delayMs = 30_000L
+                while (true) {
+                    kotlinx.coroutines.delay(delayMs)
+                    if (_state.value.isOnline && !_state.value.showingDownloads) {
+                        loadLibrary()
+                        delayMs = (delayMs * 2).coerceAtMost(300_000L)
+                    }
                 }
             }
         }
@@ -674,6 +677,11 @@ class AdminViewModel @Inject constructor(
     private val _state = MutableStateFlow(AdminState())
     val state: StateFlow<AdminState> = _state.asStateFlow()
 
+    // While the user is editing a URL field, the settings Flow must not clobber the typed text
+    // with the stored value (any other setting being saved re-emits the whole preferences map).
+    private var jellyfinUrlDirty = false
+    private var shimUrlDirty = false
+
     init {
         viewModelScope.launch {
             settings.settings.collect { s ->
@@ -681,8 +689,8 @@ class AdminViewModel @Inject constructor(
                 val urlChanged = _state.value.jellyfinUrl != s.jellyfinUrl
                 _state.update {
                     it.copy(
-                        jellyfinUrl = s.jellyfinUrl,
-                        shimUrl = s.shimUrl,
+                        jellyfinUrl = if (jellyfinUrlDirty) it.jellyfinUrl else s.jellyfinUrl,
+                        shimUrl = if (shimUrlDirty) it.shimUrl else s.shimUrl,
                         downloadPath = s.downloadPath,
                         isPinEnabled = s.isPinEnabled,
                         hasCredentials = hasCredentials,
@@ -716,10 +724,26 @@ class AdminViewModel @Inject constructor(
         }
     }
 
-    fun setJellyfinUrl(v: String) = _state.update { it.copy(jellyfinUrl = v) }
+    fun setJellyfinUrl(v: String) {
+        jellyfinUrlDirty = true
+        _state.update { it.copy(jellyfinUrl = v) }
+    }
     fun setUsername(v: String) = _state.update { it.copy(username = v) }
     fun setPassword(v: String) = _state.update { it.copy(password = v) }
-    fun setShimUrl(v: String) = _state.update { it.copy(shimUrl = v) }
+    fun setShimUrl(v: String) {
+        shimUrlDirty = true
+        _state.update { it.copy(shimUrl = v) }
+    }
+
+    // Persists the Press URL (with scheme applied). Called on field focus loss, before a
+    // connection test, and on leaving the screen — there is no explicit Save button.
+    fun commitShimUrl() {
+        if (!shimUrlDirty) return
+        shimUrlDirty = false
+        val url = ensureScheme(_state.value.shimUrl)
+        _state.update { it.copy(shimUrl = url) }
+        viewModelScope.launch { settings.saveShimUrl(url) }
+    }
     fun setDownloadPath(v: String) {
         _state.update { it.copy(downloadPath = v) }
         viewModelScope.launch { settings.saveDownloadPath(v) }
@@ -733,6 +757,7 @@ class AdminViewModel @Inject constructor(
             password = _state.value.password,
         ).onSuccess { result ->
             settings.saveJellyfinAuth(ensureScheme(_state.value.jellyfinUrl), result.userId, result.token)
+            jellyfinUrlDirty = false
             _state.update { it.copy(isAuthenticating = false, hasCredentials = true, isAuthenticated = true) }
         }.onFailure { e ->
             _state.update { it.copy(isAuthenticating = false, isAuthenticated = false, authError = e.message) }
@@ -753,6 +778,7 @@ class AdminViewModel @Inject constructor(
     }
 
     fun testShim() = viewModelScope.launch {
+        commitShimUrl()
         _state.update { it.copy(isTestingShim = true, shimOk = null) }
         val shimUrl = ensureScheme(_state.value.shimUrl)
         if (shimUrl.isBlank()) {
@@ -798,7 +824,10 @@ class AdminViewModel @Inject constructor(
         settings.verifyPin(input, s.parentalPinHash)
     }
 
-    fun setWifiOnly(v: Boolean) = _state.update { it.copy(wifiOnly = v) }
+    fun setWifiOnly(v: Boolean) {
+        _state.update { it.copy(wifiOnly = v) }
+        viewModelScope.launch { settings.saveWifiOnly(v) }
+    }
 
     fun setStreamOverCellular(v: Boolean) {
         _state.update { it.copy(streamOverCellular = v) }
@@ -843,15 +872,6 @@ class AdminViewModel @Inject constructor(
     fun setMaxConcurrentDownloads(v: Int) {
         _state.update { it.copy(maxConcurrentDownloads = v) }
         viewModelScope.launch { settings.saveMaxConcurrentDownloads(v) }
-    }
-
-    fun saveAll() = viewModelScope.launch {
-        settings.saveAdminSettings(
-            shimUrl = ensureScheme(_state.value.shimUrl),
-            downloadPath = _state.value.downloadPath,
-            wifiOnly = _state.value.wifiOnly,
-        )
-        refreshStorageInfo()
     }
 
     private suspend fun refreshStorageInfo() {
