@@ -15,7 +15,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowInsetsCompat
@@ -179,10 +181,19 @@ fun PlayerScreen(
         }
     }
 
+    // Distance in px from the root's bottom edge up to the top of the control bar (the row
+    // containing the seek bar). Measured off the real view instead of a hardcoded dp guess —
+    // a fixed offset landed in the middle of the screen on tablets, where the video area is a
+    // much smaller fraction of a wide/short landscape frame than on a phone.
+    var rootHeightPx by remember { mutableStateOf(0) }
+    var controlBarTopPx by remember { mutableStateOf<Int?>(null) }
+    val density = LocalDensity.current
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Color.Black)
+            .onGloballyPositioned { rootHeightPx = it.size.height },
     ) {
         AndroidView(
             factory = {
@@ -213,6 +224,10 @@ fun PlayerScreen(
                                 scrubPositionMs.value = null
                             }
                         })
+                    findViewById<android.view.View>(androidx.media3.ui.R.id.exo_bottom_bar)
+                        ?.addOnLayoutChangeListener { _, _, top, _, _, _, _, _, _ ->
+                            controlBarTopPx = top
+                        }
                 }
             },
             modifier = Modifier.fillMaxSize(),
@@ -222,13 +237,19 @@ fun PlayerScreen(
         val spec = trickplaySpec
         val scrubPos = scrubPositionMs.value
         if (spec != null && scrubPos != null) {
+            val barTop = controlBarTopPx
+            val bottomPadding = if (barTop != null && rootHeightPx > 0) {
+                with(density) { ((rootHeightPx - barTop).toFloat().coerceAtLeast(0f)).toDp() + Spacing.md }
+            } else {
+                120.dp
+            }
             TrickplayPreview(
                 spec = spec,
                 positionMs = scrubPos,
                 viewModel = viewModel,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 120.dp),
+                    .padding(bottom = bottomPadding),
             )
         }
 
