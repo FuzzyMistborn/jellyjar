@@ -87,17 +87,6 @@ fun DetailScreen(
         // and leaving a visible hard line at the image's actual cutoff.
         Box(modifier = Modifier.fillMaxSize().background(heroBackdropScrim(scrimStop = 0.45f, solidStop = 0.66f)))
 
-        // Vignette darkens the backdrop's corners/edges so the transition into the metadata
-        // row below reads as a soft falloff rather than a flat rectangle with a visible edge.
-        state.item?.let {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.65f)
-                    .background(vignetteScrim()),
-            )
-        }
-
         val item = state.item
 
         LazyColumn(
