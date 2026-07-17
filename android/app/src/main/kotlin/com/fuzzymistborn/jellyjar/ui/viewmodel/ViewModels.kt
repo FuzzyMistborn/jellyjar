@@ -96,14 +96,22 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             _state.map { it.jellyfinAvailable }.distinctUntilChanged().collectLatest { available ->
                 if (available) return@collectLatest
-                var delayMs = 30_000L
+                var delayMs = 15_000L
                 while (true) {
                     kotlinx.coroutines.delay(delayMs)
                     if (_state.value.isOnline && !_state.value.showingDownloads) {
                         loadLibrary()
-                        delayMs = (delayMs * 2).coerceAtMost(300_000L)
+                        delayMs = (delayMs * 2).coerceAtMost(60_000L)
                     }
                 }
+            }
+        }
+        // Device connectivity dropped and came back (Wi-Fi toggle, network switch, etc.) —
+        // re-check Jellyfin immediately instead of waiting on the backoff loop above, mirroring
+        // DetailViewModel's use of the same signal.
+        viewModelScope.launch {
+            networkMonitor.reconnected.collect {
+                if (!_state.value.showingDownloads) loadLibrary()
             }
         }
         viewModelScope.launch {
@@ -616,9 +624,6 @@ class DetailViewModel @Inject constructor(
 
     fun backdropUrl(itemId: String) =
         JellyfinImageHelper.backdropImageUrl(_state.value.jellyfinUrl, itemId)
-
-    fun logoUrl(itemId: String) =
-        JellyfinImageHelper.logoImageUrl(_state.value.jellyfinUrl, itemId)
 
     suspend fun streamUrl(itemId: String) = jellyfinRepo.getStreamUrl(itemId)
 

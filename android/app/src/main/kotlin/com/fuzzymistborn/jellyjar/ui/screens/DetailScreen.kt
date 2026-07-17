@@ -82,8 +82,21 @@ fun DetailScreen(
             )
         }
 
-        // Gradient fade to background
-        Box(modifier = Modifier.fillMaxSize().background(heroBackdropScrim()))
+        // Gradient fade to background — stops pushed out so the fade finishes right at the
+        // backdrop's clipped edge (fillMaxHeight(0.65f) above) instead of turning solid early
+        // and leaving a visible hard line at the image's actual cutoff.
+        Box(modifier = Modifier.fillMaxSize().background(heroBackdropScrim(scrimStop = 0.45f, solidStop = 0.66f)))
+
+        // Vignette darkens the backdrop's corners/edges so the transition into the metadata
+        // row below reads as a soft falloff rather than a flat rectangle with a visible edge.
+        state.item?.let {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.65f)
+                    .background(vignetteScrim()),
+            )
+        }
 
         val item = state.item
 
@@ -107,36 +120,23 @@ fun DetailScreen(
                 item(key = "metadata") {
                     BoxWithConstraints(modifier = Modifier.padding(horizontal = 32.dp)) {
                         val isWide = maxWidth >= 600.dp
+                        val posterWidth = if (isWide) 220.dp else 130.dp
 
                         Row {
-                            if (isWide) {
-                                PosterImage(
-                                    imageUrl = state.download?.thumbnailUri
-                                        ?: viewModel.posterUrl(item.id),
-                                    contentDescription = item.name,
-                                    modifier = Modifier.width(220.dp),
-                                )
-                                Spacer(Modifier.width(Spacing.xl))
-                            }
-
-                            Column(modifier = if (isWide) Modifier.weight(1f) else Modifier.fillMaxWidth()) {
-                        var logoLoaded by remember { mutableStateOf(false) }
-                        AsyncImage(
-                            model = ImageRequest.Builder(LocalContext.current)
-                                .data(viewModel.logoUrl(item.id))
-                                .crossfade(300)
-                                .build(),
-                            contentDescription = item.name,
-                            modifier = Modifier.heightIn(max = 110.dp).widthIn(max = 320.dp),
-                            onSuccess = { logoLoaded = true },
-                        )
-                        if (!logoLoaded) {
-                            Text(
-                                text = item.displayTitle,
-                                style = MaterialTheme.typography.displayMedium,
-                                color = OnSurface,
+                            PosterImage(
+                                imageUrl = state.download?.thumbnailUri
+                                    ?: viewModel.posterUrl(item.id),
+                                contentDescription = item.name,
+                                modifier = Modifier.width(posterWidth),
                             )
-                        }
+                            Spacer(Modifier.width(if (isWide) Spacing.xl else Spacing.lg))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = item.displayTitle,
+                            style = MaterialTheme.typography.displayMedium,
+                            color = OnSurface,
+                        )
 
                         Spacer(Modifier.height(Spacing.sm))
 

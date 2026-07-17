@@ -223,9 +223,6 @@ object JellyfinImageHelper {
     fun backdropImageUrl(baseUrl: String, itemId: String, index: Int = 0): String =
         "$baseUrl/Items/$itemId/Images/Backdrop/$index?quality=96&maxWidth=1920"
 
-    fun logoImageUrl(baseUrl: String, itemId: String): String =
-        "$baseUrl/Items/$itemId/Images/Logo?quality=90"
-
     private val version get() = BuildConfig.VERSION_NAME
 
     fun authHeader(token: String): String =

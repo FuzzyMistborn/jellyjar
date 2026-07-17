@@ -314,9 +314,6 @@ class JellyfinRepository @Inject constructor(
     fun backdropUrl(itemId: String, baseUrl: String): String =
         JellyfinImageHelper.backdropImageUrl(baseUrl, itemId)
 
-    fun logoUrl(itemId: String, baseUrl: String): String =
-        JellyfinImageHelper.logoImageUrl(baseUrl, itemId)
-
     // ── Offline cache lookups ──────────────────────────────────────────────────
 
     suspend fun getCachedItem(itemId: String): JellyfinItem? = withContext(Dispatchers.IO) {
