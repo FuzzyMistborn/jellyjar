@@ -9,7 +9,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -82,10 +81,10 @@ fun DetailScreen(
             )
         }
 
-        // Gradient fade to background — stops pushed out so the fade finishes right at the
-        // backdrop's clipped edge (fillMaxHeight(0.65f) above) instead of turning solid early
-        // and leaving a visible hard line at the image's actual cutoff.
-        Box(modifier = Modifier.fillMaxSize().background(heroBackdropScrim(scrimStop = 0.45f, solidStop = 0.66f)))
+        // Gradient fade to background — same scrimStop/backdropHeight ratio as SeasonScreen's
+        // hero (0.25/0.45), scaled to this screen's taller 0.65f backdrop so both screens shade
+        // by the same proportion instead of Detail reading lighter/darker than Season.
+        Box(modifier = Modifier.fillMaxSize().background(heroBackdropScrim(scrimStop = 0.36f, solidStop = 0.65f)))
 
         val item = state.item
 
@@ -94,12 +93,12 @@ fun DetailScreen(
         ) {
             // Back button
             item(key = "back") {
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier.statusBarsPadding().padding(Spacing.md),
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = OnSurface)
-                }
+                ScreenHeader(
+                    onBack = onBack,
+                    modifier = Modifier
+                        .statusBarsPadding()
+                        .padding(horizontal = Spacing.sm, vertical = 4.dp),
+                ) {}
             }
 
             item(key = "hero_spacer") { Spacer(Modifier.height(100.dp)) }
@@ -152,12 +151,35 @@ fun DetailScreen(
                         Spacer(Modifier.height(Spacing.lg))
 
                         item.overview?.let {
+                            // Portrait/phone widths get a clamped, tap-to-expand overview so a long
+                            // description doesn't push the Seasons row far down the scroll; wide/tablet
+                            // layouts have room to just show the whole thing.
+                            var overviewExpanded by remember(item.id) { mutableStateOf(false) }
+                            var overviewOverflows by remember(item.id) { mutableStateOf(false) }
                             Text(
                                 text = it,
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = OnSurface.copy(alpha = 0.85f),
-                                modifier = Modifier.widthIn(max = 600.dp),
+                                maxLines = if (isWide || overviewExpanded) Int.MAX_VALUE else 4,
+                                overflow = TextOverflow.Ellipsis,
+                                onTextLayout = { result -> overviewOverflows = result.hasVisualOverflow },
+                                modifier = Modifier
+                                    .widthIn(max = 600.dp)
+                                    .let { mod ->
+                                        if (isWide) mod
+                                        else mod.clickable { overviewExpanded = !overviewExpanded }
+                                    },
                             )
+                            if (!isWide && (overviewOverflows || overviewExpanded)) {
+                                Text(
+                                    text = if (overviewExpanded) "Read less" else "Read more",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = Primary,
+                                    modifier = Modifier
+                                        .clickable { overviewExpanded = !overviewExpanded }
+                                        .padding(top = 2.dp),
+                                )
+                            }
                         }
 
                         if (!item.mediaSources.isNullOrEmpty()) {
