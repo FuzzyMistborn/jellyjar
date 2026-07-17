@@ -177,7 +177,7 @@ const queuedEmpty = document.getElementById('queued-empty');
 const historyBody = document.getElementById('history-body');
 const historyEmpty = document.getElementById('history-empty');
 const deleteAllHistoryBtn = document.getElementById('delete-all-history');
-let historyJobIds = [];
+let historyCount = 0;
 const presetsBody = document.getElementById('presets-body');
 const healthEl = document.getElementById('health');
 const queueSummaryEl = document.getElementById('queue-summary');
@@ -292,7 +292,7 @@ async function refreshJobs() {
 
   historyEmpty.style.display = history.length ? 'none' : 'block';
   deleteAllHistoryBtn.style.display = history.length ? 'inline-block' : 'none';
-  historyJobIds = history.map(job => job.job_id);
+  historyCount = history.length;
   historyBody.innerHTML = history.map(job => {
     const outputName = job.output_path ? job.output_path.split('/').pop() : '—';
     const outputCell = job.status === 'complete'
@@ -319,9 +319,12 @@ async function deleteJob(id) {
 }
 
 async function deleteAllHistory() {
-  if (!historyJobIds.length) return;
-  if (!confirm(`Delete all ${historyJobIds.length} history job(s) and their output files?`)) return;
-  await Promise.all(historyJobIds.map(id => fetch(`/jobs/${id}`, { method: 'DELETE' })));
+  if (!historyCount) return;
+  if (!confirm(`Delete all ${historyCount} history job(s) and their output files?`)) return;
+  await Promise.allSettled([
+    fetch('/jobs?status=complete', { method: 'DELETE' }),
+    fetch('/jobs?status=failed', { method: 'DELETE' }),
+  ]);
   refreshJobs();
 }
 

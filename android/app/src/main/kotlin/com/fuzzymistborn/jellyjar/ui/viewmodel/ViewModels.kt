@@ -415,6 +415,8 @@ class DetailViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(DetailState())
     val state: StateFlow<DetailState> = _state.asStateFlow()
+    private var loadItemJob: Job? = null
+    private var currentItemId: String? = null
 
     init {
         viewModelScope.launch {
@@ -424,12 +426,13 @@ class DetailViewModel @Inject constructor(
                 settings.settings.map { it.streamOverCellular },
             ) { online, wifi, overCellular -> Triple(online, wifi, overCellular) }
                 .collect { (online, wifi, overCellular) ->
-                    val wasOffline = !_state.value.isOnline
                     _state.update { it.copy(isOnline = online, isWifi = wifi, streamOverCellular = overCellular) }
-                    if (online && wasOffline) {
-                        _state.value.item?.id?.let { loadItem(it) }
-                    }
                 }
+        }
+        viewModelScope.launch {
+            networkMonitor.reconnected.collect {
+                currentItemId?.let { loadItem(it) }
+            }
         }
         viewModelScope.launch {
             favoriteRepo.favoriteIds.collect { ids ->
@@ -438,38 +441,42 @@ class DetailViewModel @Inject constructor(
         }
     }
 
-    fun loadItem(itemId: String) = viewModelScope.launch {
-        _state.update { it.copy(isLoading = true) }
-        settings.settings.first().also { s ->
-            _state.update { it.copy(jellyfinUrl = s.jellyfinUrl, jellyfinToken = s.jellyfinToken, episodeViewGrid = s.episodeViewGrid) }
-        }
-        val savedPositionMs = downloadRepo.getPlaybackPosition(itemId)
-        _state.update { it.copy(streamPositionMs = savedPositionMs) }
-        jellyfinRepo.getItem(itemId)
-            .onSuccess { item ->
-                val isFav = favoriteRepo.isFavorite(item.id)
-                _state.update { it.copy(item = item, isLoading = false, isFavorite = isFav, isPlayed = item.userData?.played == true) }
-                if (item.type == "Series") loadSeasons(itemId)
+    fun loadItem(itemId: String) {
+        currentItemId = itemId
+        loadItemJob?.cancel()
+        loadItemJob = viewModelScope.launch {
+            _state.update { it.copy(isLoading = true) }
+            settings.settings.first().also { s ->
+                _state.update { it.copy(jellyfinUrl = s.jellyfinUrl, jellyfinToken = s.jellyfinToken, episodeViewGrid = s.episodeViewGrid) }
             }
-            .onFailure {
-                // Offline fallback: load from local cache
-                val cached = jellyfinRepo.getCachedItem(itemId)
-                if (cached != null) {
-                    _state.update { it.copy(item = cached, isLoading = false, error = null) }
-                    if (cached.type == "Series") loadOfflineSeasons(cached.name)
-                } else {
-                    _state.update { it.copy(isLoading = false, error = "Unavailable offline") }
+            val savedPositionMs = downloadRepo.getPlaybackPosition(itemId)
+            _state.update { it.copy(streamPositionMs = savedPositionMs) }
+            jellyfinRepo.getItem(itemId)
+                .onSuccess { item ->
+                    val isFav = favoriteRepo.isFavorite(item.id)
+                    _state.update { it.copy(item = item, isLoading = false, isFavorite = isFav, isPlayed = item.userData?.played == true) }
+                    if (item.type == "Series") loadSeasons(itemId)
                 }
-            }
-        // Watch all download statuses (movie + episodes)
-        downloadRepo.downloads
-            .collect { allDownloads ->
-                val thisItem = allDownloads.find { it.jellyfinId == itemId }
-                val epMap = allDownloads
-                    .filter { it.jellyfinId != itemId }
-                    .associateBy { it.jellyfinId }
-                _state.update { it.copy(download = thisItem, episodeDownloads = epMap) }
-            }
+                .onFailure {
+                    // Offline fallback: load from local cache
+                    val cached = jellyfinRepo.getCachedItem(itemId)
+                    if (cached != null) {
+                        _state.update { it.copy(item = cached, isLoading = false, error = null) }
+                        if (cached.type == "Series") loadOfflineSeasons(cached.name)
+                    } else {
+                        _state.update { it.copy(isLoading = false, error = "Unavailable offline") }
+                    }
+                }
+            // Watch all download statuses (movie + episodes)
+            downloadRepo.downloads
+                .collect { allDownloads ->
+                    val thisItem = allDownloads.find { it.jellyfinId == itemId }
+                    val epMap = allDownloads
+                        .filter { it.jellyfinId != itemId }
+                        .associateBy { it.jellyfinId }
+                    _state.update { it.copy(download = thisItem, episodeDownloads = epMap) }
+                }
+        }
     }
 
     fun refreshStreamPosition(itemId: String) = viewModelScope.launch {
@@ -919,7 +926,10 @@ class DownloadsViewModel @Inject constructor(
                         }
                         newEtas[d.jellyfinId] = eta
                         progressSamples[d.jellyfinId] = d.progress to now
-                    } else if (prev == null) {
+                    } else if (prev == null || d.progress < prev.first) {
+                        // No sample yet, or progress went backwards (e.g. a retry restarted this
+                        // item from 0) — a stale baseline from a previous attempt would otherwise
+                        // pin the ETA to null/wrong until progress climbs back past the old value.
                         newEtas[d.jellyfinId] = null
                         progressSamples[d.jellyfinId] = d.progress to now
                     } else {
@@ -1126,6 +1136,7 @@ class SeasonViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(SeasonState())
     val state: StateFlow<SeasonState> = _state.asStateFlow()
+    private var loadJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -1135,14 +1146,15 @@ class SeasonViewModel @Inject constructor(
                 settings.settings.map { it.streamOverCellular },
             ) { online, wifi, overCellular -> Triple(online, wifi, overCellular) }
                 .collect { (online, wifi, overCellular) ->
-                    val wasOffline = !_state.value.isOnline
                     _state.update { it.copy(isOnline = online, isWifi = wifi, streamOverCellular = overCellular) }
-                    if (online && wasOffline) {
-                        val seasonId = _state.value.seasonId
-                        val seriesId = _state.value.seriesId
-                        if (seasonId != null && seriesId != null) load(seasonId, seriesId)
-                    }
                 }
+        }
+        viewModelScope.launch {
+            networkMonitor.reconnected.collect {
+                val seasonId = _state.value.seasonId
+                val seriesId = _state.value.seriesId
+                if (seasonId != null && seriesId != null) load(seasonId, seriesId)
+            }
         }
         viewModelScope.launch {
             downloadRepo.downloads.collect { all ->
@@ -1151,7 +1163,9 @@ class SeasonViewModel @Inject constructor(
         }
     }
 
-    fun load(seasonId: String, seriesId: String) = viewModelScope.launch {
+    fun load(seasonId: String, seriesId: String) {
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
         _state.update { it.copy(isLoading = true, seasonId = seasonId, seriesId = seriesId) }
         val s = settings.settings.first()
         _state.update { it.copy(jellyfinUrl = s.jellyfinUrl, jellyfinToken = s.jellyfinToken, episodeViewGrid = s.episodeViewGrid) }
@@ -1184,7 +1198,7 @@ class SeasonViewModel @Inject constructor(
                 }
                 _state.update { it.copy(episodes = episodes, isLoading = false) }
             }
-
+        }
     }
 
     fun queueEpisodeDownload(episode: JellyfinItem, preset: String) = viewModelScope.launch {

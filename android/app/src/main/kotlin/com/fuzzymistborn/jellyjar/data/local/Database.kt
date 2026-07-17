@@ -29,7 +29,11 @@ data class DownloadEntity(
     // Intro/credits skip segments (JSON array of SkipSegment) captured at queue time so the
     // skip button works during offline playback.
     val segmentsJson: String? = null,
-)
+) {
+    // thumbnailPath is a bare filesystem path (see DownloadRepository.saveThumbnailLocally); Coil
+    // only resolves recognized URI schemes, so callers need the `file://` form to load it locally.
+    val thumbnailUri: String? get() = thumbnailPath?.let { "file://$it" }
+}
 
 @Entity(tableName = "cached_items")
 data class CachedItemEntity(
@@ -193,12 +197,7 @@ interface CachedItemDao {
     """)
     suspend fun findSeasonsBySeriesName(seriesName: String): List<CachedItemEntity>
 
-    @Query("""
-        SELECT * FROM cached_items ep
-        WHERE ep.seriesName = :seriesName AND ep.type = 'Episode' AND ep.parentIndexNumber = :seasonNumber
-          AND EXISTS (SELECT 1 FROM downloads d WHERE d.jellyfinId = ep.id AND d.status = 'COMPLETE')
-        ORDER BY ep.indexNumber ASC
-    """)
+    @Query("SELECT * FROM cached_items WHERE seriesName = :seriesName AND type = 'Episode' AND parentIndexNumber = :seasonNumber ORDER BY indexNumber ASC")
     suspend fun findEpisodesBySeriesAndSeason(seriesName: String, seasonNumber: Int): List<CachedItemEntity>
 }
 

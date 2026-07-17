@@ -674,6 +674,42 @@ async def delete_job(job_id: str):
     return {"deleted": job_id}
 
 
+@app.delete("/jobs")
+async def delete_jobs(status: str | None = None):
+    """Bulk-delete jobs (optionally filtered by status, e.g. 'complete' or 'failed').
+
+    Does the same per-job cleanup as DELETE /jobs/{job_id} but writes jobs.json once for the
+    whole batch instead of once per job, so clearing a large history doesn't do O(N) redundant
+    disk rewrites.
+    """
+    target_ids = [
+        job_id for job_id, job in jobs.items()
+        if status is None or job.get("status") == status
+    ]
+
+    deleted: list[str] = []
+    for job_id in target_ids:
+        job = jobs[job_id]
+
+        process = _active_processes.get(job_id)
+        if process and process.returncode is None:
+            process.kill()
+
+        output_path = job.get("output_path")
+        del jobs[job_id]
+        deleted.append(job_id)
+
+        if output_path and Path(output_path).exists():
+            Path(output_path).unlink()
+
+    if deleted:
+        _save_jobs()
+        for job_id in deleted:
+            _publish(job_id)
+
+    return {"deleted": deleted}
+
+
 @app.get("/jobs/{job_id}/stream")
 async def stream_job(job_id: str):
     """Server-Sent Events stream of job status, pushed the moment it changes (progress, fps,

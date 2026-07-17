@@ -10,6 +10,10 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.scan
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -58,6 +62,16 @@ class NetworkMonitor @Inject constructor(
 
         awaitClose { connectivityManager.unregisterNetworkCallback(callback) }
     }.distinctUntilChanged()
+
+    // Emits once for every false->true transition of [isOnline] (i.e. connectivity was regained
+    // after being lost) — for ViewModels that need to re-fetch on reconnect without re-deriving
+    // the edge themselves from a state snapshot. `prev == null` marks "no earlier reading yet" so
+    // the very first emission (app start, already online) is never mistaken for a reconnect.
+    val reconnected: Flow<Unit> = isOnline
+        .scan<Boolean, Pair<Boolean?, Boolean?>>(null to null) { (_, cur), new -> cur to new }
+        .drop(1)
+        .filter { (prev, cur) -> prev == false && cur == true }
+        .map { }
 
     fun isCurrentlyConnected(): Boolean {
         val network = connectivityManager.activeNetwork ?: return false

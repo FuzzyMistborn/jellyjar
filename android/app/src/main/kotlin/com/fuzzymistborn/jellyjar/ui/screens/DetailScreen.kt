@@ -111,7 +111,7 @@ fun DetailScreen(
                         Row {
                             if (isWide) {
                                 PosterImage(
-                                    imageUrl = state.download?.thumbnailPath?.let { "file://$it" }
+                                    imageUrl = state.download?.thumbnailUri
                                         ?: viewModel.posterUrl(item.id),
                                     contentDescription = item.name,
                                     modifier = Modifier.width(220.dp),
