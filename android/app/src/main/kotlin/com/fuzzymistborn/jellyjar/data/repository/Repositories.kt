@@ -10,9 +10,11 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkManager
 import com.fuzzymistborn.jellyjar.api.AuthRequest
+import com.fuzzymistborn.jellyjar.api.DeviceProfile
 import com.fuzzymistborn.jellyjar.api.ItemsResponse
 import com.fuzzymistborn.jellyjar.api.JellyfinApiService
 import com.fuzzymistborn.jellyjar.api.JellyfinImageHelper
+import com.fuzzymistborn.jellyjar.api.PlaybackInfoRequest
 import com.fuzzymistborn.jellyjar.api.PlaybackProgressRequest
 import com.fuzzymistborn.jellyjar.api.PlaybackStartRequest
 import com.fuzzymistborn.jellyjar.api.PlaybackStopRequest
