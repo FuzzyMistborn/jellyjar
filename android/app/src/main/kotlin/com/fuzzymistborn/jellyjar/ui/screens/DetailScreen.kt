@@ -301,12 +301,12 @@ private fun DetailTwoPaneContent(
                 .padding(horizontal = Spacing.sm, vertical = 4.dp),
         ) {}
 
-        Spacer(Modifier.height(60.dp))
+        Spacer(Modifier.height(40.dp))
 
         Row(modifier = Modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
-                    .width(320.dp)
+                    .width(300.dp)
                     .verticalScroll(rememberScrollState())
                     .padding(start = 32.dp, end = Spacing.lg),
             ) {
@@ -314,20 +314,20 @@ private fun DetailTwoPaneContent(
                     imageUrl = state.download?.thumbnailUri ?: viewModel.posterUrl(item.id),
                     contentDescription = item.name,
                     modifier = detailPosterModifier(
-                        Modifier.fillMaxWidth().widthIn(max = 200.dp), item.id, sharedTransitionScope, animatedVisibilityScope,
+                        Modifier.fillMaxWidth().widthIn(max = 170.dp), item.id, sharedTransitionScope, animatedVisibilityScope,
                     ),
                 )
-                Spacer(Modifier.height(Spacing.md))
+                Spacer(Modifier.height(Spacing.sm))
                 TitleAndMetaRow(item, accentColor)
                 if (!item.mediaSources.isNullOrEmpty()) {
-                    Spacer(Modifier.height(Spacing.sm))
+                    Spacer(Modifier.height(Spacing.xs))
                     TechSpecRow(item.mediaSources, accentColor)
                 }
-                Spacer(Modifier.height(Spacing.lg))
+                Spacer(Modifier.height(Spacing.md))
                 if (item.type != "Series") {
-                    ActionButtonsSection(item, state, viewModel, accentColor, actions, coroutineScope)
+                    ActionButtonsSection(item, state, viewModel, accentColor, actions, coroutineScope, compact = true)
                 }
-                Spacer(Modifier.height(Spacing.xl))
+                Spacer(Modifier.height(Spacing.lg))
             }
 
             LazyColumn(
@@ -422,6 +422,7 @@ private fun ActionButtonsSection(
     accentColor: Color,
     actions: DetailActions,
     coroutineScope: kotlinx.coroutines.CoroutineScope,
+    compact: Boolean = false,
 ) {
     val dl = state.download
     val offlinePositionMs = dl?.playbackPositionMs ?: 0L
@@ -468,6 +469,7 @@ private fun ActionButtonsSection(
                     icon = Icons.Default.PlayArrow,
                     onClick = playFromStartAction,
                     text = "Play",
+                    compact = compact,
                 )
             } else {
                 PrimaryActionButton("Play", Icons.Default.PlayArrow, playFromStartAction, accentColor = accentColor)
@@ -503,6 +505,7 @@ private fun ActionButtonsSection(
                 icon = Icons.Default.Download,
                 onClick = actions.onShowPresetDialog,
                 text = "Download",
+                compact = compact,
             )
             dl != null && dl.status in listOf(
                 DownloadStatus.QUEUED.name,
@@ -516,6 +519,7 @@ private fun ActionButtonsSection(
                     onClick = actions.onShowDeleteConfirm,
                     text = "Remove",
                     contentColor = Error,
+                    compact = compact,
                 )
             dl?.status == DownloadStatus.FAILED.name -> {
                 if (state.isOnline) {
@@ -523,12 +527,14 @@ private fun ActionButtonsSection(
                         icon = Icons.Default.Refresh,
                         onClick = { viewModel.retryDownload(item.id) },
                         text = "Retry",
+                        compact = compact,
                     )
                 }
                 SecondaryActionButton(
                     icon = Icons.Default.Delete,
                     onClick = actions.onShowDeleteConfirm,
                     contentColor = Error,
+                    compact = compact,
                 )
             }
             else -> {}
