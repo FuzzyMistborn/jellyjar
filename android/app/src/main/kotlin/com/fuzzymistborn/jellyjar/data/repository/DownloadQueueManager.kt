@@ -43,6 +43,7 @@ class DownloadQueueManager @Inject constructor(
             ).collect {
                 // Never let a transient failure (DataStore/DB read) kill the queue loop
                 runCatching { promote() }
+                    .onFailure { android.util.Log.e("DownloadQueueManager", "promote() failed", it) }
             }
         }
     }

@@ -1,6 +1,7 @@
 import os
 import uuid
 import asyncio
+import hashlib
 import json
 import logging
 import shutil
@@ -263,6 +264,7 @@ class JobStatus(BaseModel):
     status: str               # queued | running | complete | failed
     progress: Optional[float] = None
     output_path: Optional[str] = None
+    output_sha256: Optional[str] = None
     error: Optional[str] = None
     created_at: str
     updated_at: str
@@ -479,10 +481,21 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
                 jobs[job_id]["status"] = "failed"
                 jobs[job_id]["error"] = str(e)
 
+        if job_id in jobs and jobs[job_id]["status"] == "complete":
+            jobs[job_id]["output_sha256"] = await asyncio.to_thread(_sha256_file, jobs[job_id]["output_path"])
+
         if job_id in jobs:
             jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
             _save_jobs()
             _publish(job_id)
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _validate_transcode_request(req: TranscodeRequest) -> tuple[Path, dict]:

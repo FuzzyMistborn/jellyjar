@@ -684,6 +684,7 @@ data class AdminState(
     val trickplayEnabled: Boolean = true,
     val genreFilterEnabled: Boolean = true,
     val maxConcurrentDownloads: Int = 1,
+    val playbackQuality: com.fuzzymistborn.jellyjar.model.PlaybackQuality = com.fuzzymistborn.jellyjar.model.PlaybackQuality.AUTO,
 )
 
 @HiltViewModel
@@ -726,6 +727,7 @@ class AdminViewModel @Inject constructor(
                         trickplayEnabled = s.trickplayEnabled,
                         genreFilterEnabled = s.genreFilterEnabled,
                         maxConcurrentDownloads = s.maxConcurrentDownloads,
+                        playbackQuality = s.playbackQuality,
                     )
                 }
                 refreshStorageInfo()
@@ -847,10 +849,9 @@ class AdminViewModel @Inject constructor(
 
     fun clearPin() = viewModelScope.launch { settings.clearPin() }
 
-    fun verifyPin(input: String): Boolean = runBlocking {
+    fun verifyPin(input: String, onResult: (Boolean) -> Unit) = viewModelScope.launch {
         val s = settings.settings.first()
-        if (!s.isPinEnabled) return@runBlocking true
-        settings.verifyPin(input, s.parentalPinHash)
+        onResult(if (!s.isPinEnabled) true else settings.verifyPin(input, s.parentalPinHash))
     }
 
     fun setWifiOnly(v: Boolean) {
@@ -903,6 +904,11 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch { settings.saveMaxConcurrentDownloads(v) }
     }
 
+    fun setPlaybackQuality(v: com.fuzzymistborn.jellyjar.model.PlaybackQuality) {
+        _state.update { it.copy(playbackQuality = v) }
+        viewModelScope.launch { settings.savePlaybackQuality(v) }
+    }
+
     private suspend fun refreshStorageInfo() {
         val info = downloadRepo.getDeviceStorageInfo()
         _state.update { it.copy(storageInfo = formatStorageInfo(info)) }
@@ -913,9 +919,6 @@ class AdminViewModel @Inject constructor(
         return "${gb(info.usedByJellyJarBytes)} used by JellyJar · ${gb(info.freeBytes)} free of ${gb(info.totalBytes)}"
     }
 }
-
-private fun <T> runBlocking(block: suspend () -> T): T =
-    kotlinx.coroutines.runBlocking { block() }
 
 // ─── Downloads Queue ViewModel ────────────────────────────────────────────────
 
@@ -1344,8 +1347,26 @@ class PlayerViewModel @Inject constructor(
     private val okHttpClient: okhttp3.OkHttpClient,
 ) : ViewModel() {
 
-    fun loadStartPosition(jellyfinId: String): Long =
-        kotlinx.coroutines.runBlocking { downloadRepo.getPlaybackPosition(jellyfinId) }
+    // Detached scope for reportStopped(): deliberately NOT tied to viewModelScope/onCleared —
+    // it must outlive ViewModel clearing so the final "stopped" event still reaches Jellyfin
+    // when the report is triggered by the ViewModel being torn down (e.g. navigating away).
+    // Held as a single instance (not recreated per call) so calls share one SupervisorJob
+    // instead of each leaking its own untracked scope, and given a handler so a failed report
+    // can't crash the process.
+    private val detachedScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO +
+            kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
+                android.util.Log.e("PlayerViewModel", "detached report failed", e)
+            }
+    )
+
+    suspend fun loadStartPosition(jellyfinId: String): Long =
+        downloadRepo.getPlaybackPosition(jellyfinId)
+
+    // Only meaningful for streamed playback (downloaded files always play back directly from
+    // disk, no negotiation involved) — callers should skip this for local paths.
+    suspend fun loadPlaybackDiagnostics(jellyfinId: String) =
+        jellyfinRepo.getStreamUrlWithDiagnostics(jellyfinId).second
 
     // Intro/credits markers for the skip button. Prefers segments captured on the download
     // (works offline), falls back to asking the server. Empty when the setting is off.
@@ -1452,8 +1473,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun reportStopped(jellyfinId: String, positionMs: Long, mediaSourceId: String? = null) {
-        // Use a detached scope so this survives viewModelScope cancellation on ViewModel clear
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+        detachedScope.launch {
             jellyfinRepo.reportPlaybackStopped(jellyfinId, positionMs, mediaSourceId)
         }
     }

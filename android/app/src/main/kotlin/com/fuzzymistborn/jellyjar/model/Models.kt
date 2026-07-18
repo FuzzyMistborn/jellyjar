@@ -123,6 +123,7 @@ data class TranscodeJob(
     val status: String,             // queued | running | complete | failed
     val progress: Float?,
     val output_path: String?,
+    val output_sha256: String?,
     val error: String?,
     val created_at: String,
     val updated_at: String,
@@ -179,4 +180,13 @@ data class AppSettings(
     val genreFilterEnabled: Boolean = true,
     val downloadQueuePaused: Boolean = false,
     val maxConcurrentDownloads: Int = 1,
+    val playbackQuality: PlaybackQuality = PlaybackQuality.AUTO,
 )
+
+// Caps the negotiated streaming bitrate (server transcodes down when the source exceeds it);
+// AUTO leaves the device's max bitrate ceiling in place so Jellyfin prefers direct play.
+enum class PlaybackQuality(val maxBitrate: Int?, val label: String) {
+    AUTO(null, "Auto"),
+    HIGH_1080P(8_000_000, "1080p"),
+    MEDIUM_720P(4_000_000, "720p"),
+}

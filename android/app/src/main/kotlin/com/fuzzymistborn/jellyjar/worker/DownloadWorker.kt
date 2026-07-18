@@ -74,13 +74,13 @@ class DownloadWorker @AssistedInject constructor(
                 }
             }
             terminal
-        }.getOrNull()
+        }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
 
         if (job == null) {
             // Poll until transcode is complete
             var attempts = 0
             var polling = true
-            while (polling) {
+            while (polling && !isStopped) {
                 val result = downloadRepo.pollJobStatus(jobId)
                 if (result.isFailure) {
                     val error = result.exceptionOrNull()
@@ -126,7 +126,7 @@ class DownloadWorker @AssistedInject constructor(
         }
 
         setForeground(createForegroundInfo("Downloading…", 0))
-        downloadRepo.downloadFile(jobId, downloadPath, filename).onFailure {
+        downloadRepo.downloadFile(jobId, downloadPath, filename, job!!.output_sha256).onFailure {
             android.util.Log.e("DownloadWorker", "Download failed: ${it.message}", it)
             return if (runAttemptCount < MAX_RETRY_ATTEMPTS) {
                 Result.retry()

@@ -32,6 +32,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -41,6 +42,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 // ─── Jellyfin Repository ──────────────────────────────────────────────────────
+
+enum class PlaybackMethod { DIRECT_PLAY, DIRECT_STREAM, TRANSCODE }
+
+data class PlaybackDiagnostics(val method: PlaybackMethod, val reasons: List<String>)
 
 @Singleton
 class JellyfinRepository @Inject constructor(
@@ -285,28 +290,42 @@ class JellyfinRepository @Inject constructor(
     // DeviceProfile's DirectPlayProfiles — Jellyfin responds with a TranscodingUrl (audio-only
     // remux) for sources with that audio, and a normal direct-play source otherwise. Falls back
     // to the plain direct-play URL if PlaybackInfo fails for any reason (e.g. older server).
-    suspend fun getStreamUrl(itemId: String): String = withContext(Dispatchers.IO) {
-        val s = settings.currentSnapshot()
-        val fallback = JellyfinImageHelper.streamUrl(s.jellyfinUrl, itemId, s.jellyfinToken)
-        runCatching {
-            val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
-            val response = service.getPlaybackInfo(
-                itemId = itemId,
-                authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
-                userId = s.jellyfinUserId,
-            )
-            val source = response.MediaSources.firstOrNull() ?: return@runCatching fallback
-            val transcodingUrl = source.TranscodingUrl
-            if (!source.SupportsDirectPlay && !source.SupportsDirectStream && transcodingUrl != null) {
-                s.jellyfinUrl.trimEnd('/') + transcodingUrl
-            } else {
-                JellyfinImageHelper.streamUrl(
-                    s.jellyfinUrl, itemId, s.jellyfinToken,
-                    container = source.Container, mediaSourceId = source.Id,
+    suspend fun getStreamUrl(itemId: String): String = getStreamUrlWithDiagnostics(itemId).first
+
+    // Same PlaybackInfo negotiation as getStreamUrl, but also reports which playback method
+    // Jellyfin picked (and why, when transcoding) so the player UI can show it to the user.
+    suspend fun getStreamUrlWithDiagnostics(itemId: String): Pair<String, PlaybackDiagnostics> =
+        withContext(Dispatchers.IO) {
+            val s = settings.currentSnapshot()
+            val fallback = JellyfinImageHelper.streamUrl(s.jellyfinUrl, itemId, s.jellyfinToken)
+            runCatching {
+                val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
+                val bitrateCap = s.playbackQuality.maxBitrate
+                val response = service.getPlaybackInfo(
+                    itemId = itemId,
+                    authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
+                    userId = s.jellyfinUserId,
+                    body = PlaybackInfoRequest(
+                        DeviceProfile = DeviceProfile(MaxStreamingBitrate = bitrateCap ?: 120_000_000),
+                        MaxStreamingBitrate = bitrateCap,
+                    ),
                 )
-            }
-        }.getOrDefault(fallback)
-    }
+                val source = response.MediaSources.firstOrNull()
+                    ?: return@runCatching Pair(fallback, PlaybackDiagnostics(PlaybackMethod.DIRECT_PLAY, emptyList()))
+                val transcodingUrl = source.TranscodingUrl
+                if (!source.SupportsDirectPlay && !source.SupportsDirectStream && transcodingUrl != null) {
+                    val url = s.jellyfinUrl.trimEnd('/') + transcodingUrl
+                    Pair(url, PlaybackDiagnostics(PlaybackMethod.TRANSCODE, source.TranscodeReasons ?: emptyList()))
+                } else {
+                    val url = JellyfinImageHelper.streamUrl(
+                        s.jellyfinUrl, itemId, s.jellyfinToken,
+                        container = source.Container, mediaSourceId = source.Id,
+                    )
+                    val method = if (source.SupportsDirectPlay) PlaybackMethod.DIRECT_PLAY else PlaybackMethod.DIRECT_STREAM
+                    Pair(url, PlaybackDiagnostics(method, emptyList()))
+                }
+            }.getOrDefault(Pair(fallback, PlaybackDiagnostics(PlaybackMethod.DIRECT_PLAY, emptyList())))
+        }
 
     fun primaryImageUrl(itemId: String, baseUrl: String): String =
         JellyfinImageHelper.primaryImageUrl(baseUrl, itemId)
@@ -570,7 +589,12 @@ class DownloadRepository @Inject constructor(
         }
     }
 
-    suspend fun downloadFile(jobId: String, destinationDir: String, filename: String): Result<String> =
+    suspend fun downloadFile(
+        jobId: String,
+        destinationDir: String,
+        filename: String,
+        expectedSha256: String? = null,
+    ): Result<String> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val entity = downloadDao.findByShimJobId(jobId)
@@ -626,6 +650,25 @@ class DownloadRepository @Inject constructor(
                                 }
                             }
                         }
+                    }
+                }
+
+                if (totalBytes > 0 && downloadedBytes != totalBytes) {
+                    File(savedPath).delete()
+                    error("Download incomplete: got $downloadedBytes of $totalBytes bytes")
+                }
+
+                if (expectedSha256 != null) {
+                    val actualSha256 = File(savedPath).inputStream().use { stream ->
+                        val digest = java.security.MessageDigest.getInstance("SHA-256")
+                        val buffer = ByteArray(8192)
+                        var read: Int
+                        while (stream.read(buffer).also { read = it } != -1) digest.update(buffer, 0, read)
+                        digest.digest().joinToString("") { "%02x".format(it) }
+                    }
+                    if (!actualSha256.equals(expectedSha256, ignoreCase = true)) {
+                        File(savedPath).delete()
+                        error("Downloaded file hash mismatch (integrity check failed)")
                     }
                 }
 
@@ -733,6 +776,19 @@ class DownloadRepository @Inject constructor(
 
     suspend fun getPlaybackPosition(jellyfinId: String): Long = withContext(Dispatchers.IO) {
         playbackPositionDao.getPosition(jellyfinId) ?: 0L
+    }
+
+    suspend fun getCompletedJellyfinIds(): List<String> = withContext(Dispatchers.IO) {
+        downloadDao.observeCompleted().first().map { it.jellyfinId }
+    }
+
+    // Re-fetches a downloaded item's poster so offline artwork picks up server-side changes
+    // (new artwork, replaced poster, etc.) instead of staying frozen at download time.
+    suspend fun refreshThumbnail(jellyfinId: String) = withContext(Dispatchers.IO) {
+        val entity = downloadDao.findById(jellyfinId) ?: return@withContext
+        saveThumbnailLocally(jellyfinId)?.let { path ->
+            downloadDao.upsert(entity.copy(thumbnailPath = path))
+        }
     }
 
     private suspend fun saveThumbnailLocally(jellyfinId: String): String? {

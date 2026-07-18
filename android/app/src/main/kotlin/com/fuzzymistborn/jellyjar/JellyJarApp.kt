@@ -3,7 +3,9 @@ package com.fuzzymistborn.jellyjar
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import androidx.work.WorkManager
 import com.fuzzymistborn.jellyjar.data.repository.DownloadQueueManager
+import com.fuzzymistborn.jellyjar.worker.MetadataRefreshWorker
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -16,6 +18,7 @@ class JellyJarApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         downloadQueueManager.start()
+        MetadataRefreshWorker.schedule(WorkManager.getInstance(this))
     }
 
     override val workManagerConfiguration: Configuration

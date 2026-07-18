@@ -77,8 +77,10 @@ fun PinGateScreen(
 
             Button(
                 onClick = {
-                    if (viewModel.verifyPin(pin)) onUnlocked()
-                    else { error = true; pin = "" }
+                    viewModel.verifyPin(pin) { ok ->
+                        if (ok) onUnlocked()
+                        else { error = true; pin = "" }
+                    }
                 },
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = Primary),
@@ -393,6 +395,30 @@ fun AdminScreen(
                 checked = state.streamOverCellular,
                 onCheckedChange = { viewModel.setStreamOverCellular(it) },
             )
+            Text(
+                "Streaming Quality",
+                style = MaterialTheme.typography.bodyLarge,
+                color = OnSurface,
+                modifier = Modifier.padding(top = Spacing.sm),
+            )
+            Text(
+                "Caps the streamed bitrate; Jellyfin transcodes down when the source exceeds it. Downloads always use the preset chosen at queue time.",
+                style = MaterialTheme.typography.bodySmall,
+                color = OnSurfaceMuted,
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                modifier = Modifier.padding(top = Spacing.xs),
+            ) {
+                com.fuzzymistborn.jellyjar.model.PlaybackQuality.entries.forEach { quality ->
+                    FilterChip(
+                        selected = state.playbackQuality == quality,
+                        onClick = { viewModel.setPlaybackQuality(quality) },
+                        label = { Text(quality.label, style = MaterialTheme.typography.labelMedium) },
+                        colors = themedChipColors(),
+                    )
+                }
+            }
         }
 
         // ── Admin PIN ─────────────────────────────────────────────────────────

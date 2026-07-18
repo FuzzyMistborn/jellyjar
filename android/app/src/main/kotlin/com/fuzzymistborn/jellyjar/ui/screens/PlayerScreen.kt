@@ -188,6 +188,16 @@ fun PlayerScreen(
         }
     }
 
+    // ── Codec diagnostics (Direct Play / Direct Stream / Transcoding) ────────────
+    var playbackDiagnostics by remember { mutableStateOf<com.fuzzymistborn.jellyjar.data.repository.PlaybackDiagnostics?>(null) }
+    LaunchedEffect(jellyfinId) {
+        // Downloaded files play straight off disk — no server negotiation happened, so there's
+        // nothing to report.
+        if (jellyfinId != null && !localPath.startsWith("/")) {
+            playbackDiagnostics = viewModel.loadPlaybackDiagnostics(jellyfinId)
+        }
+    }
+
     // Distance in px from the root's bottom edge up to the top of the control bar (the row
     // containing the seek bar). Measured off the real view instead of a hardcoded dp guess —
     // a fixed offset landed in the middle of the screen on tablets, where the video area is a
@@ -287,6 +297,24 @@ fun PlayerScreen(
                     .padding(Spacing.sm),
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+            }
+
+            playbackDiagnostics?.let { diag ->
+                val label = when (diag.method) {
+                    com.fuzzymistborn.jellyjar.data.repository.PlaybackMethod.DIRECT_PLAY -> "Direct Play"
+                    com.fuzzymistborn.jellyjar.data.repository.PlaybackMethod.DIRECT_STREAM -> "Direct Stream"
+                    com.fuzzymistborn.jellyjar.data.repository.PlaybackMethod.TRANSCODE -> "Transcoding"
+                }
+                Text(
+                    text = if (diag.reasons.isNotEmpty()) "$label · ${diag.reasons.joinToString(", ")}" else label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(Spacing.sm)
+                        .background(Color.Black.copy(alpha = 0.5f), MaterialTheme.shapes.small)
+                        .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+                )
             }
         }
     }

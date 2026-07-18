@@ -40,6 +40,7 @@ class SettingsRepository @Inject constructor(
         val GENRE_FILTER_ENABLED = booleanPreferencesKey("genre_filter_enabled")
         val DOWNLOAD_QUEUE_PAUSED = booleanPreferencesKey("download_queue_paused")
         val MAX_CONCURRENT_DOWNLOADS = intPreferencesKey("max_concurrent_downloads")
+        val PLAYBACK_QUALITY = stringPreferencesKey("playback_quality")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { prefs ->
@@ -63,6 +64,9 @@ class SettingsRepository @Inject constructor(
             genreFilterEnabled = prefs[Keys.GENRE_FILTER_ENABLED] ?: true,
             downloadQueuePaused = prefs[Keys.DOWNLOAD_QUEUE_PAUSED] ?: false,
             maxConcurrentDownloads = (prefs[Keys.MAX_CONCURRENT_DOWNLOADS] ?: 1).coerceIn(1, 2),
+            playbackQuality = prefs[Keys.PLAYBACK_QUALITY]?.let { name ->
+                runCatching { com.fuzzymistborn.jellyjar.model.PlaybackQuality.valueOf(name) }.getOrNull()
+            } ?: com.fuzzymistborn.jellyjar.model.PlaybackQuality.AUTO,
         )
     }
 
@@ -150,6 +154,10 @@ class SettingsRepository @Inject constructor(
 
     suspend fun saveMaxConcurrentDownloads(limit: Int) {
         context.dataStore.edit { prefs -> prefs[Keys.MAX_CONCURRENT_DOWNLOADS] = limit.coerceIn(1, 2) }
+    }
+
+    suspend fun savePlaybackQuality(quality: com.fuzzymistborn.jellyjar.model.PlaybackQuality) {
+        context.dataStore.edit { prefs -> prefs[Keys.PLAYBACK_QUALITY] = quality.name }
     }
 
     fun verifyPin(input: String, storedHash: String): Boolean =

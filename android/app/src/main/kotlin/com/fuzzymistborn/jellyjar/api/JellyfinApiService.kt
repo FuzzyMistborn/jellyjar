@@ -85,6 +85,7 @@ data class DeviceProfile(
 
 data class PlaybackInfoRequest(
     val DeviceProfile: DeviceProfile = DeviceProfile(),
+    val MaxStreamingBitrate: Int? = null,
 )
 
 data class PlaybackMediaSource(
@@ -93,6 +94,7 @@ data class PlaybackMediaSource(
     val SupportsDirectPlay: Boolean = false,
     val SupportsDirectStream: Boolean = false,
     val TranscodingUrl: String? = null,
+    val TranscodeReasons: List<String>? = null,
 )
 
 data class PlaybackInfoResponse(
