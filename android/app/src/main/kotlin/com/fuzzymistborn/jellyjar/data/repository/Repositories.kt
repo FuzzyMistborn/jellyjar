@@ -416,6 +416,19 @@ class DownloadRepository @Inject constructor(
         mediaSourcePath: String,
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            // A duplicate tap (or re-queue while already in flight) must not clobber a row whose
+            // Press job is actively running — that would orphan the running job server-side while
+            // a second one starts, and both would race to write the same output file.
+            downloadDao.findById(item.id)?.let { existing ->
+                if (existing.status in setOf(
+                        DownloadStatus.QUEUED.name,
+                        DownloadStatus.TRANSCODING.name,
+                        DownloadStatus.DOWNLOADING.name,
+                    )
+                ) {
+                    return@runCatching
+                }
+            }
             checkFreeSpace(preset, item.runtimeMinutes)
             // Capture intro/credits markers now so the skip button works offline later
             val segments = runCatching { jellyfinRepo.getSkipSegments(item.id) }.getOrDefault(emptyList())

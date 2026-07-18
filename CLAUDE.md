@@ -40,7 +40,6 @@ jellyjar/
             │   ├── screens/
             │   │   ├── LibraryScreen.kt    # Home screen with library tiles + Downloads tile
             │   │   ├── DetailScreen.kt     # Movie/Series detail, inline seasons+episodes, download controls
-            │   │   ├── SeasonsScreen.kt    # Standalone seasons browser (not used in main flow)
             │   │   ├── AdminScreen.kt      # Settings, PIN gate, folder picker for download path
             │   │   ├── StorageScreen.kt    # Storage management: usage breakdown, bulk delete, sort
             │   │   └── PlayerScreen.kt     # ExoPlayer for local or stream URLs
@@ -55,6 +54,7 @@ jellyjar/
 - Room (local DB for download tracking)
 - Retrofit + OkHttp (API calls)
 - Coil (image loading)
+- AndroidX Palette (per-title dynamic color extraction from backdrop art, Detail screen)
 - Media3/ExoPlayer (playback)
 - DataStore (settings persistence)
 - WorkManager (background download jobs)
@@ -156,18 +156,18 @@ Implemented, based on a design review pass (see "Good to Do" below for the rest 
 - Download badges: the poster grid's download-status badge now shows a live percentage next to the icon while downloading, plus a thin progress bar across the bottom of the poster (mirrors the pattern already used for playback-resume progress)
 - Skeleton loaders: already implemented pre-review (`SkeletonGrid`/`SkeletonCard` in `LibraryScreen.kt`, shimmer via `rememberShimmerAlpha`) — no changes needed there
 - Empty states: `EmptyState` (`UiComponents.kt`) gained an optional action button; the Downloads screen's empty state now reuses the shared composable (previously hand-rolled and inconsistent with Library's) with a subtitle and a "Browse Library" action
+- Detail Screen tech-spec chips: resolution/HDR/audio-format chips derived from the item's first media source's video/audio streams (`DetailScreen.kt`, ~line 395-422)
+- Detail Screen hero redesign: poster now shown next to the title on all screen sizes (not tablet-only), width-conditional sizing (poster 130dp→220dp, overview text unclamped) above 600dp, widened hero backdrop vignette blending into the metadata section. **Logo art was tried and deliberately reverted in favor of plain title text** — not a gap, a closed decision; don't re-add without discussing first
+- **Tablet/landscape two-pane Detail layout**: at ≥840dp width, `DetailStackedContent`/`DetailTwoPaneContent` in `DetailScreen.kt` branch to a fixed left pane (poster/title/metadata/tech specs/actions) beside a right pane that scrolls its own overview + seasons content independently, so actions stay visible while browsing seasons. Below 840dp it's still the single stacked column. Not yet verified on an actual tablet/emulator — build tooling isn't available in this environment, so this landed reviewed-but-uncompiled
+- **Dynamic color accents from backdrop art**: `rememberDynamicAccentColor()` (`ui/theme/DynamicAccent.kt`, new `androidx.palette` dependency) extracts a per-title vibrant/muted swatch from the backdrop image, clamped to a legible range, with a theme-blue fallback while loading/on failure. Wired into Detail screen only (Resume/Play buttons, star icon, watched-icon tint, download-progress spinner, tech-spec chips) — Library's featured backdrop/chips still use the fixed blue, a natural follow-up if wanted
+- **Shared element / animated transitions**: `MainActivity.kt`'s `JellyJarNavHost` wraps the `NavHost` in a `SharedTransitionLayout`; `LibraryScreen.kt`'s `MediaCard` and `DetailScreen.kt`'s poster (`detailPosterModifier()`) share the key `"poster-$itemId"`, so tapping a poster in the main library grid morphs it into the Detail screen's poster instead of a hard cut. Scoped to the primary grid → Detail flow only — Continue Watching/Recently Added/My List rows and Season-screen episode taps aren't wired (same pattern would extend there). **Not build-verified** — no Android build tooling in this environment
+- **Artwork-first library navigation**: confirmed already substantially done pre-existing (featured hero backdrop + `LibraryTile` backdrop art + poster rows). Closed the one remaining gap: `DownloadsTile` now shows a mosaic of up to 4 recent download thumbnails (`LibraryState.downloadThumbnails`) instead of a flat icon card, falling back to the icon card when nothing's downloaded yet
+- **Admin dashboard aesthetic**: light pass, not a redesign (per its own "lowest priority" note) — each `SettingsCard` now has a small tinted icon badge next to its title (Jellyfin/Press/Downloads/Home/Playback/PIN/Active Jobs), and the Settings header gained a one-line subtitle
 
 ### Good to Do (from the same review, not yet implemented)
-Roughly in priority order:
-- **Detail Screen redesign** — bigger hero section, logo art replacing text titles more prominently, stronger visual hierarchy below the fold (cast/director/HDR/audio metadata), related-movies row. Highest single-screen leverage since users spend the most time here deciding what to watch, but it's a real project, not a tweak — check Jellyfin logo-art coverage across the library before committing, since a spotty logo library means inconsistent blank-title screens
-- **Tablet/landscape layout** — biggest structural gap since the app is tablet-first; Detail and Library currently use the same stacked layout as a phone would. Should be scoped together with the Detail redesign above rather than done twice
-- **Dynamic color accents from backdrop art** (e.g. via Android's Palette API) — buttons/chips picking up a dominant color per title instead of always blue
-- **Mixed poster sizes** for hierarchy (large Continue Watching cards, medium Recently Added, landscape banners for collections) — hold until the tablet layout work above happens, or it'll get redone
-- **Shared element / animated transitions** between poster taps and Detail screen
-- **Floating/visually-separated download action** distinct from the Play button stack
-- **Artwork-first library navigation** — check `LibraryScreen.kt`'s `LibraryTile` first, since backdrop art on library tiles is already implemented; this may be partially done
-- **Admin dashboard aesthetic** — lowest priority, nobody but the developer sees this screen
-- **Brand personality touches** (splash animation, organic corner treatments) — cosmetic, do last
+- **Mixed poster sizes** for hierarchy (large Continue Watching cards, medium Recently Added, landscape banners for collections) — hold until the two-pane tablet layout extends to Library, or it'll get redone
+- **Floating/visually-separated download action**, distinct from the Play button stack — discussed 2026-07-18, not yet implemented. Leaning toward promoting Download into the primary action row (next to Play/Resume) rather than a true FAB, to reuse the existing state-aware button logic, but not decided
+- **Brand personality touches** (splash animation beyond the current static `androidx.core:core-splashscreen`, organic corner treatments instead of uniform `RoundedCornerShape`) — intentionally vague/cosmetic, revisit once core flows are done
 
 ## Server Details
 - Jellyfin: `http://192.168.50.24:8096`

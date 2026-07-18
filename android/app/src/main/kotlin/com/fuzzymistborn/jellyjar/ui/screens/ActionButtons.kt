@@ -27,10 +27,11 @@ fun PrimaryActionButton(
     icon: ImageVector,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    accentColor: Color = Primary,
 ) {
     Button(
         onClick = onClick,
-        colors = ButtonDefaults.buttonColors(containerColor = Primary),
+        colors = ButtonDefaults.buttonColors(containerColor = accentColor),
         contentPadding = PaddingValues(horizontal = Spacing.xl, vertical = 14.dp),
         modifier = modifier,
     ) {

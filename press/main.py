@@ -491,8 +491,11 @@ def _validate_transcode_request(req: TranscodeRequest) -> tuple[Path, dict]:
         raise HTTPException(status_code=400, detail=f"Unknown preset '{req.preset}'. Use: {list(PRESETS.keys())}")
 
     # pathlib: absolute right-hand path overrides the left, so absolute Jellyfin paths work as-is
-    source = Path(MEDIA_ROOT) / req.source_path
+    media_root = Path(MEDIA_ROOT).resolve()
+    source = (Path(MEDIA_ROOT) / req.source_path).resolve()
     print(f"[Press] transcode request: source_path={req.source_path!r}  resolved={source}", flush=True)
+    if media_root != source and media_root not in source.parents:
+        raise HTTPException(status_code=400, detail="source_path must resolve within the configured media root")
     if not source.exists():
         print(f"[Press] 404 — file not found at {source}", flush=True)
         raise HTTPException(status_code=404, detail=f"Source file not found: {source}")
@@ -504,7 +507,11 @@ async def _create_job(
     req: TranscodeRequest, background_tasks: BackgroundTasks, source: Path, preset: dict
 ) -> JobStatus:
     job_id = str(uuid.uuid4())
-    output_filename = req.output_filename or f"{source.stem}_{req.preset}.mp4"
+    # .name strips any directory components (and neutralizes an absolute override or ../
+    # traversal), so a client-supplied output_filename can never write outside OUTPUT_ROOT.
+    output_filename = Path(req.output_filename or f"{source.stem}_{req.preset}.mp4").name
+    if not output_filename:
+        raise HTTPException(status_code=400, detail="Invalid output_filename")
     output = str(Path(OUTPUT_ROOT) / output_filename)
 
     duration_us = await get_duration_us(str(source))

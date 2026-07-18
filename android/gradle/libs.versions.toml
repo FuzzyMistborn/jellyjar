@@ -16,6 +16,7 @@ datastore = "1.2.1"
 work = "2.11.2"
 coreSplashscreen = "1.2.0"
 securityCrypto = "1.1.0"
+palette = "1.0.0"
 
 [libraries]
 # AndroidX Core
@@ -65,6 +66,9 @@ okhttp-sse = { group = "com.squareup.okhttp3", name = "okhttp-sse", version.ref 
 # Coil image loading
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 coil-video = { group = "io.coil-kt", name = "coil-video", version.ref = "coil" }
+
+# Palette (dominant-color extraction from backdrop art)
+androidx-palette = { group = "androidx.palette", name = "palette-ktx", version.ref = "palette" }
 
 # Jellyfin SDK
 jellyfin-core = { group = "org.jellyfin.sdk", name = "jellyfin-core", version.ref = "jellyfin" }

@@ -197,7 +197,12 @@ interface CachedItemDao {
     """)
     suspend fun findSeasonsBySeriesName(seriesName: String): List<CachedItemEntity>
 
-    @Query("SELECT * FROM cached_items WHERE seriesName = :seriesName AND type = 'Episode' AND parentIndexNumber = :seasonNumber ORDER BY indexNumber ASC")
+    @Query("""
+        SELECT ci.* FROM cached_items ci
+        WHERE ci.seriesName = :seriesName AND ci.type = 'Episode' AND ci.parentIndexNumber = :seasonNumber
+          AND EXISTS (SELECT 1 FROM downloads d WHERE d.jellyfinId = ci.id AND d.status = 'COMPLETE')
+        ORDER BY ci.indexNumber ASC
+    """)
     suspend fun findEpisodesBySeriesAndSeason(seriesName: String, seasonNumber: Int): List<CachedItemEntity>
 }
 

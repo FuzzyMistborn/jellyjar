@@ -42,6 +42,7 @@ import com.fuzzymistborn.jellyjar.model.SortOrder
 import com.fuzzymistborn.jellyjar.ui.theme.*
 import com.fuzzymistborn.jellyjar.ui.viewmodel.LibraryViewModel
 
+@OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
 @Composable
 fun LibraryScreen(
     onItemClick: (JellyfinItem) -> Unit,
@@ -49,6 +50,8 @@ fun LibraryScreen(
     onAdminClick: () -> Unit,
     onDownloadsClick: () -> Unit,
     viewModel: LibraryViewModel = hiltViewModel(),
+    sharedTransitionScope: androidx.compose.animation.SharedTransitionScope? = null,
+    animatedVisibilityScope: androidx.compose.animation.AnimatedContentScope? = null,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
@@ -172,6 +175,8 @@ fun LibraryScreen(
                         onItemFocus = viewModel::setFeatured,
                         onRefresh = {},
                         viewModel = viewModel,
+                        sharedTransitionScope = sharedTransitionScope,
+                        animatedVisibilityScope = animatedVisibilityScope,
                     )
                 }
                 return@Column
@@ -265,6 +270,7 @@ fun LibraryScreen(
                         favoriteIds = state.favoriteIds,
                         favoriteItems = state.favoriteItems,
                         downloadStatuses = state.downloadStatuses,
+                        downloadThumbnails = state.downloadThumbnails,
                         showContinueWatching = state.showContinueWatching,
                         showRecentlyAdded = state.showRecentlyAdded,
                         showMyList = state.showMyList,
@@ -297,6 +303,8 @@ fun LibraryScreen(
                             onItemFocus = viewModel::setFeatured,
                             onRefresh = {},
                             viewModel = viewModel,
+                            sharedTransitionScope = sharedTransitionScope,
+                            animatedVisibilityScope = animatedVisibilityScope,
                         )
                     }
                 }
@@ -325,6 +333,8 @@ fun LibraryScreen(
                         onItemFocus = viewModel::setFeatured,
                         onRefresh = viewModel::refresh,
                         viewModel = viewModel,
+                        sharedTransitionScope = sharedTransitionScope,
+                        animatedVisibilityScope = animatedVisibilityScope,
                     )
                 }
             }
@@ -344,6 +354,7 @@ private fun HomeScreen(
     favoriteIds: Set<String>,
     favoriteItems: List<JellyfinItem>,
     downloadStatuses: Map<String, String>,
+    downloadThumbnails: List<String>,
     showContinueWatching: Boolean,
     showRecentlyAdded: Boolean,
     showMyList: Boolean,
@@ -449,7 +460,7 @@ private fun HomeScreen(
             }
         }
         item {
-            DownloadsTile(onClick = onDownloadsClick)
+            DownloadsTile(thumbnails = downloadThumbnails, onClick = onDownloadsClick)
         }
     }
 }
@@ -578,8 +589,11 @@ private fun LibraryTile(library: JellyfinLibrary, jellyfinUrl: String, onClick: 
     }
 }
 
+// Mirrors LibraryTile's artwork-first look once there's something downloaded: a mosaic of up to
+// 4 recent posters behind the label instead of a flat icon card. Falls back to the icon card
+// when nothing's been downloaded yet — there's no art to show.
 @Composable
-private fun DownloadsTile(onClick: () -> Unit) {
+private fun DownloadsTile(thumbnails: List<String>, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -587,18 +601,47 @@ private fun DownloadsTile(onClick: () -> Unit) {
             .clip(RoundedCornerShape(Radius.md))
             .background(SurfaceVariant)
             .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(Spacing.md),
-        ) {
-            Icon(Icons.Default.DownloadDone, contentDescription = null,
-                tint = Primary, modifier = Modifier.size(IconSize.xl))
-            Text("Downloads",
-                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                color = OnSurface)
-            Text("Offline content", style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+        if (thumbnails.isNotEmpty()) {
+            Row(modifier = Modifier.fillMaxSize()) {
+                thumbnails.forEach { uri ->
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(uri)
+                            .crossfade(300)
+                            .build(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                    )
+                }
+            }
+            Box(modifier = Modifier.fillMaxSize().background(tileScrim()))
+            Row(
+                modifier = Modifier.align(Alignment.BottomStart).padding(20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                Icon(Icons.Default.DownloadDone, contentDescription = null, tint = Color.White, modifier = Modifier.size(IconSize.md))
+                Text(
+                    text = "Downloads",
+                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold, fontSize = 26.sp),
+                    color = Color.White,
+                )
+            }
+        } else {
+            Column(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(Spacing.md),
+            ) {
+                Icon(Icons.Default.DownloadDone, contentDescription = null,
+                    tint = Primary, modifier = Modifier.size(IconSize.xl))
+                Text("Downloads",
+                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                    color = OnSurface)
+                Text("Offline content", style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+            }
         }
     }
 }
@@ -616,6 +659,8 @@ private fun MediaGrid(
     onItemFocus: (JellyfinItem) -> Unit,
     onRefresh: () -> Unit,
     viewModel: LibraryViewModel,
+    sharedTransitionScope: androidx.compose.animation.SharedTransitionScope? = null,
+    animatedVisibilityScope: androidx.compose.animation.AnimatedContentScope? = null,
 ) {
     val gridState = rememberLazyGridState()
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -658,6 +703,8 @@ private fun MediaGrid(
                     downloadProgress = downloadProgress[item.id],
                     onClick = { onItemClick(item) },
                     onFocus = { onItemFocus(item) },
+                    sharedTransitionScope = sharedTransitionScope,
+                    animatedVisibilityScope = animatedVisibilityScope,
                 )
             }
             if (state.isLoadingMore) {
@@ -679,7 +726,23 @@ private fun MediaCard(
     downloadProgress: Float? = null,
     onClick: () -> Unit,
     onFocus: () -> Unit,
+    sharedTransitionScope: androidx.compose.animation.SharedTransitionScope? = null,
+    animatedVisibilityScope: androidx.compose.animation.AnimatedContentScope? = null,
 ) {
+    // Grid poster morphs into the Detail screen's poster instead of a hard cut, when both
+    // scopes are supplied by the NavHost (see MainActivity.kt's SharedTransitionLayout). Key
+    // must match the one DetailScreen applies to its own poster for the same item id.
+    val posterModifier = Modifier.fillMaxWidth().let { base ->
+        if (sharedTransitionScope != null && animatedVisibilityScope != null) {
+            with(sharedTransitionScope) {
+                base.sharedElement(
+                    rememberSharedContentState(key = "poster-${item.id}"),
+                    animatedVisibilityScope = animatedVisibilityScope,
+                )
+            }
+        } else base
+    }
+
     Column(
         modifier = Modifier
             .clip(RoundedCornerShape(Radius.sm))
@@ -688,7 +751,7 @@ private fun MediaCard(
         PosterImage(
             imageUrl = imageUrl,
             contentDescription = item.name,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = posterModifier,
             cacheKey = "poster_${item.id}",
         ) {
             item.communityRating?.let { rating ->

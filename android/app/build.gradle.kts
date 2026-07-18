@@ -96,6 +96,9 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil.video)
 
+    // Palette (dominant-color extraction from backdrop art)
+    implementation(libs.androidx.palette)
+
     // Jellyfin SDK
     implementation(libs.jellyfin.core)
 

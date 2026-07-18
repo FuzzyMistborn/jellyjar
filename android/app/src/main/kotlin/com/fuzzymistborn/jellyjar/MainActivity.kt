@@ -26,9 +26,6 @@ sealed class Screen(val route: String) {
     object Detail : Screen("detail/{itemId}") {
         fun go(itemId: String) = "detail/$itemId"
     }
-    object Series : Screen("series/{seriesId}") {
-        fun go(seriesId: String) = "series/$seriesId"
-    }
     object Player : Screen("player/{localPath}/{jellyfinId}?startMs={startMs}") {
         fun go(localPath: String, jellyfinId: String = "", startMs: Long = 0L) =
             "player/${localPath.encode()}/${jellyfinId.encode()}?startMs=$startMs"
@@ -110,6 +107,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableStateOf(false) }) {
     val navController = rememberNavController()
@@ -122,31 +120,34 @@ fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableSta
         }
     }
 
-    NavHost(
-        navController = navController,
-        startDestination = Screen.Library.route,
-        enterTransition = { fadeIn(tween(300)) + slideInHorizontally(tween(300)) { it / 5 } },
-        exitTransition = { fadeOut(tween(200)) + slideOutHorizontally(tween(200)) { -it / 5 } },
-        popEnterTransition = { fadeIn(tween(300)) + slideInHorizontally(tween(300)) { -it / 5 } },
-        popExitTransition = { fadeOut(tween(200)) + slideOutHorizontally(tween(200)) { it / 5 } },
-    ) {
+    SharedTransitionLayout {
+        NavHost(
+            navController = navController,
+            startDestination = Screen.Library.route,
+            enterTransition = { fadeIn(tween(300)) + slideInHorizontally(tween(300)) { it / 5 } },
+            exitTransition = { fadeOut(tween(200)) + slideOutHorizontally(tween(200)) { -it / 5 } },
+            popEnterTransition = { fadeIn(tween(300)) + slideInHorizontally(tween(300)) { -it / 5 } },
+            popExitTransition = { fadeOut(tween(200)) + slideOutHorizontally(tween(200)) { it / 5 } },
+        ) {
 
-        composable(Screen.Library.route) {
-            LibraryScreen(
-                onItemClick = { item ->
-                    navController.navigate(Screen.Detail.go(item.id))
-                },
-                onPlayOffline = { localPath ->
-                    navController.navigate(Screen.Player.go(localPath, ""))
-                },
-                onAdminClick = {
-                    navController.navigate(Screen.PinGate.route)
-                },
-                onDownloadsClick = {
-                    navController.navigate(Screen.Downloads.route)
-                },
-            )
-        }
+            composable(Screen.Library.route) {
+                LibraryScreen(
+                    onItemClick = { item ->
+                        navController.navigate(Screen.Detail.go(item.id))
+                    },
+                    onPlayOffline = { localPath ->
+                        navController.navigate(Screen.Player.go(localPath, ""))
+                    },
+                    onAdminClick = {
+                        navController.navigate(Screen.PinGate.route)
+                    },
+                    onDownloadsClick = {
+                        navController.navigate(Screen.Downloads.route)
+                    },
+                    sharedTransitionScope = this@SharedTransitionLayout,
+                    animatedVisibilityScope = this@composable,
+                )
+            }
 
         composable(Screen.Downloads.route) {
             com.fuzzymistborn.jellyjar.ui.screens.DownloadsScreen(
@@ -182,6 +183,8 @@ fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableSta
                     navController.navigate(Screen.Season.go(seasonId, seriesId))
                 },
                 onBack = { navController.popBackStack() },
+                sharedTransitionScope = this@SharedTransitionLayout,
+                animatedVisibilityScope = this@composable,
             )
         }
 
@@ -205,20 +208,6 @@ fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableSta
                 },
                 onStreamClick = { streamUrl, jellyfinId, startMs ->
                     navController.navigate(Screen.StreamPlayer.go(streamUrl, jellyfinId, startMs))
-                },
-                onBack = { navController.popBackStack() },
-            )
-        }
-
-        composable(
-            route = Screen.Series.route,
-            arguments = listOf(navArgument("seriesId") { type = NavType.StringType }),
-        ) { backStack ->
-            val seriesId = backStack.arguments?.getString("seriesId") ?: return@composable
-            com.fuzzymistborn.jellyjar.ui.screens.SeasonsScreen(
-                seriesId = seriesId,
-                onEpisodeClick = { streamUrl ->
-                    navController.navigate(Screen.StreamPlayer.go(streamUrl))
                 },
                 onBack = { navController.popBackStack() },
             )
@@ -292,6 +281,7 @@ fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableSta
                     navController.popBackStack()
                 },
             )
+        }
         }
     }
 }

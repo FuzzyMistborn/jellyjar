@@ -104,6 +104,7 @@ fun AdminScreen(
     // focus loss / test / leaving the screen, so catch system back as well as the header arrow.
     val leaveScreen = {
         viewModel.commitShimUrl()
+        viewModel.commitJellyfinUrl()
         onBack()
     }
     androidx.activity.compose.BackHandler(onBack = leaveScreen)
@@ -122,12 +123,18 @@ fun AdminScreen(
         ScreenHeader(
             title = "Settings",
             onBack = leaveScreen,
-            modifier = Modifier.padding(bottom = Spacing.sm),
+        )
+        Text(
+            text = "Jellyfin connection, downloads, and playback preferences",
+            style = MaterialTheme.typography.bodyMedium,
+            color = OnSurfaceMuted,
+            modifier = Modifier.padding(start = 56.dp, bottom = Spacing.sm),
         )
 
         // ── Jellyfin Server ───────────────────────────────────────────────────
         SettingsCard(
             title = "Jellyfin Server",
+            icon = Icons.Default.Dns,
             statusBadge = {
                 when {
                     state.isCheckingConnection -> StatusChip(label = "Checking…", color = OnSurfaceMuted)
@@ -142,6 +149,7 @@ fun AdminScreen(
                 placeholder = "192.168.1.x:8096",
                 value = state.jellyfinUrl,
                 onValueChange = viewModel::setJellyfinUrl,
+                onFocusLost = viewModel::commitJellyfinUrl,
             )
             SettingsTextField(
                 label = "Username",
@@ -198,6 +206,7 @@ fun AdminScreen(
         // ── Press ─────────────────────────────────────────────────────────────
         SettingsCard(
             title = "Press",
+            icon = Icons.Default.Movie,
             statusBadge = {
                 when (state.shimOk) {
                     true -> StatusChip(label = "Reachable", color = Success)
@@ -236,7 +245,7 @@ fun AdminScreen(
         }
 
         // ── Downloads ─────────────────────────────────────────────────────────
-        SettingsCard(title = "Downloads") {
+        SettingsCard(title = "Downloads", icon = Icons.Default.Download) {
             val context = androidx.compose.ui.platform.LocalContext.current
             val folderPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
                 contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree(),
@@ -331,7 +340,7 @@ fun AdminScreen(
         }
 
         // ── Home Screen ───────────────────────────────────────────────────────
-        SettingsCard(title = "Home Screen") {
+        SettingsCard(title = "Home Screen", icon = Icons.Default.Home) {
             SettingsToggleRow(
                 title = "Continue Watching",
                 subtitle = "Show the Continue Watching row",
@@ -359,7 +368,7 @@ fun AdminScreen(
         }
 
         // ── Playback ──────────────────────────────────────────────────────────
-        SettingsCard(title = "Playback") {
+        SettingsCard(title = "Playback", icon = Icons.Default.PlayCircle) {
             SettingsToggleRow(
                 title = "Auto-play Next Episode",
                 subtitle = "Continue to the next episode when one finishes",
@@ -389,6 +398,7 @@ fun AdminScreen(
         // ── Admin PIN ─────────────────────────────────────────────────────────
         SettingsCard(
             title = "Admin PIN",
+            icon = Icons.Default.Lock,
             statusBadge = {
                 StatusChip(
                     label = if (state.isPinEnabled) "Enabled" else "Disabled",
@@ -443,7 +453,7 @@ fun AdminScreen(
 
         // ── Active Jobs ───────────────────────────────────────────────────────
         AnimatedVisibility(visible = state.activeJobs.isNotEmpty()) {
-            SettingsCard(title = "Active Jobs") {
+            SettingsCard(title = "Active Jobs", icon = Icons.Default.Sync) {
                 state.activeJobs.forEach { job ->
                     Surface(
                         color = Background,
@@ -509,6 +519,7 @@ fun AdminScreen(
 @Composable
 private fun SettingsCard(
     title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
     statusBadge: @Composable RowScope.() -> Unit = {},
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -526,7 +537,19 @@ private fun SettingsCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(title, style = MaterialTheme.typography.titleMedium, color = SectionHeading)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    if (icon != null) {
+                        Surface(color = Primary.copy(alpha = 0.15f), shape = RoundedCornerShape(Radius.sm)) {
+                            Icon(
+                                icon,
+                                contentDescription = null,
+                                tint = Primary,
+                                modifier = Modifier.padding(6.dp).size(IconSize.sm),
+                            )
+                        }
+                    }
+                    Text(title, style = MaterialTheme.typography.titleMedium, color = SectionHeading)
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { statusBadge() }
             }
             HorizontalDivider(color = Background)

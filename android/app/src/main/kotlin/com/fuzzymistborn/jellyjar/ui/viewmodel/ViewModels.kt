@@ -52,6 +52,9 @@ data class LibraryState(
     val recentlyAdded: List<JellyfinItem> = emptyList(),
     val favoriteIds: Set<String> = emptySet(),
     val favoriteItems: List<JellyfinItem> = emptyList(),
+    // Up to 4 thumbnails from completed downloads, shown as a mosaic on the home grid's
+    // Downloads tile so it reads as artwork-first like every other tile, not a flat icon card.
+    val downloadThumbnails: List<String> = emptyList(),
 ) {
     val hasMore: Boolean get() = items.size < totalCount
 
@@ -85,11 +88,19 @@ class LibraryViewModel @Inject constructor(
     val state: StateFlow<LibraryState> = _state.asStateFlow()
 
     init {
+        // Handles the very first "online" reading (app start); every later false->true
+        // transition is handled once by `reconnected` below — collecting both here and there
+        // would fire loadLibrary() twice for the same reconnect.
+        var initialConnectivitySeen = false
         viewModelScope.launch {
             networkMonitor.isOnline.collect { online ->
                 _state.update { it.copy(isOnline = online) }
-                if (online && !_state.value.showingDownloads) loadLibrary()
-                else if (!online) buildOfflineLibraries()
+                if (!online) {
+                    buildOfflineLibraries()
+                } else if (!initialConnectivitySeen && !_state.value.showingDownloads) {
+                    loadLibrary()
+                }
+                initialConnectivitySeen = true
             }
         }
         // Retry Jellyfin with backoff when online but server is unreachable; stops once available
@@ -132,6 +143,11 @@ class LibraryViewModel @Inject constructor(
                     it.copy(
                         downloadStatuses = downloads.associateBy({ it.jellyfinId }, { it.status }),
                         downloadProgress = downloads.associateBy({ it.jellyfinId }, { it.progress }),
+                        downloadThumbnails = downloads
+                            .filter { d -> d.status == DownloadStatus.COMPLETE.name }
+                            .sortedByDescending { d -> d.addedAt }
+                            .mapNotNull { d -> d.thumbnailUri }
+                            .take(4),
                     )
                 }
             }
@@ -733,6 +749,14 @@ class AdminViewModel @Inject constructor(
         jellyfinUrlDirty = true
         _state.update { it.copy(jellyfinUrl = v) }
     }
+
+    // Clears the dirty flag so the settings Flow can resync the field once the user stops
+    // editing it, even if they never tap Authenticate (mirrors commitShimUrl's role for the
+    // Press URL). Does not persist anything — the Jellyfin URL is only saved together with
+    // credentials via authenticate().
+    fun commitJellyfinUrl() {
+        jellyfinUrlDirty = false
+    }
     fun setUsername(v: String) = _state.update { it.copy(username = v) }
     fun setPassword(v: String) = _state.update { it.copy(password = v) }
     fun setShimUrl(v: String) {
@@ -808,7 +832,7 @@ class AdminViewModel @Inject constructor(
     }
 
     private fun ensureScheme(url: String): String {
-        val trimmed = url.trim()
+        val trimmed = url.trim().trimEnd('/')
         if (trimmed.isBlank()) return ""
         if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
         // IP addresses default to http (LAN), domain names default to https
@@ -1435,70 +1459,3 @@ class PlayerViewModel @Inject constructor(
     }
 }
 
-// ─── Seasons (legacy series browser) ViewModel ────────────────────────────────
-
-data class SeasonsState(
-    val seriesName: String? = null,
-    val seasons: List<JellyfinItem> = emptyList(),
-    val episodes: List<JellyfinItem> = emptyList(),
-    val selectedSeasonIndex: Int? = null,
-    val isLoading: Boolean = false,
-    val jellyfinUrl: String = "",
-    val jellyfinToken: String = "",
-)
-
-@HiltViewModel
-class SeasonsViewModel @Inject constructor(
-    private val jellyfinRepo: JellyfinRepository,
-    private val settings: SettingsRepository,
-) : ViewModel() {
-
-    private val _state = MutableStateFlow(SeasonsState())
-    val state: StateFlow<SeasonsState> = _state.asStateFlow()
-
-    fun load(seriesId: String) = viewModelScope.launch {
-        _state.update { it.copy(isLoading = true) }
-        val s = settings.settings.first()
-        _state.update { it.copy(jellyfinUrl = s.jellyfinUrl, jellyfinToken = s.jellyfinToken) }
-
-        // Load series info for the name
-        jellyfinRepo.getItem(seriesId).onSuccess { series ->
-            _state.update { it.copy(seriesName = series.name) }
-        }
-
-        // Load seasons — show poster grid first, no auto-selection
-        jellyfinRepo.getItems(
-            parentId = seriesId,
-            types = "Season",
-        ).onSuccess { response ->
-            _state.update { it.copy(seasons = response.Items, isLoading = false) }
-        }.onFailure {
-            _state.update { it.copy(isLoading = false) }
-        }
-    }
-
-    fun selectSeason(index: Int) = viewModelScope.launch {
-        _state.update { it.copy(selectedSeasonIndex = index, isLoading = true) }
-        val seasonId = _state.value.seasons.getOrNull(index)?.id ?: return@launch
-        jellyfinRepo.getItems(
-            parentId = seasonId,
-            types = "Episode",
-        ).onSuccess { response ->
-            _state.update { it.copy(episodes = response.Items, isLoading = false) }
-        }.onFailure {
-            _state.update { it.copy(isLoading = false) }
-        }
-    }
-
-    fun clearSeasonSelection() {
-        _state.update { it.copy(selectedSeasonIndex = null, episodes = emptyList()) }
-    }
-
-    fun posterUrl(itemId: String) =
-        JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId)
-
-    fun thumbnailUrl(itemId: String) =
-        JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId, maxWidth = 500)
-
-    suspend fun streamUrl(itemId: String) = jellyfinRepo.getStreamUrl(itemId)
-}

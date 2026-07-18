@@ -173,7 +173,9 @@ fun PlayerScreen(
     }
     // Hide the button just before the segment ends so it can't seek past useful content
     val activeSegment = skipSegments.firstOrNull {
-        positionMs >= it.startMs && positionMs < it.endMs - 1_000
+        // Hide the button in the last second before the segment ends, but never let that
+        // clip a segment shorter than 1s down to an empty (always-false) window.
+        positionMs >= it.startMs && positionMs < maxOf(it.startMs, it.endMs - 1_000)
     }
 
     // ── Trickplay scrub previews ──────────────────────────────────────────────

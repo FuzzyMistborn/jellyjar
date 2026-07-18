@@ -7,6 +7,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -33,8 +35,10 @@ import com.fuzzymistborn.jellyjar.model.DownloadStatus
 import com.fuzzymistborn.jellyjar.model.JellyfinItem
 import com.fuzzymistborn.jellyjar.model.MediaSource
 import com.fuzzymistborn.jellyjar.ui.theme.*
+import com.fuzzymistborn.jellyjar.ui.viewmodel.DetailState
 import com.fuzzymistborn.jellyjar.ui.viewmodel.DetailViewModel
 
+@OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
 @Composable
 fun DetailScreen(
     itemId: String,
@@ -44,6 +48,8 @@ fun DetailScreen(
     onSeasonClick: (seasonId: String, seriesId: String) -> Unit = { _, _ -> },
     onBack: () -> Unit,
     viewModel: DetailViewModel = hiltViewModel(),
+    sharedTransitionScope: androidx.compose.animation.SharedTransitionScope? = null,
+    animatedVisibilityScope: androidx.compose.animation.AnimatedContentScope? = null,
 ) {
     LaunchedEffect(itemId) { viewModel.loadItem(itemId) }
 
@@ -88,277 +94,53 @@ fun DetailScreen(
 
         val item = state.item
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().navigationBarsPadding(),
-        ) {
-            // Back button
-            item(key = "back") {
-                ScreenHeader(
+        // Per-title accent extracted from the backdrop art (falls back to the theme's default
+        // blue while loading or if extraction fails) so primary actions/chips read as "this
+        // title's color" instead of always the same fixed blue.
+        val accentColor = rememberDynamicAccentColor(
+            imageUrl = item?.let { viewModel.backdropUrl(if (it.type == "Episode") it.seriesId ?: it.id else it.id) },
+        )
+
+        val actions = DetailActions(
+            onPlayClick = onPlayClick,
+            onStreamClick = onStreamClick,
+            onSeasonClick = onSeasonClick,
+            onShowPresetDialog = { showPresetDialog = true },
+            onShowDeleteConfirm = { showDeleteConfirm = true },
+        )
+
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            // Tablet landscape and up gets a real two-pane layout instead of the phone's single
+            // stacked column — a fixed poster/title/actions pane alongside independently
+            // scrolling overview + seasons content.
+            val isTwoPane = maxWidth >= 840.dp
+
+            if (item != null && isTwoPane) {
+                DetailTwoPaneContent(
+                    item = item,
+                    state = state,
+                    viewModel = viewModel,
+                    accentColor = accentColor,
                     onBack = onBack,
-                    modifier = Modifier
-                        .statusBarsPadding()
-                        .padding(horizontal = Spacing.sm, vertical = 4.dp),
-                ) {}
+                    actions = actions,
+                    coroutineScope = coroutineScope,
+                    sharedTransitionScope = sharedTransitionScope,
+                    animatedVisibilityScope = animatedVisibilityScope,
+                )
+            } else {
+                DetailStackedContent(
+                    item = item,
+                    state = state,
+                    viewModel = viewModel,
+                    accentColor = accentColor,
+                    onBack = onBack,
+                    actions = actions,
+                    coroutineScope = coroutineScope,
+                    sharedTransitionScope = sharedTransitionScope,
+                    animatedVisibilityScope = animatedVisibilityScope,
+                )
             }
-
-            item(key = "hero_spacer") { Spacer(Modifier.height(100.dp)) }
-
-            // Metadata block
-            if (item != null) {
-                item(key = "metadata") {
-                    BoxWithConstraints(modifier = Modifier.padding(horizontal = 32.dp)) {
-                        val isWide = maxWidth >= 600.dp
-                        val posterWidth = if (isWide) 220.dp else 130.dp
-
-                        Row {
-                            PosterImage(
-                                imageUrl = state.download?.thumbnailUri
-                                    ?: viewModel.posterUrl(item.id),
-                                contentDescription = item.name,
-                                modifier = Modifier.width(posterWidth),
-                            )
-                            Spacer(Modifier.width(if (isWide) Spacing.xl else Spacing.lg))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = item.displayTitle,
-                            style = MaterialTheme.typography.displayMedium,
-                            color = OnSurface,
-                        )
-
-                        Spacer(Modifier.height(Spacing.sm))
-
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            item.year?.let {
-                                Text(it.toString(), style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
-                            }
-                            item.runtimeMinutes?.let {
-                                Text("${it}m", style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
-                            }
-                            item.communityRating?.let {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Star, contentDescription = null,
-                                        tint = Accent, modifier = Modifier.size(IconSize.sm))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("${"%.1f".format(it)}", style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
-                                }
-                            }
-                        }
-
-                        Spacer(Modifier.height(Spacing.lg))
-
-                        item.overview?.let {
-                            // Portrait/phone widths get a clamped, tap-to-expand overview so a long
-                            // description doesn't push the Seasons row far down the scroll; wide/tablet
-                            // layouts have room to just show the whole thing.
-                            var overviewExpanded by remember(item.id) { mutableStateOf(false) }
-                            var overviewOverflows by remember(item.id) { mutableStateOf(false) }
-                            Text(
-                                text = it,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = OnSurface.copy(alpha = 0.85f),
-                                maxLines = if (isWide || overviewExpanded) Int.MAX_VALUE else 4,
-                                overflow = TextOverflow.Ellipsis,
-                                onTextLayout = { result -> overviewOverflows = result.hasVisualOverflow },
-                                modifier = Modifier
-                                    .widthIn(max = 600.dp)
-                                    .let { mod ->
-                                        if (isWide) mod
-                                        else mod.clickable { overviewExpanded = !overviewExpanded }
-                                    },
-                            )
-                            if (!isWide && (overviewOverflows || overviewExpanded)) {
-                                Text(
-                                    text = if (overviewExpanded) "Read less" else "Read more",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = Primary,
-                                    modifier = Modifier
-                                        .clickable { overviewExpanded = !overviewExpanded }
-                                        .padding(top = 2.dp),
-                                )
-                            }
-                        }
-
-                        if (!item.mediaSources.isNullOrEmpty()) {
-                            Spacer(Modifier.height(Spacing.md))
-                            TechSpecRow(item.mediaSources)
-                        }
-
-                        Spacer(Modifier.height(28.dp))
-
-                        if (item.type != "Series") {
-                            val dl = state.download
-                            val offlinePositionMs = dl?.playbackPositionMs ?: 0L
-                            val streamPositionMs = state.streamPositionMs
-                            val hasPosition = offlinePositionMs > 0L || streamPositionMs > 0L
-                            val resumeAction: (() -> Unit)? = when {
-                                dl?.status == DownloadStatus.COMPLETE.name && offlinePositionMs > 0L ->
-                                    { { onPlayClick(dl.localPath, dl.jellyfinId, offlinePositionMs) } }
-                                state.canStream && streamPositionMs > 0L ->
-                                    {
-                                        {
-                                            coroutineScope.launch {
-                                                onStreamClick(viewModel.streamUrl(item.id), item.id, streamPositionMs)
-                                            }
-                                        }
-                                    }
-                                else -> null
-                            }
-                            val playFromStartAction: (() -> Unit)? = when {
-                                dl?.status == DownloadStatus.COMPLETE.name ->
-                                    { { onPlayClick(dl.localPath, dl.jellyfinId, 0L) } }
-                                state.canStream ->
-                                    {
-                                        {
-                                            coroutineScope.launch {
-                                                onStreamClick(viewModel.streamUrl(item.id), item.id, 0L)
-                                            }
-                                        }
-                                    }
-                                else -> null
-                            }
-
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                if (hasPosition && resumeAction != null) {
-                                    PrimaryActionButton("Resume", Icons.Default.PlayArrow, resumeAction)
-                                }
-                                if (playFromStartAction != null) {
-                                    val isSecondary = hasPosition && resumeAction != null
-                                    if (isSecondary) {
-                                        SecondaryActionButton(
-                                            icon = Icons.Default.PlayArrow,
-                                            onClick = playFromStartAction,
-                                            text = "Play",
-                                        )
-                                    } else {
-                                        PrimaryActionButton("Play", Icons.Default.PlayArrow, playFromStartAction)
-                                    }
-                                }
-                            }
-
-                            Spacer(Modifier.height(Spacing.sm))
-
-                            // Separate row for the secondary/status actions — on narrow screens
-                            // these previously overflowed off-screen when combined with the play
-                            // row above, clipping the watched/download buttons and squeezing the
-                            // favorite icon's touch target into its neighbor.
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                IconButton(onClick = { viewModel.toggleFavorite() }) {
-                                    Icon(
-                                        if (state.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                                        contentDescription = if (state.isFavorite) "Remove from My List" else "Add to My List",
-                                        tint = if (state.isFavorite) Error else OnSurfaceMuted,
-                                    )
-                                }
-                                IconButton(onClick = { viewModel.togglePlayed() }) {
-                                    Icon(
-                                        if (state.isPlayed) Icons.Default.CheckCircle else Icons.Default.CheckCircleOutline,
-                                        contentDescription = if (state.isPlayed) "Mark Unplayed" else "Mark Played",
-                                        tint = if (state.isPlayed) Primary else OnSurfaceMuted,
-                                    )
-                                }
-                                when {
-                                    dl == null && state.isOnline -> SecondaryActionButton(
-                                        icon = Icons.Default.Download,
-                                        onClick = { showPresetDialog = true },
-                                        text = "Download",
-                                    )
-                                    dl != null && dl.status in listOf(
-                                        DownloadStatus.QUEUED.name,
-                                        DownloadStatus.TRANSCODING.name,
-                                        DownloadStatus.DOWNLOADING.name,
-                                    ) ->
-                                        DownloadProgressButton(dl.status, dl.progress)
-                                    dl?.status == DownloadStatus.COMPLETE.name ->
-                                        SecondaryActionButton(
-                                            icon = Icons.Default.Delete,
-                                            onClick = { showDeleteConfirm = true },
-                                            text = "Remove",
-                                            contentColor = Error,
-                                        )
-                                    dl?.status == DownloadStatus.FAILED.name -> {
-                                        if (state.isOnline) {
-                                            SecondaryActionButton(
-                                                icon = Icons.Default.Refresh,
-                                                onClick = { viewModel.retryDownload(item.id) },
-                                                text = "Retry",
-                                            )
-                                        }
-                                        SecondaryActionButton(
-                                            icon = Icons.Default.Delete,
-                                            onClick = { showDeleteConfirm = true },
-                                            contentColor = Error,
-                                        )
-                                    }
-                                    else -> {}
-                                }
-                            }
-                        }
-                            } // metadata Column
-                        } // Row (poster + metadata)
-                    } // BoxWithConstraints
-                }
-
-                // Seasons section — tap navigates to dedicated SeasonScreen
-                if (item.type == "Series" && state.seasons.isNotEmpty()) {
-                    item(key = "seasons_header") {
-                        Column {
-                            Spacer(Modifier.height(40.dp))
-                            Text(
-                                text = "Seasons",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = SectionHeading,
-                                modifier = Modifier.padding(horizontal = 32.dp),
-                            )
-                            Spacer(Modifier.height(Spacing.md))
-                            androidx.compose.foundation.lazy.LazyRow(
-                                contentPadding = PaddingValues(horizontal = 32.dp),
-                                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                            ) {
-                                itemsIndexed(state.seasons) { index, season ->
-                                    Column(modifier = Modifier.width(110.dp)) {
-                                        PosterImage(
-                                            imageUrl = viewModel.posterUrl(season.id),
-                                            contentDescription = season.name,
-                                            modifier = Modifier.fillMaxWidth(),
-                                            onClick = { onSeasonClick(season.id, item.id) },
-                                        ) {
-                                            SeasonDownloadBadge(
-                                                queuingProgress = state.seasonDownloadProgress[season.id],
-                                                episodeIds = state.seasonEpisodeIds[season.id],
-                                                episodeDownloads = state.episodeDownloads,
-                                                modifier = Modifier.align(Alignment.BottomCenter),
-                                            )
-                                        }
-                                        Spacer(Modifier.height(4.dp))
-                                        Text(
-                                            text = season.name,
-                                            style = MaterialTheme.typography.titleMedium,
-                                            color = OnSurface,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
-                                }
-                            }
-                            Spacer(Modifier.height(40.dp))
-                        }
-                    }
-                    item(key = "bottom_spacer") { Spacer(Modifier.height(0.dp)) }
-                } else {
-                    item(key = "bottom_spacer") { Spacer(Modifier.height(40.dp)) }
-                }
-            }
-        } // end LazyColumn
+        }
 
         // Loading/error overlays when item hasn't loaded yet
         if (state.isLoading && state.item == null) {
@@ -392,10 +174,422 @@ fun DetailScreen(
     }
 }
 
+// Bundles the navigation callbacks needed by both the stacked and two-pane content layouts so
+// DetailScreen doesn't have to pass six separate lambdas to each.
+private data class DetailActions(
+    val onPlayClick: (localPath: String, jellyfinId: String, startMs: Long) -> Unit,
+    val onStreamClick: (streamUrl: String, jellyfinId: String, startMs: Long) -> Unit,
+    val onSeasonClick: (seasonId: String, seriesId: String) -> Unit,
+    val onShowPresetDialog: () -> Unit,
+    val onShowDeleteConfirm: () -> Unit,
+)
+
+// Key must match the one MediaCard applies to the same item's poster in the library grid
+// (LibraryScreen.kt) so the tapped poster morphs into this one instead of a hard cut. A no-op
+// when either scope is null (e.g. this screen reached via a nav path outside the shared
+// SharedTransitionLayout, or previews).
+@OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+@Composable
+private fun detailPosterModifier(
+    base: Modifier,
+    itemId: String,
+    sharedTransitionScope: androidx.compose.animation.SharedTransitionScope?,
+    animatedVisibilityScope: androidx.compose.animation.AnimatedContentScope?,
+): Modifier {
+    if (sharedTransitionScope == null || animatedVisibilityScope == null) return base
+    return with(sharedTransitionScope) {
+        base.sharedElement(
+            rememberSharedContentState(key = "poster-$itemId"),
+            animatedVisibilityScope = animatedVisibilityScope,
+        )
+    }
+}
+
+// Phone / narrow-tablet layout: everything in one scrolling column, poster beside the title.
+// This is the pre-two-pane layout, unchanged in behavior.
+@Composable
+private fun DetailStackedContent(
+    item: JellyfinItem?,
+    state: DetailState,
+    viewModel: DetailViewModel,
+    accentColor: Color,
+    onBack: () -> Unit,
+    actions: DetailActions,
+    coroutineScope: kotlinx.coroutines.CoroutineScope,
+    sharedTransitionScope: androidx.compose.animation.SharedTransitionScope? = null,
+    animatedVisibilityScope: androidx.compose.animation.AnimatedContentScope? = null,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().navigationBarsPadding(),
+    ) {
+        item(key = "back") {
+            ScreenHeader(
+                onBack = onBack,
+                modifier = Modifier
+                    .statusBarsPadding()
+                    .padding(horizontal = Spacing.sm, vertical = 4.dp),
+            ) {}
+        }
+
+        item(key = "hero_spacer") { Spacer(Modifier.height(100.dp)) }
+
+        if (item != null) {
+            item(key = "metadata") {
+                BoxWithConstraints(modifier = Modifier.padding(horizontal = 32.dp)) {
+                    val isWide = maxWidth >= 600.dp
+                    val posterWidth = if (isWide) 220.dp else 130.dp
+
+                    Row {
+                        PosterImage(
+                            imageUrl = state.download?.thumbnailUri ?: viewModel.posterUrl(item.id),
+                            contentDescription = item.name,
+                            modifier = detailPosterModifier(
+                                Modifier.width(posterWidth), item.id, sharedTransitionScope, animatedVisibilityScope,
+                            ),
+                        )
+                        Spacer(Modifier.width(if (isWide) Spacing.xl else Spacing.lg))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            TitleAndMetaRow(item, accentColor)
+                            Spacer(Modifier.height(Spacing.lg))
+                            OverviewBlock(item, isWide = isWide, accentColor = accentColor)
+                            if (!item.mediaSources.isNullOrEmpty()) {
+                                Spacer(Modifier.height(Spacing.md))
+                                TechSpecRow(item.mediaSources, accentColor)
+                            }
+                            Spacer(Modifier.height(28.dp))
+                            if (item.type != "Series") {
+                                ActionButtonsSection(item, state, viewModel, accentColor, actions, coroutineScope)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (item.type == "Series" && state.seasons.isNotEmpty()) {
+                item(key = "seasons_header") {
+                    SeasonsSection(item, state, viewModel, actions)
+                }
+                item(key = "bottom_spacer") { Spacer(Modifier.height(0.dp)) }
+            } else {
+                item(key = "bottom_spacer") { Spacer(Modifier.height(40.dp)) }
+            }
+        }
+    }
+}
+
+// Tablet-landscape layout (>=840dp): a fixed left pane (poster, title, metadata, tech specs,
+// actions) beside a right pane that scrolls its own overview + seasons content independently —
+// the actions stay visible without following the user down through a long overview/season list.
+@Composable
+private fun DetailTwoPaneContent(
+    item: JellyfinItem,
+    state: DetailState,
+    viewModel: DetailViewModel,
+    accentColor: Color,
+    onBack: () -> Unit,
+    actions: DetailActions,
+    coroutineScope: kotlinx.coroutines.CoroutineScope,
+    sharedTransitionScope: androidx.compose.animation.SharedTransitionScope? = null,
+    animatedVisibilityScope: androidx.compose.animation.AnimatedContentScope? = null,
+) {
+    Column(modifier = Modifier.fillMaxSize().navigationBarsPadding()) {
+        ScreenHeader(
+            onBack = onBack,
+            modifier = Modifier
+                .statusBarsPadding()
+                .padding(horizontal = Spacing.sm, vertical = 4.dp),
+        ) {}
+
+        Spacer(Modifier.height(60.dp))
+
+        Row(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .width(380.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 32.dp, end = Spacing.lg),
+            ) {
+                PosterImage(
+                    imageUrl = state.download?.thumbnailUri ?: viewModel.posterUrl(item.id),
+                    contentDescription = item.name,
+                    modifier = detailPosterModifier(
+                        Modifier.fillMaxWidth().widthIn(max = 280.dp), item.id, sharedTransitionScope, animatedVisibilityScope,
+                    ),
+                )
+                Spacer(Modifier.height(Spacing.lg))
+                TitleAndMetaRow(item, accentColor)
+                if (!item.mediaSources.isNullOrEmpty()) {
+                    Spacer(Modifier.height(Spacing.md))
+                    TechSpecRow(item.mediaSources, accentColor)
+                }
+                Spacer(Modifier.height(Spacing.xl))
+                if (item.type != "Series") {
+                    ActionButtonsSection(item, state, viewModel, accentColor, actions, coroutineScope)
+                }
+                Spacer(Modifier.height(40.dp))
+            }
+
+            LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                contentPadding = PaddingValues(end = 32.dp, bottom = 40.dp),
+            ) {
+                if (item.overview != null) {
+                    item(key = "overview") {
+                        Box(modifier = Modifier.padding(start = Spacing.lg, top = Spacing.xs)) {
+                            OverviewBlock(item, isWide = true, accentColor = accentColor)
+                        }
+                    }
+                }
+                if (item.type == "Series" && state.seasons.isNotEmpty()) {
+                    item(key = "seasons_header") {
+                        SeasonsSection(item, state, viewModel, actions)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TitleAndMetaRow(item: JellyfinItem, accentColor: Color) {
+    Text(
+        text = item.displayTitle,
+        style = MaterialTheme.typography.displayMedium,
+        color = OnSurface,
+    )
+    Spacer(Modifier.height(Spacing.sm))
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        item.year?.let {
+            Text(it.toString(), style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
+        }
+        item.runtimeMinutes?.let {
+            Text("${it}m", style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
+        }
+        item.communityRating?.let {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Star, contentDescription = null,
+                    tint = accentColor, modifier = Modifier.size(IconSize.sm),
+                )
+                Spacer(Modifier.width(4.dp))
+                Text("${"%.1f".format(it)}", style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
+            }
+        }
+    }
+}
+
+// Portrait/phone widths get a clamped, tap-to-expand overview so a long description doesn't
+// push the Seasons row far down the scroll; wide/tablet layouts have room to just show it all.
+@Composable
+private fun OverviewBlock(item: JellyfinItem, isWide: Boolean, accentColor: Color) {
+    val overview = item.overview ?: return
+    var overviewExpanded by remember(item.id) { mutableStateOf(false) }
+    var overviewOverflows by remember(item.id) { mutableStateOf(false) }
+    Text(
+        text = overview,
+        style = MaterialTheme.typography.bodyLarge,
+        color = OnSurface.copy(alpha = 0.85f),
+        maxLines = if (isWide || overviewExpanded) Int.MAX_VALUE else 4,
+        overflow = TextOverflow.Ellipsis,
+        onTextLayout = { result -> overviewOverflows = result.hasVisualOverflow },
+        modifier = Modifier
+            .widthIn(max = 600.dp)
+            .let { mod ->
+                if (isWide) mod else mod.clickable { overviewExpanded = !overviewExpanded }
+            },
+    )
+    if (!isWide && (overviewOverflows || overviewExpanded)) {
+        Text(
+            text = if (overviewExpanded) "Read less" else "Read more",
+            style = MaterialTheme.typography.labelLarge,
+            color = accentColor,
+            modifier = Modifier
+                .clickable { overviewExpanded = !overviewExpanded }
+                .padding(top = 2.dp),
+        )
+    }
+}
+
+@Composable
+private fun ActionButtonsSection(
+    item: JellyfinItem,
+    state: DetailState,
+    viewModel: DetailViewModel,
+    accentColor: Color,
+    actions: DetailActions,
+    coroutineScope: kotlinx.coroutines.CoroutineScope,
+) {
+    val dl = state.download
+    val offlinePositionMs = dl?.playbackPositionMs ?: 0L
+    val streamPositionMs = state.streamPositionMs
+    val hasPosition = offlinePositionMs > 0L || streamPositionMs > 0L
+    val resumeAction: (() -> Unit)? = when {
+        dl?.status == DownloadStatus.COMPLETE.name && offlinePositionMs > 0L ->
+            { { actions.onPlayClick(dl.localPath, dl.jellyfinId, offlinePositionMs) } }
+        state.canStream && streamPositionMs > 0L ->
+            {
+                {
+                    coroutineScope.launch {
+                        actions.onStreamClick(viewModel.streamUrl(item.id), item.id, streamPositionMs)
+                    }
+                }
+            }
+        else -> null
+    }
+    val playFromStartAction: (() -> Unit)? = when {
+        dl?.status == DownloadStatus.COMPLETE.name ->
+            { { actions.onPlayClick(dl.localPath, dl.jellyfinId, 0L) } }
+        state.canStream ->
+            {
+                {
+                    coroutineScope.launch {
+                        actions.onStreamClick(viewModel.streamUrl(item.id), item.id, 0L)
+                    }
+                }
+            }
+        else -> null
+    }
+
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (hasPosition && resumeAction != null) {
+            PrimaryActionButton("Resume", Icons.Default.PlayArrow, resumeAction, accentColor = accentColor)
+        }
+        if (playFromStartAction != null) {
+            val isSecondary = hasPosition && resumeAction != null
+            if (isSecondary) {
+                SecondaryActionButton(
+                    icon = Icons.Default.PlayArrow,
+                    onClick = playFromStartAction,
+                    text = "Play",
+                )
+            } else {
+                PrimaryActionButton("Play", Icons.Default.PlayArrow, playFromStartAction, accentColor = accentColor)
+            }
+        }
+    }
+
+    Spacer(Modifier.height(Spacing.sm))
+
+    // Separate row for the secondary/status actions — on narrow screens these previously
+    // overflowed off-screen when combined with the play row above, clipping the watched/download
+    // buttons and squeezing the favorite icon's touch target into its neighbor.
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = { viewModel.toggleFavorite() }) {
+            Icon(
+                if (state.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                contentDescription = if (state.isFavorite) "Remove from My List" else "Add to My List",
+                tint = if (state.isFavorite) Error else OnSurfaceMuted,
+            )
+        }
+        IconButton(onClick = { viewModel.togglePlayed() }) {
+            Icon(
+                if (state.isPlayed) Icons.Default.CheckCircle else Icons.Default.CheckCircleOutline,
+                contentDescription = if (state.isPlayed) "Mark Unplayed" else "Mark Played",
+                tint = if (state.isPlayed) accentColor else OnSurfaceMuted,
+            )
+        }
+        when {
+            dl == null && state.isOnline -> SecondaryActionButton(
+                icon = Icons.Default.Download,
+                onClick = actions.onShowPresetDialog,
+                text = "Download",
+            )
+            dl != null && dl.status in listOf(
+                DownloadStatus.QUEUED.name,
+                DownloadStatus.TRANSCODING.name,
+                DownloadStatus.DOWNLOADING.name,
+            ) ->
+                DownloadProgressButton(dl.status, dl.progress, accentColor)
+            dl?.status == DownloadStatus.COMPLETE.name ->
+                SecondaryActionButton(
+                    icon = Icons.Default.Delete,
+                    onClick = actions.onShowDeleteConfirm,
+                    text = "Remove",
+                    contentColor = Error,
+                )
+            dl?.status == DownloadStatus.FAILED.name -> {
+                if (state.isOnline) {
+                    SecondaryActionButton(
+                        icon = Icons.Default.Refresh,
+                        onClick = { viewModel.retryDownload(item.id) },
+                        text = "Retry",
+                    )
+                }
+                SecondaryActionButton(
+                    icon = Icons.Default.Delete,
+                    onClick = actions.onShowDeleteConfirm,
+                    contentColor = Error,
+                )
+            }
+            else -> {}
+        }
+    }
+}
+
+@Composable
+private fun SeasonsSection(
+    item: JellyfinItem,
+    state: DetailState,
+    viewModel: DetailViewModel,
+    actions: DetailActions,
+) {
+    Column {
+        Spacer(Modifier.height(40.dp))
+        Text(
+            text = "Seasons",
+            style = MaterialTheme.typography.titleMedium,
+            color = SectionHeading,
+            modifier = Modifier.padding(horizontal = 32.dp),
+        )
+        Spacer(Modifier.height(Spacing.md))
+        androidx.compose.foundation.lazy.LazyRow(
+            contentPadding = PaddingValues(horizontal = 32.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+        ) {
+            itemsIndexed(state.seasons) { index, season ->
+                Column(modifier = Modifier.width(110.dp)) {
+                    PosterImage(
+                        imageUrl = viewModel.posterUrl(season.id),
+                        contentDescription = season.name,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { actions.onSeasonClick(season.id, item.id) },
+                    ) {
+                        SeasonDownloadBadge(
+                            queuingProgress = state.seasonDownloadProgress[season.id],
+                            episodeIds = state.seasonEpisodeIds[season.id],
+                            episodeDownloads = state.episodeDownloads,
+                            modifier = Modifier.align(Alignment.BottomCenter),
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = season.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = OnSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(40.dp))
+    }
+}
+
 // Resolution/HDR/audio-format chips derived from the first media source's video and audio
 // streams — only meaningful for movies/episodes, which carry their own MediaSources.
 @Composable
-private fun TechSpecRow(mediaSources: List<MediaSource>) {
+private fun TechSpecRow(mediaSources: List<MediaSource>, accentColor: Color) {
     val streams = mediaSources.firstOrNull()?.mediaStreams ?: return
     val video = streams.firstOrNull { it.type == "Video" }
     val audio = streams.firstOrNull { it.type == "Audio" }
@@ -424,11 +618,11 @@ private fun TechSpecRow(mediaSources: List<MediaSource>) {
 
     Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
         chips.forEach { label ->
-            Surface(color = SurfaceVariant, shape = RoundedCornerShape(Radius.sm)) {
+            Surface(color = accentColor.copy(alpha = 0.16f), shape = RoundedCornerShape(Radius.sm)) {
                 Text(
                     text = label,
                     style = MaterialTheme.typography.labelSmall,
-                    color = OnSurfaceMuted,
+                    color = accentColor,
                     modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 4.dp),
                 )
             }
@@ -437,7 +631,7 @@ private fun TechSpecRow(mediaSources: List<MediaSource>) {
 }
 
 @Composable
-private fun DownloadProgressButton(status: String, progress: Float) {
+private fun DownloadProgressButton(status: String, progress: Float, accentColor: Color = Primary) {
     val animatedProgress by animateFloatAsState(targetValue = progress / 100f, label = "downloadProgress")
     Surface(
         color = SurfaceVariant,
@@ -452,7 +646,7 @@ private fun DownloadProgressButton(status: String, progress: Float) {
                 progress = { animatedProgress },
                 modifier = Modifier.size(IconSize.md),
                 strokeWidth = 2.dp,
-                color = Primary,
+                color = accentColor,
             )
             Text(
                 text = when (status) {
