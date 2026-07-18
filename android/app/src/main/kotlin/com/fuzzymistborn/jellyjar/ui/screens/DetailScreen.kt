@@ -353,8 +353,19 @@ private fun DetailTwoPaneContent(
 
 @Composable
 private fun TitleAndMetaRow(item: JellyfinItem, accentColor: Color) {
+    // Episodes: "Series · SxxExx · Episode Name" is too long for the displayMedium heading style
+    // to wrap gracefully in a narrow column (pushes buttons below the fold on tablet). Split it
+    // into a small eyebrow line (series + episode code) and just the episode name as the heading.
+    if (item.type == "Episode" && item.seriesName != null) {
+        Text(
+            text = "${item.seriesName} · S${item.parentIndexNumber?.toString()?.padStart(2, '0')}E${item.indexNumber?.toString()?.padStart(2, '0')}",
+            style = MaterialTheme.typography.labelLarge,
+            color = OnSurfaceMuted,
+        )
+        Spacer(Modifier.height(4.dp))
+    }
     Text(
-        text = item.displayTitle,
+        text = if (item.type == "Episode") item.name else item.displayTitle,
         style = MaterialTheme.typography.displayMedium,
         color = OnSurface,
     )
