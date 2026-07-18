@@ -306,7 +306,7 @@ private fun DetailTwoPaneContent(
         Row(modifier = Modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
-                    .width(380.dp)
+                    .width(320.dp)
                     .verticalScroll(rememberScrollState())
                     .padding(start = 32.dp, end = Spacing.lg),
             ) {
@@ -314,20 +314,20 @@ private fun DetailTwoPaneContent(
                     imageUrl = state.download?.thumbnailUri ?: viewModel.posterUrl(item.id),
                     contentDescription = item.name,
                     modifier = detailPosterModifier(
-                        Modifier.fillMaxWidth().widthIn(max = 280.dp), item.id, sharedTransitionScope, animatedVisibilityScope,
+                        Modifier.fillMaxWidth().widthIn(max = 200.dp), item.id, sharedTransitionScope, animatedVisibilityScope,
                     ),
                 )
-                Spacer(Modifier.height(Spacing.lg))
+                Spacer(Modifier.height(Spacing.md))
                 TitleAndMetaRow(item, accentColor)
                 if (!item.mediaSources.isNullOrEmpty()) {
-                    Spacer(Modifier.height(Spacing.md))
+                    Spacer(Modifier.height(Spacing.sm))
                     TechSpecRow(item.mediaSources, accentColor)
                 }
-                Spacer(Modifier.height(Spacing.xl))
+                Spacer(Modifier.height(Spacing.lg))
                 if (item.type != "Series") {
                     ActionButtonsSection(item, state, viewModel, accentColor, actions, coroutineScope)
                 }
-                Spacer(Modifier.height(40.dp))
+                Spacer(Modifier.height(Spacing.xl))
             }
 
             LazyColumn(
