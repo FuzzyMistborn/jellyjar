@@ -95,13 +95,35 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             networkMonitor.isOnline.collect { online ->
                 _state.update { it.copy(isOnline = online) }
-                if (!online) {
-                    buildOfflineLibraries()
-                } else if (!initialConnectivitySeen && !_state.value.showingDownloads) {
+                if (online && !initialConnectivitySeen && !_state.value.showingDownloads) {
                     loadLibrary()
                 }
                 initialConnectivitySeen = true
             }
+        }
+        // Keeps the offline synthetic library tiles (Movies/TV Shows, filtered to what's actually
+        // downloaded) continuously in sync with connectivity and the download set, rather than
+        // computing them once at the instant connectivity is lost. A one-shot computation at that
+        // single edge can miss the case where the app is already offline at cold start and this
+        // collector's first reading races the "online" one above, or where downloads change while
+        // already offline — recomputing on every relevant change avoids that class of bug entirely.
+        viewModelScope.launch {
+            combine(
+                networkMonitor.isOnline,
+                _state.map { it.jellyfinAvailable }.distinctUntilChanged(),
+                downloadRepo.completedDownloads,
+            ) { online, jellyfinAvailable, downloads -> Triple(online, jellyfinAvailable, downloads) }
+                .collect { (online, jellyfinAvailable, downloads) ->
+                    if (!online || !jellyfinAvailable) {
+                        _state.update { s ->
+                            s.copy(
+                                libraries = syntheticLibrariesFor(downloads),
+                                resumeItems = emptyList(),
+                                recentlyAdded = emptyList(),
+                            )
+                        }
+                    }
+                }
         }
         // Retry Jellyfin with backoff when online but server is unreachable; stops once available
         viewModelScope.launch {
@@ -183,8 +205,9 @@ class LibraryViewModel @Inject constructor(
                 loadHomeRows()
             }
             .onFailure {
+                // jellyfinAvailable=false is picked up by the reactive offline-libraries collector
+                // in init{}, which rebuilds `libraries` from what's actually downloaded.
                 _state.update { s -> s.copy(isLoading = false, isRefreshing = false, jellyfinAvailable = false, resumeItems = emptyList(), recentlyAdded = emptyList()) }
-                buildOfflineLibraries() // show downloaded content whenever Jellyfin is unreachable
                 return@launch
             }
         val selectedLib = _state.value.libraries
@@ -270,15 +293,11 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
-    private fun buildOfflineLibraries() = viewModelScope.launch {
-        val downloads = downloadRepo.completedDownloads.first()
-        val syntheticLibraries = buildList {
-            if (downloads.any { it.type == "Movie" })
-                add(JellyfinLibrary(id = "offline_movies", name = "Movies", collectionType = "movies"))
-            if (downloads.any { it.type == "Episode" })
-                add(JellyfinLibrary(id = "offline_tv", name = "TV Shows", collectionType = "tvshows"))
-        }
-        _state.update { s -> s.copy(libraries = syntheticLibraries, resumeItems = emptyList(), recentlyAdded = emptyList()) }
+    private fun syntheticLibrariesFor(downloads: List<DownloadEntity>): List<JellyfinLibrary> = buildList {
+        if (downloads.any { it.type == "Movie" })
+            add(JellyfinLibrary(id = "offline_movies", name = "Movies", collectionType = "movies"))
+        if (downloads.any { it.type == "Episode" })
+            add(JellyfinLibrary(id = "offline_tv", name = "TV Shows", collectionType = "tvshows"))
     }
 
     private fun loadOfflineLibrary(libraryName: String) = viewModelScope.launch {
@@ -682,6 +701,7 @@ data class AdminState(
     val autoPlayNextEpisode: Boolean = true,
     val introSkipEnabled: Boolean = true,
     val trickplayEnabled: Boolean = true,
+    val playbackStatsEnabled: Boolean = true,
     val genreFilterEnabled: Boolean = true,
     val maxConcurrentDownloads: Int = 1,
     val playbackQuality: com.fuzzymistborn.jellyjar.model.PlaybackQuality = com.fuzzymistborn.jellyjar.model.PlaybackQuality.AUTO,
@@ -725,6 +745,7 @@ class AdminViewModel @Inject constructor(
                         autoPlayNextEpisode = s.autoPlayNextEpisode,
                         introSkipEnabled = s.introSkipEnabled,
                         trickplayEnabled = s.trickplayEnabled,
+                        playbackStatsEnabled = s.playbackStatsEnabled,
                         genreFilterEnabled = s.genreFilterEnabled,
                         maxConcurrentDownloads = s.maxConcurrentDownloads,
                         playbackQuality = s.playbackQuality,
@@ -892,6 +913,11 @@ class AdminViewModel @Inject constructor(
     fun setTrickplayEnabled(v: Boolean) {
         _state.update { it.copy(trickplayEnabled = v) }
         viewModelScope.launch { settings.saveTrickplayEnabled(v) }
+    }
+
+    fun setPlaybackStatsEnabled(v: Boolean) {
+        _state.update { it.copy(playbackStatsEnabled = v) }
+        viewModelScope.launch { settings.savePlaybackStatsEnabled(v) }
     }
 
     fun setGenreFilterEnabled(v: Boolean) {
@@ -1364,9 +1390,15 @@ class PlayerViewModel @Inject constructor(
         downloadRepo.getPlaybackPosition(jellyfinId)
 
     // Only meaningful for streamed playback (downloaded files always play back directly from
-    // disk, no negotiation involved) — callers should skip this for local paths.
-    suspend fun loadPlaybackDiagnostics(jellyfinId: String) =
-        jellyfinRepo.getStreamUrlWithDiagnostics(jellyfinId).second
+    // disk, no negotiation involved) — callers should skip this for local paths. Prefers the
+    // diagnostics captured when the stream URL was resolved for this same playback (before
+    // navigating here) — PlaybackInfo negotiation is stateful server-side, so a second call can
+    // legitimately return a different method than the one actually playing.
+    suspend fun loadPlaybackDiagnostics(jellyfinId: String): PlaybackDiagnostics? {
+        if (!settings.currentSnapshot().playbackStatsEnabled) return null
+        return jellyfinRepo.takeCachedDiagnostics(jellyfinId)
+            ?: jellyfinRepo.getStreamUrlWithDiagnostics(jellyfinId).second
+    }
 
     // Intro/credits markers for the skip button. Prefers segments captured on the download
     // (works offline), falls back to asking the server. Empty when the setting is off.

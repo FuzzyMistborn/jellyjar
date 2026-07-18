@@ -31,6 +31,9 @@ class NetworkMonitor @Inject constructor(
             override fun onAvailable(network: Network) { trySend(true) }
             override fun onLost(network: Network) { trySend(isCurrentlyConnected()) }
             override fun onUnavailable() { trySend(false) }
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                trySend(caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET))
+            }
         }
 
         val request = NetworkRequest.Builder()
@@ -50,6 +53,12 @@ class NetworkMonitor @Inject constructor(
             override fun onAvailable(network: Network) { trySend(true) }
             override fun onLost(network: Network) { trySend(isCurrentlyWifi()) }
             override fun onUnavailable() { trySend(false) }
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                trySend(
+                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+                )
+            }
         }
 
         val request = NetworkRequest.Builder()

@@ -390,6 +390,12 @@ fun AdminScreen(
                 onCheckedChange = { viewModel.setTrickplayEnabled(it) },
             )
             SettingsToggleRow(
+                title = "Playback Stats",
+                subtitle = "Show Direct Play / Transcoding info overlay during playback",
+                checked = state.playbackStatsEnabled,
+                onCheckedChange = { viewModel.setPlaybackStatsEnabled(it) },
+            )
+            SettingsToggleRow(
                 title = "Stream over Cellular",
                 subtitle = "Allow streaming/playback on mobile data (browsing always works)",
                 checked = state.streamOverCellular,

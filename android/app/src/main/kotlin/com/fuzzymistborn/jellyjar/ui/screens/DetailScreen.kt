@@ -673,8 +673,10 @@ private fun DownloadProgressButton(status: String, progress: Float, accentColor:
                     "DOWNLOADING" -> "Downloading ${"%.0f".format(progress)}%"
                     else -> "Working..."
                 },
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = OnSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }

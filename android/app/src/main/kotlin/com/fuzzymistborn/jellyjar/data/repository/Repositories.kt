@@ -56,6 +56,13 @@ class JellyfinRepository @Inject constructor(
     private val cachedItemDao: CachedItemDao,
     private val settings: SettingsRepository,
 ) {
+    // PlaybackInfo negotiation is stateful on the server (transcode slots, PlaySessionId, ...),
+    // so calling it twice for the same playback (once to build the stream URL, once for the
+    // player's diagnostics overlay) can legitimately return two different answers — the UI would
+    // then show "Transcoding" for a stream that's actually playing Direct Play. Cache the most
+    // recent result per item so a diagnostics read right after the URL fetch reuses it instead of
+    // re-negotiating.
+    private val lastDiagnostics = mutableMapOf<String, PlaybackDiagnostics>()
     suspend fun authenticate(url: String, username: String, password: String): Result<AuthResult> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -294,6 +301,11 @@ class JellyfinRepository @Inject constructor(
     // to the plain direct-play URL if PlaybackInfo fails for any reason (e.g. older server).
     suspend fun getStreamUrl(itemId: String): String = getStreamUrlWithDiagnostics(itemId).first
 
+    // Returns the diagnostics captured by the most recent getStreamUrlWithDiagnostics() call for
+    // this item, if any, without re-negotiating with the server. Consumed once (removed from the
+    // cache) so a later, unrelated read of the same item still triggers a fresh negotiation.
+    fun takeCachedDiagnostics(itemId: String): PlaybackDiagnostics? = lastDiagnostics.remove(itemId)
+
     // Same PlaybackInfo negotiation as getStreamUrl, but also reports which playback method
     // Jellyfin picked (and why, when transcoding) so the player UI can show it to the user.
     suspend fun getStreamUrlWithDiagnostics(itemId: String): Pair<String, PlaybackDiagnostics> =
@@ -327,6 +339,7 @@ class JellyfinRepository @Inject constructor(
                     Pair(url, PlaybackDiagnostics(method, emptyList()))
                 }
             }.getOrDefault(Pair(fallback, PlaybackDiagnostics(PlaybackMethod.DIRECT_PLAY, emptyList())))
+                .also { (_, diagnostics) -> lastDiagnostics[itemId] = diagnostics }
         }
 
     fun primaryImageUrl(itemId: String, baseUrl: String): String =

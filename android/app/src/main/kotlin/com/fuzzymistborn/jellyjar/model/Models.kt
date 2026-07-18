@@ -177,6 +177,7 @@ data class AppSettings(
     val autoPlayNextEpisode: Boolean = true,
     val introSkipEnabled: Boolean = true,
     val trickplayEnabled: Boolean = true,
+    val playbackStatsEnabled: Boolean = true,
     val genreFilterEnabled: Boolean = true,
     val downloadQueuePaused: Boolean = false,
     val maxConcurrentDownloads: Int = 1,

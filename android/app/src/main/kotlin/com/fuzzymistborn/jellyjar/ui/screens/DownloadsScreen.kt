@@ -29,6 +29,8 @@ fun DownloadsScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val hasContent = state.active.isNotEmpty() || state.queued.isNotEmpty() ||
         state.completed.isNotEmpty() || state.failed.isNotEmpty()
+    var pendingDeleteId by remember { mutableStateOf<String?>(null) }
+    var showDeleteAllConfirm by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize().background(BackgroundGradient)) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -172,7 +174,7 @@ fun DownloadsScreen(
                     if (state.completed.isNotEmpty()) {
                         item {
                             SectionHeader("Available Offline") {
-                                TextButton(onClick = { viewModel.deleteAllCompleted() }) {
+                                TextButton(onClick = { showDeleteAllConfirm = true }) {
                                     Text(
                                         "Delete All",
                                         style = MaterialTheme.typography.labelSmall,
@@ -187,7 +189,7 @@ fun DownloadsScreen(
                                 thumbnailUrl = entity.thumbnailUri
                                     ?: viewModel.thumbnailUrl(entity.jellyfinId),
                                 onPlay = { onPlayClick(entity.localPath, entity.jellyfinId) },
-                                onDelete = { viewModel.removeDownload(entity.jellyfinId) },
+                                onDelete = { pendingDeleteId = entity.jellyfinId },
                             )
                         }
                     }
@@ -224,6 +226,22 @@ fun DownloadsScreen(
         }
 
         DownloadErrorSnackbar(state.downloadError) { viewModel.clearDownloadError() }
+
+        pendingDeleteId?.let { id ->
+            DeleteConfirmDialog(
+                onConfirm = { viewModel.removeDownload(id) },
+                onDismiss = { pendingDeleteId = null },
+            )
+        }
+
+        if (showDeleteAllConfirm) {
+            DeleteConfirmDialog(
+                title = "Delete all downloads?",
+                message = "This deletes every downloaded file from this device. You can download them again later.",
+                onConfirm = { viewModel.deleteAllCompleted() },
+                onDismiss = { showDeleteAllConfirm = false },
+            )
+        }
     }
 }
 
