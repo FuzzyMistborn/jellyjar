@@ -318,7 +318,7 @@ private fun DetailTwoPaneContent(
                     ),
                 )
                 Spacer(Modifier.height(Spacing.sm))
-                TitleAndMetaRow(item, accentColor)
+                TitleAndMetaRow(item, accentColor, compact = true)
                 if (!item.mediaSources.isNullOrEmpty()) {
                     Spacer(Modifier.height(Spacing.xs))
                     TechSpecRow(item.mediaSources, accentColor)
@@ -352,7 +352,7 @@ private fun DetailTwoPaneContent(
 }
 
 @Composable
-private fun TitleAndMetaRow(item: JellyfinItem, accentColor: Color) {
+private fun TitleAndMetaRow(item: JellyfinItem, accentColor: Color, compact: Boolean = false) {
     // Episodes: "Series · SxxExx · Episode Name" is too long for the displayMedium heading style
     // to wrap gracefully in a narrow column (pushes buttons below the fold on tablet). Split it
     // into a small eyebrow line (series + episode code) and just the episode name as the heading.
@@ -364,9 +364,11 @@ private fun TitleAndMetaRow(item: JellyfinItem, accentColor: Color) {
         )
         Spacer(Modifier.height(4.dp))
     }
+    // A long movie title wraps to multiple lines at displayMedium in the narrower two-pane
+    // sidebar, pushing the action buttons below the fold — drop to a smaller heading there.
     Text(
         text = if (item.type == "Episode") item.name else item.displayTitle,
-        style = MaterialTheme.typography.displayMedium,
+        style = if (compact) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.displayMedium,
         color = OnSurface,
     )
     Spacer(Modifier.height(Spacing.sm))
