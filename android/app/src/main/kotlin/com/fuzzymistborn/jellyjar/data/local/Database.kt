@@ -29,6 +29,7 @@ data class DownloadEntity(
     // Intro/credits skip segments (JSON array of SkipSegment) captured at queue time so the
     // skip button works during offline playback.
     val segmentsJson: String? = null,
+    val played: Boolean = false,
 ) {
     // thumbnailPath is a bare filesystem path (see DownloadRepository.saveThumbnailLocally); Coil
     // only resolves recognized URI schemes, so callers need the `file://` form to load it locally.
@@ -213,7 +214,7 @@ interface CachedItemDao {
 
 @Database(
     entities = [DownloadEntity::class, CachedItemEntity::class, PlaybackPositionEntity::class, FavoriteEntity::class],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class JellyJarDatabase : RoomDatabase() {
