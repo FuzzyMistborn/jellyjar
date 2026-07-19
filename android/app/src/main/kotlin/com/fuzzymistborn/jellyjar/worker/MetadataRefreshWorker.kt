@@ -55,10 +55,13 @@ class MetadataRefreshWorker @AssistedInject constructor(
             // Also re-caches the parent series (if any) — self-heals the offline "TV Shows"
             // library tile if its series cache row was never populated or somehow went missing,
             // without requiring the user to revisit that series' Detail screen.
-            jellyfinRepo.getItem(jellyfinId).getOrNull()?.seriesId?.let { seriesId ->
-                if (seenSeriesIds.add(seriesId)) {
-                    jellyfinRepo.cacheParentSeriesIfMissing(seriesId)
+            jellyfinRepo.getItem(jellyfinId).getOrNull()?.let { item ->
+                item.seriesId?.let { seriesId ->
+                    if (seenSeriesIds.add(seriesId)) {
+                        jellyfinRepo.cacheParentSeriesIfMissing(seriesId)
+                    }
                 }
+                downloadRepo.updatePlayed(jellyfinId, item.userData?.played ?: false)
             }
             downloadRepo.refreshThumbnail(jellyfinId)
         }

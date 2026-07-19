@@ -826,6 +826,10 @@ class DownloadRepository @Inject constructor(
         }
     }
 
+    suspend fun updatePlayed(jellyfinId: String, played: Boolean) = withContext(Dispatchers.IO) {
+        downloadDao.updatePlayed(jellyfinId, played)
+    }
+
     private suspend fun saveThumbnailLocally(jellyfinId: String): String? {
         val s = settings.currentSnapshot()
         if (s.jellyfinUrl.isBlank()) return null

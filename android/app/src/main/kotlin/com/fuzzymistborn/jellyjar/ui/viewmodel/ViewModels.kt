@@ -720,6 +720,7 @@ data class AdminState(
     val genreFilterEnabled: Boolean = true,
     val maxConcurrentDownloads: Int = 1,
     val playbackQuality: com.fuzzymistborn.jellyjar.model.PlaybackQuality = com.fuzzymistborn.jellyjar.model.PlaybackQuality.AUTO,
+    val forceOfflineMode: Boolean = false,
 )
 
 @HiltViewModel
@@ -764,6 +765,7 @@ class AdminViewModel @Inject constructor(
                         genreFilterEnabled = s.genreFilterEnabled,
                         maxConcurrentDownloads = s.maxConcurrentDownloads,
                         playbackQuality = s.playbackQuality,
+                        forceOfflineMode = s.forceOfflineMode,
                     )
                 }
                 refreshStorageInfo()
@@ -938,6 +940,11 @@ class AdminViewModel @Inject constructor(
     fun setGenreFilterEnabled(v: Boolean) {
         _state.update { it.copy(genreFilterEnabled = v) }
         viewModelScope.launch { settings.saveGenreFilterEnabled(v) }
+    }
+
+    fun setForceOfflineMode(v: Boolean) {
+        _state.update { it.copy(forceOfflineMode = v) }
+        viewModelScope.launch { settings.saveForceOfflineMode(v) }
     }
 
     fun setMaxConcurrentDownloads(v: Int) {

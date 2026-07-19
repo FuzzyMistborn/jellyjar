@@ -313,6 +313,12 @@ fun AdminScreen(
                 checked = state.wifiOnly,
                 onCheckedChange = { viewModel.setWifiOnly(it) },
             )
+            SettingsToggleRow(
+                title = "Force Offline Mode",
+                subtitle = "Browse only what's downloaded, even with a working connection — useful for testing offline playback",
+                checked = state.forceOfflineMode,
+                onCheckedChange = { viewModel.setForceOfflineMode(it) },
+            )
 
             // Simultaneous downloads (queue concurrency)
             Row(

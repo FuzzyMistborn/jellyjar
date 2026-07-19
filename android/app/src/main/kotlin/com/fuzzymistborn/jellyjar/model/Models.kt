@@ -182,6 +182,7 @@ data class AppSettings(
     val downloadQueuePaused: Boolean = false,
     val maxConcurrentDownloads: Int = 1,
     val playbackQuality: PlaybackQuality = PlaybackQuality.AUTO,
+    val forceOfflineMode: Boolean = false,
 )
 
 // Caps the negotiated streaming bitrate (server transcodes down when the source exceeds it);

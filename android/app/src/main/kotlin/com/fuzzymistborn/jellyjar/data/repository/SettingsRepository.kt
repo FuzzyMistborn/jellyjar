@@ -42,6 +42,7 @@ class SettingsRepository @Inject constructor(
         val DOWNLOAD_QUEUE_PAUSED = booleanPreferencesKey("download_queue_paused")
         val MAX_CONCURRENT_DOWNLOADS = intPreferencesKey("max_concurrent_downloads")
         val PLAYBACK_QUALITY = stringPreferencesKey("playback_quality")
+        val FORCE_OFFLINE_MODE = booleanPreferencesKey("force_offline_mode")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { prefs ->
@@ -69,6 +70,7 @@ class SettingsRepository @Inject constructor(
             playbackQuality = prefs[Keys.PLAYBACK_QUALITY]?.let { name ->
                 runCatching { com.fuzzymistborn.jellyjar.model.PlaybackQuality.valueOf(name) }.getOrNull()
             } ?: com.fuzzymistborn.jellyjar.model.PlaybackQuality.AUTO,
+            forceOfflineMode = prefs[Keys.FORCE_OFFLINE_MODE] ?: false,
         )
     }
 
@@ -164,6 +166,10 @@ class SettingsRepository @Inject constructor(
 
     suspend fun savePlaybackQuality(quality: com.fuzzymistborn.jellyjar.model.PlaybackQuality) {
         context.dataStore.edit { prefs -> prefs[Keys.PLAYBACK_QUALITY] = quality.name }
+    }
+
+    suspend fun saveForceOfflineMode(enabled: Boolean) {
+        context.dataStore.edit { prefs -> prefs[Keys.FORCE_OFFLINE_MODE] = enabled }
     }
 
     fun verifyPin(input: String, storedHash: String): Boolean =

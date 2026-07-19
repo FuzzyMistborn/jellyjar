@@ -110,6 +110,9 @@ interface DownloadDao {
     @Query("UPDATE downloads SET status = :status WHERE jellyfinId = :id")
     suspend fun updateStatus(id: String, status: String)
 
+    @Query("UPDATE downloads SET played = :played WHERE jellyfinId = :id")
+    suspend fun updatePlayed(id: String, played: Boolean)
+
     @Query("SELECT COALESCE(SUM(sizeBytes), 0) FROM downloads WHERE status = 'COMPLETE'")
     suspend fun totalCompletedBytes(): Long
 
