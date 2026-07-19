@@ -298,24 +298,27 @@ fun PlayerScreen(
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
+        }
 
-            playbackDiagnostics?.let { diag ->
-                val label = when (diag.method) {
-                    com.fuzzymistborn.jellyjar.data.repository.PlaybackMethod.DIRECT_PLAY -> "Direct Play"
-                    com.fuzzymistborn.jellyjar.data.repository.PlaybackMethod.DIRECT_STREAM -> "Direct Stream"
-                    com.fuzzymistborn.jellyjar.data.repository.PlaybackMethod.TRANSCODE -> "Transcoding"
-                }
-                Text(
-                    text = if (diag.reasons.isNotEmpty()) "$label · ${diag.reasons.joinToString(", ")}" else label,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.White,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(Spacing.sm)
-                        .background(Color.Black.copy(alpha = 0.5f), MaterialTheme.shapes.small)
-                        .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
-                )
+        // Kept visible independent of `controlsVisible` (which auto-hides a few seconds into
+        // playback) — this is a diagnostic panel the user explicitly opted into via Admin, so it
+        // needs to stay on screen long enough to actually read, not flash briefly at playback start.
+        playbackDiagnostics?.let { diag ->
+            val label = when (diag.method) {
+                com.fuzzymistborn.jellyjar.data.repository.PlaybackMethod.DIRECT_PLAY -> "Direct Play"
+                com.fuzzymistborn.jellyjar.data.repository.PlaybackMethod.DIRECT_STREAM -> "Direct Stream"
+                com.fuzzymistborn.jellyjar.data.repository.PlaybackMethod.TRANSCODE -> "Transcoding"
             }
+            Text(
+                text = if (diag.reasons.isNotEmpty()) "$label · ${diag.reasons.joinToString(", ")}" else label,
+                style = MaterialTheme.typography.labelMedium,
+                color = Color.White,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(Spacing.sm)
+                    .background(Color.Black.copy(alpha = 0.5f), MaterialTheme.shapes.small)
+                    .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+            )
         }
     }
 

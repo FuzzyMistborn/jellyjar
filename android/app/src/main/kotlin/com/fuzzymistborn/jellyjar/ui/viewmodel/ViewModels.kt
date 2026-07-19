@@ -313,7 +313,22 @@ class LibraryViewModel @Inject constructor(
                     .filter { it.type == "Episode" && it.seriesName != null }
                     .map { it.seriesName!! }
                     .distinct()
-                    .mapNotNull { seriesName -> jellyfinRepo.getCachedSeriesByName(seriesName) }
+                    .map { seriesName ->
+                        // Series cache row can be missing (e.g. it predates cacheParentSeriesIfMissing,
+                        // or the cache was cleared) even though its episodes are downloaded. Falling
+                        // back to a stub keeps the tile visible instead of silently dropping it — the
+                        // offline season/episode lookups below key off `name`, not `id`, so a
+                        // synthetic id is fine for navigation.
+                        jellyfinRepo.getCachedSeriesByName(seriesName)
+                            ?: JellyfinItem(
+                                id = "offline-series-$seriesName",
+                                name = seriesName,
+                                type = "Series",
+                                overview = null, year = null, communityRating = null, runTimeTicks = null,
+                                seriesName = null, seasonName = null, indexNumber = null, parentIndexNumber = null,
+                                mediaSources = null, imageTags = null, backdropImageTags = null, userData = null,
+                            )
+                    }
             }
             else -> downloads.map { it.toJellyfinItem() }
         }

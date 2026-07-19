@@ -320,7 +320,10 @@ class JellyfinRepository @Inject constructor(
                     authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
                     userId = s.jellyfinUserId,
                     body = PlaybackInfoRequest(
-                        DeviceProfile = DeviceProfile(MaxStreamingBitrate = bitrateCap ?: 120_000_000),
+                        DeviceProfile = DeviceProfile(
+                            MaxStreamingBitrate = bitrateCap ?: 120_000_000,
+                            MaxStaticBitrate = bitrateCap,
+                        ),
                         MaxStreamingBitrate = bitrateCap,
                     ),
                 )
@@ -352,6 +355,16 @@ class JellyfinRepository @Inject constructor(
 
     suspend fun getCachedItem(itemId: String): JellyfinItem? = withContext(Dispatchers.IO) {
         cachedItemDao.findById(itemId)?.toJellyfinItem()
+    }
+
+    // Ensures a Series-type cache row exists for `seriesId` (needed so the offline "TV Shows"
+    // library tile can resolve a downloaded episode's series by name). Only hits the network when
+    // the row is missing, so callers looping over a series' episodes (queueing a season, the
+    // metadata refresh worker) don't refetch the same series once per episode.
+    suspend fun cacheParentSeriesIfMissing(seriesId: String) = withContext(Dispatchers.IO) {
+        if (cachedItemDao.findById(seriesId) == null) {
+            getItem(seriesId)
+        }
     }
 
     suspend fun getCachedSeriesByName(name: String): JellyfinItem? = withContext(Dispatchers.IO) {
@@ -466,6 +479,13 @@ class DownloadRepository @Inject constructor(
             checkFreeSpace(preset, item.runtimeMinutes)
             // Capture intro/credits markers now so the skip button works offline later
             val segments = runCatching { jellyfinRepo.getSkipSegments(item.id) }.getOrDefault(emptyList())
+            // Cache the parent series now so the offline "TV Shows" library tile can resolve it by
+            // name later — that lookup only works if a Series-type cache row exists, and previously
+            // this only happened as a side effect of the user having visited the series' own Detail
+            // screen (fragile: easy to end up with downloaded episodes but no cached series).
+            if (item.type == "Episode" && item.seriesId != null) {
+                jellyfinRepo.cacheParentSeriesIfMissing(item.seriesId)
+            }
             val entity = DownloadEntity(
                 jellyfinId = item.id,
                 title = item.displayTitle,

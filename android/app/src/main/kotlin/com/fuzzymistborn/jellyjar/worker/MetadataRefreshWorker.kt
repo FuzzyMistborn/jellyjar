@@ -45,9 +45,21 @@ class MetadataRefreshWorker @AssistedInject constructor(
     }
 
     override suspend fun doWork(): Result {
+        // Series already handled this run — cacheParentSeriesIfMissing() already short-circuits
+        // once a cache row exists, but several episodes of the same series can hit this loop
+        // before any of their upserts land, so this local dedupe avoids redundant network calls
+        // within a single run too.
+        val seenSeriesIds = mutableSetOf<String>()
         for (jellyfinId in downloadRepo.getCompletedJellyfinIds()) {
             if (isStopped) break
-            jellyfinRepo.getItem(jellyfinId)
+            // Also re-caches the parent series (if any) — self-heals the offline "TV Shows"
+            // library tile if its series cache row was never populated or somehow went missing,
+            // without requiring the user to revisit that series' Detail screen.
+            jellyfinRepo.getItem(jellyfinId).getOrNull()?.seriesId?.let { seriesId ->
+                if (seenSeriesIds.add(seriesId)) {
+                    jellyfinRepo.cacheParentSeriesIfMissing(seriesId)
+                }
+            }
             downloadRepo.refreshThumbnail(jellyfinId)
         }
         // Best-effort background sync — a partial failure (item deleted server-side, transient

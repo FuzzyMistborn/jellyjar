@@ -79,6 +79,10 @@ data class TranscodingProfile(
 
 data class DeviceProfile(
     val MaxStreamingBitrate: Int = 120_000_000,
+    // MaxStreamingBitrate alone only caps the transcode *output* target — it's MaxStaticBitrate
+    // that Jellyfin compares the source's actual bitrate against to decide whether Direct Play is
+    // even allowed. Without it, a 4K source direct-plays regardless of the app's quality setting.
+    val MaxStaticBitrate: Int? = null,
     val DirectPlayProfiles: List<DirectPlayProfile> = listOf(DirectPlayProfile()),
     val TranscodingProfiles: List<TranscodingProfile> = listOf(TranscodingProfile()),
 )

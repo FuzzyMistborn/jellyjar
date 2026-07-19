@@ -657,8 +657,8 @@ private fun DownloadProgressButton(status: String, progress: Float, accentColor:
         shape = RoundedCornerShape(Radius.sm),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             CircularProgressIndicator(
