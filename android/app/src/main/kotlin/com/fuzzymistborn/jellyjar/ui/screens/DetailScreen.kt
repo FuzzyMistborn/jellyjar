@@ -578,7 +578,11 @@ private fun SeasonsSection(
             itemsIndexed(state.seasons) { index, season ->
                 Column(modifier = Modifier.width(110.dp)) {
                     PosterImage(
-                        imageUrl = viewModel.posterUrl(season.id),
+                        // A synthetic offline season (see DetailViewModel.loadOfflineSeasons) has no
+                        // real Jellyfin id, so its own poster art can't be fetched — fall back to the
+                        // series' art (real when a Series cache row exists; itself synthetic, and thus
+                        // still unfetchable, when the whole series is offline-synthetic — best effort).
+                        imageUrl = if (season.id.startsWith("offline-season-")) viewModel.posterUrl(item.id) else viewModel.posterUrl(season.id),
                         contentDescription = season.name,
                         modifier = Modifier.fillMaxWidth(),
                         onClick = { actions.onSeasonClick(season.id, item.id) },

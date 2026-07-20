@@ -88,17 +88,21 @@ class LibraryViewModel @Inject constructor(
     val state: StateFlow<LibraryState> = _state.asStateFlow()
 
     init {
-        // Handles the very first "online" reading (app start); every later false->true
-        // transition is handled once by `reconnected` below — collecting both here and there
-        // would fire loadLibrary() twice for the same reconnect.
-        var initialConnectivitySeen = false
+        // Handles the very first time we observe `online == true` (app start); every later
+        // false->true transition is handled once by `reconnected` below — collecting both here and
+        // there would fire loadLibrary() twice for the same reconnect. The flag is only set once we
+        // actually act on an online reading, NOT on the first emission: isOnline is a StateFlow
+        // seeded false (see NetworkMonitor), so the first emission is always that false seed. Keying
+        // off "first emission" would burn the flag on that seed and leave the real online cold-start
+        // load to depend entirely on the `reconnected` edge — a replay=0 race that can drop the load.
+        var initialLoadDone = false
         viewModelScope.launch {
             networkMonitor.isOnline.collect { online ->
                 _state.update { it.copy(isOnline = online) }
-                if (online && !initialConnectivitySeen && !_state.value.showingDownloads) {
+                if (online && !initialLoadDone && !_state.value.showingDownloads) {
+                    initialLoadDone = true
                     loadLibrary()
                 }
-                initialConnectivitySeen = true
             }
         }
         // Keeps the offline synthetic library tiles (Movies/TV Shows, filtered to what's actually
@@ -141,9 +145,17 @@ class LibraryViewModel @Inject constructor(
         }
         // Device connectivity dropped and came back (Wi-Fi toggle, network switch, etc.) —
         // re-check Jellyfin immediately instead of waiting on the backoff loop above, mirroring
-        // DetailViewModel's use of the same signal.
+        // DetailViewModel's use of the same signal. The first `reconnected` emission is always the
+        // cold-start seed(false)->true resolution (NetworkMonitor seeds isOnline false), which the
+        // isOnline collector above already handles as the initial load — skip it here so the two
+        // don't both fire loadLibrary() for that one edge.
+        var firstReconnect = true
         viewModelScope.launch {
             networkMonitor.reconnected.collect {
+                if (firstReconnect) {
+                    firstReconnect = false
+                    return@collect
+                }
                 if (!_state.value.showingDownloads) loadLibrary()
             }
         }
@@ -1382,15 +1394,53 @@ class SeasonViewModel @Inject constructor(
         val s = settings.settings.first()
         _state.update { it.copy(jellyfinUrl = s.jellyfinUrl, jellyfinToken = s.jellyfinToken, episodeViewGrid = s.episodeViewGrid) }
 
-        // Load season info — cache result for offline episode fallback
+        // DetailViewModel.loadOfflineSeasons can hand navigation a synthetic
+        // "offline-season-$seriesName-$num" id (paired with a synthetic "offline-series-$seriesName"
+        // seriesId) when there's no cached Season/Series row backing a downloaded episode. Those ids
+        // were never persisted to cached_items, so getCachedItem always misses them — derive
+        // seriesName/seasonNumber straight from the ids instead of depending on that lookup. The
+        // number is always the last '-'-delimited token, so substringAfterLast is unambiguous even
+        // though seriesName itself may contain hyphens.
+        val syntheticSeriesName = seriesId.removePrefix("offline-series-").takeIf { seriesId.startsWith("offline-series-") }
+        val syntheticSeasonNumber = seasonId.takeIf { it.startsWith("offline-season-") }
+            ?.substringAfterLast('-')?.toIntOrNull()
+
         val cachedSeason = jellyfinRepo.getCachedItem(seasonId)
+        val cachedSeries = jellyfinRepo.getCachedItem(seriesId)
+        // cachedSeason.seriesName depends on a Season row's own seriesName column, which is not
+        // reliably populated (see loadOfflineSeasons) — prefer the series' own name/synthetic name.
+        val resolvedSeriesName = cachedSeries?.name ?: syntheticSeriesName ?: cachedSeason?.seriesName
+        val resolvedSeasonNumber = cachedSeason?.indexNumber ?: syntheticSeasonNumber
+
+        // Shared by the offline-gated path and the live-call-failure fallback below, so the two
+        // can't drift out of sync with each other.
+        suspend fun loadOfflineEpisodes() {
+            val episodes = if (resolvedSeriesName != null && resolvedSeasonNumber != null) {
+                jellyfinRepo.getCachedEpisodesBySeriesAndSeason(resolvedSeriesName, resolvedSeasonNumber)
+            } else {
+                _state.update { it.copy(error = "Unavailable offline") }
+                emptyList()
+            }
+            _state.update { it.copy(episodes = episodes, isLoading = false) }
+        }
+
+        // Offline (or force-offline) must skip the live calls entirely rather than only falling
+        // back on failure — a reachable Jellyfin server would otherwise be attempted first even
+        // when genuinely offline, and a synthetic id would 404 anyway.
+        if (!networkMonitor.isOnline.value) {
+            val offlineSeasonName = cachedSeason?.name ?: resolvedSeasonNumber?.let { num -> "Season $num" }
+            _state.update { it.copy(seasonName = offlineSeasonName, seriesName = resolvedSeriesName) }
+            loadOfflineEpisodes()
+            return@launch
+        }
+
         jellyfinRepo.getItem(seasonId)
             .onSuccess { season ->
                 _state.update { it.copy(seasonName = season.name, seriesName = season.seriesName) }
             }
             .onFailure {
-                if (cachedSeason != null) {
-                    _state.update { it.copy(seasonName = cachedSeason.name, seriesName = cachedSeason.seriesName) }
+                if (cachedSeason != null || resolvedSeriesName != null) {
+                    _state.update { it.copy(seasonName = cachedSeason?.name ?: it.seasonName, seriesName = resolvedSeriesName ?: it.seriesName) }
                 }
             }
 
@@ -1399,17 +1449,7 @@ class SeasonViewModel @Inject constructor(
             .onSuccess { response ->
                 _state.update { it.copy(episodes = response.Items, isLoading = false) }
             }
-            .onFailure {
-                val seriesName = cachedSeason?.seriesName
-                val seasonNumber = cachedSeason?.indexNumber
-                val episodes = if (seriesName != null && seasonNumber != null)
-                    jellyfinRepo.getCachedEpisodesBySeriesAndSeason(seriesName, seasonNumber)
-                else {
-                    _state.update { it.copy(error = "Unavailable offline") }
-                    emptyList()
-                }
-                _state.update { it.copy(episodes = episodes, isLoading = false) }
-            }
+            .onFailure { loadOfflineEpisodes() }
         }
     }
 

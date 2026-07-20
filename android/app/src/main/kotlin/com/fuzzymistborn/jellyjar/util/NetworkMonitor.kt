@@ -46,7 +46,15 @@ class NetworkMonitor @Inject constructor(
     // Real OS-reported connectivity, untouched by the Admin "force offline" override.
     private val _rawOnline = MutableStateFlow(isCurrentlyConnected())
 
-    private val _isOnline = MutableStateFlow(_rawOnline.value)
+    // Seeded false, not _rawOnline.value: forceOfflineMode comes from DataStore, which can only be
+    // read asynchronously, so the combine below can't produce a real answer until its first
+    // emission lands a moment after construction. Seeding from raw connectivity alone would report
+    // "online" during that window even when force-offline is persisted true and the device has a
+    // live connection — every consumer (LibraryViewModel's cold-boot loader chief among them) would
+    // briefly take the live-fetch path before the correct false arrives, exactly defeating the
+    // point of the toggle. Defaulting to false costs a same-frame "offline" flash for ordinary
+    // (non-forced) users instead, which is the safer of the two wrong answers.
+    private val _isOnline = MutableStateFlow(false)
 
     // Any usable internet connection (Wi-Fi, cellular, ethernet, ...) — used to gate library
     // browsing, which should work over cellular. Reflects the Admin "force offline" override:
