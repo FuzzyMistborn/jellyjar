@@ -3,6 +3,7 @@ package com.fuzzymistborn.jellyjar.ui.screens
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -153,6 +154,66 @@ fun AdminScreen(
                 onValueChange = viewModel::setJellyfinUrl,
                 onFocusLost = viewModel::commitJellyfinUrl,
             )
+            OutlinedButton(
+                onClick = viewModel::discoverJellyfinServers,
+                enabled = !state.isDiscovering,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (state.isDiscovering) {
+                    CircularProgressIndicator(modifier = Modifier.size(IconSize.sm), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text("Searching…")
+                } else {
+                    Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(IconSize.sm))
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text("Discover")
+                }
+            }
+            state.discoverError?.let { err ->
+                Text(err, style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+            }
+            if (state.discoveredServers.size > 1) {
+                Surface(
+                    color = Background,
+                    shape = RoundedCornerShape(Radius.sm),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(modifier = Modifier.padding(Spacing.sm)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "Select a server",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = OnSurfaceMuted,
+                                modifier = Modifier.padding(start = Spacing.sm),
+                            )
+                            IconButton(onClick = viewModel::dismissDiscoveredServers) {
+                                Icon(Icons.Default.Close, contentDescription = "Dismiss", modifier = Modifier.size(IconSize.sm))
+                            }
+                        }
+                        state.discoveredServers.forEach { server ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { viewModel.selectDiscoveredServer(server) }
+                                    .padding(Spacing.sm),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(Icons.Default.Dns, contentDescription = null,
+                                    tint = Primary, modifier = Modifier.size(IconSize.sm))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(server.name, style = MaterialTheme.typography.bodyMedium, color = OnSurface)
+                                    Text(server.address, style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             SettingsTextField(
                 label = "Username",
                 value = state.username,

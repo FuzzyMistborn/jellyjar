@@ -67,10 +67,11 @@ class NetworkMonitor @Inject constructor(
     val reconnected: Flow<Unit> = _reconnected
 
     init {
-        val internetRequest = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
-        connectivityManager.registerNetworkCallback(internetRequest, object : ConnectivityManager.NetworkCallback() {
+        // registerDefaultNetworkCallback (not a capability-filtered NetworkRequest) tracks
+        // whatever the OS considers the active network, VPN-backed or not. A plain
+        // NetworkRequest.Builder() implicitly adds NET_CAPABILITY_NOT_VPN, so it would never fire
+        // for a VPN/Tailscale/WireGuard connection and isOnline could get stuck stale.
+        connectivityManager.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) { _rawOnline.value = true }
             override fun onLost(network: Network) { _rawOnline.value = isCurrentlyConnected() }
             override fun onUnavailable() { _rawOnline.value = false }

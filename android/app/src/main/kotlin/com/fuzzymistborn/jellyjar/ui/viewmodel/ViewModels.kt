@@ -517,22 +517,39 @@ class DetailViewModel @Inject constructor(
             }
             val savedPositionMs = downloadRepo.getPlaybackPosition(itemId)
             _state.update { it.copy(streamPositionMs = savedPositionMs) }
-            jellyfinRepo.getItem(itemId)
-                .onSuccess { item ->
-                    val isFav = favoriteRepo.isFavorite(item.id)
-                    _state.update { it.copy(item = item, isLoading = false, isFavorite = isFav, isPlayed = item.userData?.played == true) }
-                    if (item.type == "Series") loadSeasons(itemId)
+            // Offline (or force-offline) must skip the live call entirely rather than only
+            // falling back on failure — a reachable Jellyfin server would otherwise return every
+            // season unfiltered, bypassing loadOfflineSeasons' downloads-only filtering. Read
+            // networkMonitor.isOnline.value directly rather than _state.value.isOnline: the state
+            // field is only synced by an async collector launched in init and can still hold its
+            // default `true` in a cold-start race, whereas NetworkMonitor's StateFlow is always
+            // current the moment it's constructed.
+            if (!networkMonitor.isOnline.value) {
+                val cached = jellyfinRepo.getCachedItem(itemId)
+                if (cached != null) {
+                    _state.update { it.copy(item = cached, isLoading = false, error = null) }
+                    if (cached.type == "Series") loadOfflineSeasons(cached.name)
+                } else {
+                    _state.update { it.copy(isLoading = false, error = "Unavailable offline") }
                 }
-                .onFailure {
-                    // Offline fallback: load from local cache
-                    val cached = jellyfinRepo.getCachedItem(itemId)
-                    if (cached != null) {
-                        _state.update { it.copy(item = cached, isLoading = false, error = null) }
-                        if (cached.type == "Series") loadOfflineSeasons(cached.name)
-                    } else {
-                        _state.update { it.copy(isLoading = false, error = "Unavailable offline") }
+            } else {
+                jellyfinRepo.getItem(itemId)
+                    .onSuccess { item ->
+                        val isFav = favoriteRepo.isFavorite(item.id)
+                        _state.update { it.copy(item = item, isLoading = false, isFavorite = isFav, isPlayed = item.userData?.played == true) }
+                        if (item.type == "Series") loadSeasons(itemId)
                     }
-                }
+                    .onFailure {
+                        // Offline fallback: load from local cache
+                        val cached = jellyfinRepo.getCachedItem(itemId)
+                        if (cached != null) {
+                            _state.update { it.copy(item = cached, isLoading = false, error = null) }
+                            if (cached.type == "Series") loadOfflineSeasons(cached.name)
+                        } else {
+                            _state.update { it.copy(isLoading = false, error = "Unavailable offline") }
+                        }
+                    }
+            }
             // Watch all download statuses (movie + episodes)
             downloadRepo.downloads
                 .collect { allDownloads ->
@@ -630,25 +647,34 @@ class DetailViewModel @Inject constructor(
     fun selectSeason(index: Int) = viewModelScope.launch {
         _state.update { it.copy(selectedSeasonIndex = index, isLoadingEpisodes = true) }
         val season = _state.value.seasons.getOrNull(index) ?: return@launch
+
+        suspend fun loadOfflineEpisodes() {
+            val seriesName = _state.value.item?.name ?: run {
+                _state.update { it.copy(isLoadingEpisodes = false) }
+                return
+            }
+            val seasonNumber = season.indexNumber ?: run {
+                _state.update { it.copy(isLoadingEpisodes = false) }
+                return
+            }
+            val downloadedIds = downloadedEpisodeIdsFor(seriesName)
+            val episodes = jellyfinRepo.getCachedEpisodesBySeriesAndSeason(seriesName, seasonNumber)
+                .filter { it.id in downloadedIds }
+            _state.update { it.copy(episodes = episodes, isLoadingEpisodes = false) }
+        }
+
+        // Same as loadItem: offline must skip the live call entirely, not just fall back on
+        // failure, or a reachable server returns every episode unfiltered. Read
+        // networkMonitor.isOnline.value directly for the same cold-start-race reason as loadItem.
+        if (!networkMonitor.isOnline.value) {
+            loadOfflineEpisodes()
+            return@launch
+        }
         jellyfinRepo.getItems(parentId = season.id, types = "Episode")
             .onSuccess { response ->
                 _state.update { it.copy(episodes = response.Items, isLoadingEpisodes = false) }
             }
-            .onFailure {
-                // Offline: load only downloaded episodes for this series + season
-                val seriesName = _state.value.item?.name ?: run {
-                    _state.update { it.copy(isLoadingEpisodes = false) }
-                    return@launch
-                }
-                val seasonNumber = season.indexNumber ?: run {
-                    _state.update { it.copy(isLoadingEpisodes = false) }
-                    return@launch
-                }
-                val downloadedIds = downloadedEpisodeIdsFor(seriesName)
-                val episodes = jellyfinRepo.getCachedEpisodesBySeriesAndSeason(seriesName, seasonNumber)
-                    .filter { it.id in downloadedIds }
-                _state.update { it.copy(episodes = episodes, isLoadingEpisodes = false) }
-            }
+            .onFailure { loadOfflineEpisodes() }
     }
 
     fun queueDownload(preset: String) = viewModelScope.launch {
@@ -741,6 +767,9 @@ data class AdminState(
     val maxConcurrentDownloads: Int = 1,
     val playbackQuality: com.fuzzymistborn.jellyjar.model.PlaybackQuality = com.fuzzymistborn.jellyjar.model.PlaybackQuality.AUTO,
     val forceOfflineMode: Boolean = false,
+    val isDiscovering: Boolean = false,
+    val discoveredServers: List<com.fuzzymistborn.jellyjar.util.DiscoveredJellyfinServer> = emptyList(),
+    val discoverError: String? = null,
 )
 
 @HiltViewModel
@@ -750,6 +779,7 @@ class AdminViewModel @Inject constructor(
     private val downloadRepo: DownloadRepository,
     private val shimApi: com.fuzzymistborn.jellyjar.api.ShimApiService,
     private val okHttpClient: okhttp3.OkHttpClient,
+    private val discoveryService: com.fuzzymistborn.jellyjar.util.JellyfinDiscoveryService,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(AdminState())
@@ -892,6 +922,32 @@ class AdminViewModel @Inject constructor(
                 _state.update { it.copy(isTestingShim = false, shimOk = false, shimVersion = null) }
             }
     }
+
+    fun discoverJellyfinServers() = viewModelScope.launch {
+        _state.update { it.copy(isDiscovering = true, discoveredServers = emptyList(), discoverError = null) }
+        runCatching { discoveryService.discover() }
+            .onSuccess { servers ->
+                _state.update {
+                    it.copy(
+                        isDiscovering = false,
+                        discoveredServers = servers,
+                        discoverError = if (servers.isEmpty()) "No servers found on the local network" else null,
+                    )
+                }
+                if (servers.size == 1) selectDiscoveredServer(servers.first())
+            }
+            .onFailure { e ->
+                _state.update { it.copy(isDiscovering = false, discoverError = e.message ?: "Discovery failed") }
+            }
+    }
+
+    fun selectDiscoveredServer(server: com.fuzzymistborn.jellyjar.util.DiscoveredJellyfinServer) {
+        jellyfinUrlDirty = true
+        _state.update { it.copy(jellyfinUrl = server.address, discoveredServers = emptyList()) }
+        commitJellyfinUrl()
+    }
+
+    fun dismissDiscoveredServers() = _state.update { it.copy(discoveredServers = emptyList(), discoverError = null) }
 
     private fun ensureScheme(url: String): String {
         val trimmed = url.trim().trimEnd('/')
