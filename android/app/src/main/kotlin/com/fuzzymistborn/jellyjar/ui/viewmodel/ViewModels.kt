@@ -592,15 +592,27 @@ class DetailViewModel @Inject constructor(
             }
     }
 
+    // Offline, "cached" (ever viewed while online) and "downloaded" (actually playable offline)
+    // are different sets — getCachedSeasonsBySeriesName/getCachedEpisodesBySeriesAndSeason return
+    // every season/episode this device has ever seen metadata for, not just what's downloaded.
+    // Restricting to downloadRepo's completed set is what makes "only season 1 downloaded" show
+    // only season 1 while offline, instead of every season the server ever listed.
+    private suspend fun downloadedEpisodeIdsFor(seriesName: String): Set<String> =
+        downloadRepo.completedDownloads.first()
+            .filter { it.type == "Episode" && it.seriesName == seriesName }
+            .map { it.jellyfinId }
+            .toSet()
+
     private fun loadOfflineSeasons(seriesName: String) = viewModelScope.launch {
-        val seasons = jellyfinRepo.getCachedSeasonsBySeriesName(seriesName)
-        _state.update { it.copy(seasons = seasons) }
-        val idsBySeason = seasons.associate { season ->
+        val downloadedIds = downloadedEpisodeIdsFor(seriesName)
+        val cachedSeasons = jellyfinRepo.getCachedSeasonsBySeriesName(seriesName)
+        val idsBySeason = cachedSeasons.associate { season ->
             val num = season.indexNumber
             val episodes = if (num != null) jellyfinRepo.getCachedEpisodesBySeriesAndSeason(seriesName, num) else emptyList()
-            season.id to episodes.map { it.id }
-        }
-        _state.update { it.copy(seasonEpisodeIds = idsBySeason) }
+            season.id to episodes.map { it.id }.filter { it in downloadedIds }
+        }.filterValues { it.isNotEmpty() }
+        val seasons = cachedSeasons.filter { it.id in idsBySeason.keys }
+        _state.update { it.copy(seasons = seasons, seasonEpisodeIds = idsBySeason) }
     }
 
     // Fetches each season's episode IDs so poster cards can show a "downloaded X/Y" rollup.
@@ -632,7 +644,9 @@ class DetailViewModel @Inject constructor(
                     _state.update { it.copy(isLoadingEpisodes = false) }
                     return@launch
                 }
+                val downloadedIds = downloadedEpisodeIdsFor(seriesName)
                 val episodes = jellyfinRepo.getCachedEpisodesBySeriesAndSeason(seriesName, seasonNumber)
+                    .filter { it.id in downloadedIds }
                 _state.update { it.copy(episodes = episodes, isLoadingEpisodes = false) }
             }
     }
