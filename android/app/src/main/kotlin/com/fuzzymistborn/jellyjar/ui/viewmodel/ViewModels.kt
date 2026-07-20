@@ -218,7 +218,15 @@ class LibraryViewModel @Inject constructor(
             "tvshows" -> "Series"
             else -> "Movie,Series"
         }
-        jellyfinRepo.getItems(parentId = parentId, types = types, startIndex = 0, genres = _state.value.selectedGenre)
+        // Items and genre chips are independent of each other — fetch them concurrently instead
+        // of paying for two sequential round trips.
+        val itemsDeferred = async {
+            jellyfinRepo.getItems(parentId = parentId, types = types, startIndex = 0, genres = _state.value.selectedGenre)
+        }
+        val fetchGenres = selectedLib != null && _state.value.genres.isEmpty()
+        val genresDeferred = if (fetchGenres) async { jellyfinRepo.getGenres(parentId) } else null
+
+        itemsDeferred.await()
             .onSuccess { response ->
                 _state.update { s ->
                     s.copy(
@@ -232,11 +240,8 @@ class LibraryViewModel @Inject constructor(
             .onFailure {
                 _state.update { s -> s.copy(isLoading = false, isRefreshing = false, jellyfinAvailable = false) }
             }
-        // Populate the genre filter chips for this library (once per selection)
-        if (selectedLib != null && _state.value.genres.isEmpty()) {
-            jellyfinRepo.getGenres(parentId).onSuccess { genres ->
-                _state.update { s -> s.copy(genres = genres) }
-            }
+        genresDeferred?.await()?.onSuccess { genres ->
+            _state.update { s -> s.copy(genres = genres) }
         }
     }
 

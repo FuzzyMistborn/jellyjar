@@ -330,10 +330,9 @@ fun PlayerScreen(
 
         }
 
-        // Kept visible independent of `controlsVisible` (which auto-hides a few seconds into
-        // playback) so the collapsed method label is always glanceable; tap it to expand the
-        // full nerd-stats breakdown (resolution/bitrate/codec) for as long as needed.
-        playbackDiagnostics?.let { diag ->
+        // Tap the collapsed method label to expand the full nerd-stats breakdown
+        // (resolution/bitrate/codec) for as long as it stays visible.
+        if (controlsVisible) playbackDiagnostics?.let { diag ->
             val label = when (diag.method) {
                 com.fuzzymistborn.jellyjar.data.repository.PlaybackMethod.DIRECT_PLAY -> "Direct Play"
                 com.fuzzymistborn.jellyjar.data.repository.PlaybackMethod.DIRECT_STREAM -> "Direct Stream"
