@@ -358,7 +358,11 @@ class LibraryViewModel @Inject constructor(
     fun selectLibrary(name: String?) {
         _state.update { it.copy(selectedLibrary = name, items = emptyList(), totalCount = 0, genres = emptyList(), selectedGenre = null) }
         if (name != null) {
-            if (_state.value.isOnline && _state.value.jellyfinAvailable) loadLibrary()
+            // Read networkMonitor.isOnline.value directly, not _state.value.isOnline: the state
+            // field defaults to true and is only synced by an async collector launched in init,
+            // so a cold-start tap racing that collector could take the live path while genuinely
+            // offline (same class of bug as DetailViewModel's loadItem/selectSeason).
+            if (networkMonitor.isOnline.value && _state.value.jellyfinAvailable) loadLibrary()
             else loadOfflineLibrary(name)
         }
     }
@@ -379,7 +383,7 @@ class LibraryViewModel @Inject constructor(
     fun setGenre(genre: String?) {
         if (_state.value.selectedGenre == genre) return
         _state.update { it.copy(selectedGenre = genre, items = emptyList(), totalCount = 0) }
-        if (_state.value.isOnline && _state.value.jellyfinAvailable) loadLibrary()
+        if (networkMonitor.isOnline.value && _state.value.jellyfinAvailable) loadLibrary()
     }
 
     fun openGlobalSearch() {
@@ -635,15 +639,30 @@ class DetailViewModel @Inject constructor(
             .map { it.jellyfinId }
             .toSet()
 
+    // Builds the season list from downloaded Episode rows (getDownloadedSeasonNumbers), not from
+    // cached Season-type rows (getCachedSeasonsBySeriesName) — the latter depends on a Season
+    // row's own seriesName column, which is only populated if the season list was fetched online
+    // and is unverified to be reliably set by Jellyfin on Season API objects. Episode.seriesName is
+    // proven reliable elsewhere in this app, so deriving season identity from episodes instead
+    // guarantees a season with a real completed download always shows up. Any matching cached
+    // Season row is used only for cosmetic enrichment (poster art, overview) when it happens to
+    // exist; a synthetic stub covers the case where it doesn't.
     private fun loadOfflineSeasons(seriesName: String) = viewModelScope.launch {
-        val downloadedIds = downloadedEpisodeIdsFor(seriesName)
-        val cachedSeasons = jellyfinRepo.getCachedSeasonsBySeriesName(seriesName)
-        val idsBySeason = cachedSeasons.associate { season ->
+        val seasonNumbers = jellyfinRepo.getDownloadedSeasonNumbers(seriesName)
+        val cachedSeasonsByNumber = jellyfinRepo.getCachedSeasonsBySeriesName(seriesName).associateBy { it.indexNumber }
+        val seasons = seasonNumbers.map { num ->
+            cachedSeasonsByNumber[num] ?: JellyfinItem(
+                id = "offline-season-$seriesName-$num", name = "Season $num", type = "Season",
+                overview = null, year = null, communityRating = null, runTimeTicks = null,
+                seriesName = seriesName, seasonName = null, indexNumber = num, parentIndexNumber = null,
+                mediaSources = null, imageTags = null, backdropImageTags = null, userData = null,
+            )
+        }
+        val idsBySeason = seasons.associate { season ->
             val num = season.indexNumber
             val episodes = if (num != null) jellyfinRepo.getCachedEpisodesBySeriesAndSeason(seriesName, num) else emptyList()
-            season.id to episodes.map { it.id }.filter { it in downloadedIds }
-        }.filterValues { it.isNotEmpty() }
-        val seasons = cachedSeasons.filter { it.id in idsBySeason.keys }
+            season.id to episodes.map { it.id }
+        }
         _state.update { it.copy(seasons = seasons, seasonEpisodeIds = idsBySeason) }
     }
 

@@ -396,6 +396,11 @@ class JellyfinRepository @Inject constructor(
         cachedItemDao.findSeasonsBySeriesName(seriesName).map { it.toJellyfinItem() }
     }
 
+    // Reliable alternative to getCachedSeasonsBySeriesName — see findDownloadedSeasonNumbers.
+    suspend fun getDownloadedSeasonNumbers(seriesName: String): List<Int> = withContext(Dispatchers.IO) {
+        cachedItemDao.findDownloadedSeasonNumbers(seriesName)
+    }
+
     suspend fun getCachedEpisodesBySeriesAndSeason(seriesName: String, seasonNumber: Int): List<JellyfinItem> =
         withContext(Dispatchers.IO) {
             cachedItemDao.findEpisodesBySeriesAndSeason(seriesName, seasonNumber).map { it.toJellyfinItem() }

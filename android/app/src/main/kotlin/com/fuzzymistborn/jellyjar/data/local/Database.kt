@@ -201,6 +201,20 @@ interface CachedItemDao {
     """)
     suspend fun findSeasonsBySeriesName(seriesName: String): List<CachedItemEntity>
 
+    // Season numbers derived purely from downloaded Episode rows, not from any cached Season-type
+    // row. Episode.seriesName is proven reliable elsewhere in this app (e.g. the "$seriesName ·
+    // S01E01 · $name" display string), whereas a Season row's own seriesName column only exists if
+    // the season list was fetched online and depends on Jellyfin actually populating that field on
+    // Season API objects — unverified and a single point of failure findSeasonsBySeriesName has,
+    // which is why it silently returned zero rows for a real downloaded episode.
+    @Query("""
+        SELECT DISTINCT ep.parentIndexNumber FROM cached_items ep
+        WHERE ep.seriesName = :seriesName AND ep.type = 'Episode' AND ep.parentIndexNumber IS NOT NULL
+          AND EXISTS (SELECT 1 FROM downloads d WHERE d.jellyfinId = ep.id AND d.status = 'COMPLETE')
+        ORDER BY ep.parentIndexNumber ASC
+    """)
+    suspend fun findDownloadedSeasonNumbers(seriesName: String): List<Int>
+
     @Query("""
         SELECT ci.* FROM cached_items ci
         WHERE ci.seriesName = :seriesName AND ci.type = 'Episode' AND ci.parentIndexNumber = :seasonNumber
