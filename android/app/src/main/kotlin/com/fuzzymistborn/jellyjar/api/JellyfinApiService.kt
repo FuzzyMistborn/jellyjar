@@ -77,6 +77,24 @@ data class TranscodingProfile(
     val Protocol: String = "hls",
 )
 
+// Condition/Property/Value/IsRequired is the shape Jellyfin's server evaluates against each
+// MediaSource's actual stream properties (Width, Height, VideoBitrate, ...) both to decide
+// whether Direct Play is allowed and to size the transcode output. A bitrate cap alone only
+// tells the encoder a target bitrate — without a Width/Height condition here, Jellyfin re-encodes
+// at the *source's original resolution* squeezed into that bitrate (blocky 4K, not actually 720p).
+data class ProfileCondition(
+    val Condition: String = "LessThanEqual",
+    val Property: String,
+    val Value: String,
+    val IsRequired: Boolean = false,
+)
+
+data class CodecProfile(
+    val Type: String = "Video",
+    val Codec: String = "h264,hevc,vp9,av1,mpeg4,mpeg2video",
+    val Conditions: List<ProfileCondition>,
+)
+
 data class DeviceProfile(
     val MaxStreamingBitrate: Int = 120_000_000,
     // MaxStreamingBitrate alone only caps the transcode *output* target — it's MaxStaticBitrate
@@ -85,6 +103,7 @@ data class DeviceProfile(
     val MaxStaticBitrate: Int? = null,
     val DirectPlayProfiles: List<DirectPlayProfile> = listOf(DirectPlayProfile()),
     val TranscodingProfiles: List<TranscodingProfile> = listOf(TranscodingProfile()),
+    val CodecProfiles: List<CodecProfile> = emptyList(),
 )
 
 data class PlaybackInfoRequest(

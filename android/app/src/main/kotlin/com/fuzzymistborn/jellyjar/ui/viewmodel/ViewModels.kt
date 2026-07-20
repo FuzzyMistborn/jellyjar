@@ -1422,6 +1422,18 @@ class PlayerViewModel @Inject constructor(
             ?: jellyfinRepo.getStreamUrlWithDiagnostics(jellyfinId).second
     }
 
+    // Re-negotiates the stream at a different quality mid-playback (in-player quality switcher).
+    // Session-only — deliberately doesn't touch the persisted Admin default, so switching for one
+    // title doesn't silently change what every other title streams at.
+    suspend fun changeStreamQuality(
+        jellyfinId: String,
+        quality: com.fuzzymistborn.jellyjar.model.PlaybackQuality,
+    ): Pair<String, PlaybackDiagnostics> =
+        jellyfinRepo.getStreamUrlWithDiagnostics(jellyfinId, quality)
+
+    suspend fun currentPlaybackQuality(): com.fuzzymistborn.jellyjar.model.PlaybackQuality =
+        settings.currentSnapshot().playbackQuality
+
     // Intro/credits markers for the skip button. Prefers segments captured on the download
     // (works offline), falls back to asking the server. Empty when the setting is off.
     suspend fun loadSkipSegments(jellyfinId: String): List<SkipSegment> {

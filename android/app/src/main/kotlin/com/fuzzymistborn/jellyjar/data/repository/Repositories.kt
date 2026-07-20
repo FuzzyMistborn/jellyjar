@@ -47,7 +47,7 @@ import javax.inject.Singleton
 
 enum class PlaybackMethod { DIRECT_PLAY, DIRECT_STREAM, TRANSCODE }
 
-data class PlaybackDiagnostics(val method: PlaybackMethod, val reasons: List<String>)
+data class PlaybackDiagnostics(val method: PlaybackMethod, val reasons: List<String>, val container: String? = null)
 
 @Singleton
 class JellyfinRepository @Inject constructor(
@@ -308,13 +308,31 @@ class JellyfinRepository @Inject constructor(
 
     // Same PlaybackInfo negotiation as getStreamUrl, but also reports which playback method
     // Jellyfin picked (and why, when transcoding) so the player UI can show it to the user.
-    suspend fun getStreamUrlWithDiagnostics(itemId: String): Pair<String, PlaybackDiagnostics> =
+    // `qualityOverride` lets the in-player quality switcher renegotiate for this one playback
+    // without touching the persisted Admin default (null = use the persisted setting).
+    suspend fun getStreamUrlWithDiagnostics(
+        itemId: String,
+        qualityOverride: com.fuzzymistborn.jellyjar.model.PlaybackQuality? = null,
+    ): Pair<String, PlaybackDiagnostics> =
         withContext(Dispatchers.IO) {
             val s = settings.currentSnapshot()
             val fallback = JellyfinImageHelper.streamUrl(s.jellyfinUrl, itemId, s.jellyfinToken)
             runCatching {
                 val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
-                val bitrateCap = s.playbackQuality.maxBitrate
+                val quality = qualityOverride ?: s.playbackQuality
+                val bitrateCap = quality.maxBitrate
+                // Width/Height conditions are what actually make Jellyfin downscale the transcode
+                // output — a bitrate cap alone re-encodes at the source's original resolution.
+                val codecProfiles = if (quality.maxWidth != null && quality.maxHeight != null) {
+                    listOf(
+                        CodecProfile(
+                            Conditions = listOf(
+                                ProfileCondition(Property = "Width", Value = quality.maxWidth.toString()),
+                                ProfileCondition(Property = "Height", Value = quality.maxHeight.toString()),
+                            ),
+                        ),
+                    )
+                } else emptyList()
                 val response = service.getPlaybackInfo(
                     itemId = itemId,
                     authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
@@ -323,6 +341,7 @@ class JellyfinRepository @Inject constructor(
                         DeviceProfile = DeviceProfile(
                             MaxStreamingBitrate = bitrateCap ?: 120_000_000,
                             MaxStaticBitrate = bitrateCap,
+                            CodecProfiles = codecProfiles,
                         ),
                         MaxStreamingBitrate = bitrateCap,
                     ),
@@ -332,14 +351,14 @@ class JellyfinRepository @Inject constructor(
                 val transcodingUrl = source.TranscodingUrl
                 if (!source.SupportsDirectPlay && !source.SupportsDirectStream && transcodingUrl != null) {
                     val url = s.jellyfinUrl.trimEnd('/') + transcodingUrl
-                    Pair(url, PlaybackDiagnostics(PlaybackMethod.TRANSCODE, source.TranscodeReasons ?: emptyList()))
+                    Pair(url, PlaybackDiagnostics(PlaybackMethod.TRANSCODE, source.TranscodeReasons ?: emptyList(), source.Container))
                 } else {
                     val url = JellyfinImageHelper.streamUrl(
                         s.jellyfinUrl, itemId, s.jellyfinToken,
                         container = source.Container, mediaSourceId = source.Id,
                     )
                     val method = if (source.SupportsDirectPlay) PlaybackMethod.DIRECT_PLAY else PlaybackMethod.DIRECT_STREAM
-                    Pair(url, PlaybackDiagnostics(method, emptyList()))
+                    Pair(url, PlaybackDiagnostics(method, emptyList(), source.Container))
                 }
             }.getOrDefault(Pair(fallback, PlaybackDiagnostics(PlaybackMethod.DIRECT_PLAY, emptyList())))
                 .also { (_, diagnostics) -> lastDiagnostics[itemId] = diagnostics }

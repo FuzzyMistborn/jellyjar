@@ -187,8 +187,8 @@ data class AppSettings(
 
 // Caps the negotiated streaming bitrate (server transcodes down when the source exceeds it);
 // AUTO leaves the device's max bitrate ceiling in place so Jellyfin prefers direct play.
-enum class PlaybackQuality(val maxBitrate: Int?, val label: String) {
-    AUTO(null, "Auto"),
-    HIGH_1080P(8_000_000, "1080p"),
-    MEDIUM_720P(4_000_000, "720p"),
+enum class PlaybackQuality(val maxBitrate: Int?, val maxWidth: Int?, val maxHeight: Int?, val label: String) {
+    AUTO(null, null, null, "Auto"),
+    HIGH_1080P(8_000_000, 1920, 1080, "1080p"),
+    MEDIUM_720P(4_000_000, 1280, 720, "720p"),
 }

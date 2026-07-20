@@ -414,7 +414,7 @@ fun AdminScreen(
                 modifier = Modifier.padding(top = Spacing.sm),
             )
             Text(
-                "Caps the streamed bitrate; Jellyfin transcodes down when the source exceeds it. Downloads always use the preset chosen at queue time.",
+                "Caps the streamed bitrate and resolution; Jellyfin transcodes down when the source exceeds it. Downloads always use the preset chosen at queue time.",
                 style = MaterialTheme.typography.bodySmall,
                 color = OnSurfaceMuted,
             )

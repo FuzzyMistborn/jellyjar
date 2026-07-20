@@ -11,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -190,12 +191,42 @@ fun PlayerScreen(
 
     // ── Codec diagnostics (Direct Play / Direct Stream / Transcoding) ────────────
     var playbackDiagnostics by remember { mutableStateOf<com.fuzzymistborn.jellyjar.data.repository.PlaybackDiagnostics?>(null) }
+    val isStreamed = jellyfinId != null && !localPath.startsWith("/")
     LaunchedEffect(jellyfinId) {
         // Downloaded files play straight off disk — no server negotiation happened, so there's
         // nothing to report.
-        if (jellyfinId != null && !localPath.startsWith("/")) {
-            playbackDiagnostics = viewModel.loadPlaybackDiagnostics(jellyfinId)
+        if (isStreamed) {
+            playbackDiagnostics = viewModel.loadPlaybackDiagnostics(jellyfinId!!)
         }
+    }
+
+    // ── In-player streaming quality switcher ──────────────────────────────────
+    var currentQuality by remember { mutableStateOf<com.fuzzymistborn.jellyjar.model.PlaybackQuality?>(null) }
+    var showQualitySheet by remember { mutableStateOf(false) }
+    var qualityChanging by remember { mutableStateOf(false) }
+    LaunchedEffect(jellyfinId) {
+        if (isStreamed) currentQuality = viewModel.currentPlaybackQuality()
+    }
+
+    // ── Nerd stats (actual decoded format) ────────────────────────────────────
+    // The negotiated PlaybackDiagnostics above only reflects what the server *offered*; the
+    // format ExoPlayer actually ends up decoding is the ground truth for "is this really
+    // transcoding," so read it straight off the player instead of trusting the negotiation.
+    var videoFormat by remember { mutableStateOf<androidx.media3.common.Format?>(null) }
+    var audioFormat by remember { mutableStateOf<androidx.media3.common.Format?>(null) }
+    var nerdStatsVisible by remember { mutableStateOf(false) }
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                videoFormat = player.videoFormat
+            }
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                videoFormat = player.videoFormat
+                audioFormat = player.audioFormat
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
     }
 
     // Distance in px from the root's bottom edge up to the top of the control bar (the row
@@ -298,32 +329,129 @@ fun PlayerScreen(
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
+
+            if (isStreamed) {
+                IconButton(
+                    onClick = { showQualitySheet = true },
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(start = 56.dp, top = Spacing.sm),
+                ) {
+                    Icon(Icons.Filled.Settings, contentDescription = "Streaming quality", tint = Color.White)
+                }
+            }
         }
 
         // Kept visible independent of `controlsVisible` (which auto-hides a few seconds into
-        // playback) — this is a diagnostic panel the user explicitly opted into via Admin, so it
-        // needs to stay on screen long enough to actually read, not flash briefly at playback start.
+        // playback) so the collapsed method label is always glanceable; tap it to expand the
+        // full nerd-stats breakdown (resolution/bitrate/codec) for as long as needed.
         playbackDiagnostics?.let { diag ->
             val label = when (diag.method) {
                 com.fuzzymistborn.jellyjar.data.repository.PlaybackMethod.DIRECT_PLAY -> "Direct Play"
                 com.fuzzymistborn.jellyjar.data.repository.PlaybackMethod.DIRECT_STREAM -> "Direct Stream"
                 com.fuzzymistborn.jellyjar.data.repository.PlaybackMethod.TRANSCODE -> "Transcoding"
             }
-            Text(
-                text = if (diag.reasons.isNotEmpty()) "$label · ${diag.reasons.joinToString(", ")}" else label,
-                style = MaterialTheme.typography.labelMedium,
-                color = Color.White,
+            Column(
+                horizontalAlignment = Alignment.End,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(Spacing.sm)
-                    .background(Color.Black.copy(alpha = 0.5f), MaterialTheme.shapes.small)
+                    .background(Color.Black.copy(alpha = 0.6f), MaterialTheme.shapes.small)
+                    .clickable { nerdStatsVisible = !nerdStatsVisible }
                     .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
-            )
+            ) {
+                Text(
+                    text = if (diag.reasons.isNotEmpty()) "$label · ${diag.reasons.joinToString(", ")}" else label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White,
+                )
+                if (nerdStatsVisible) {
+                    val vf = videoFormat
+                    val af = audioFormat
+                    val statLines = buildList {
+                        diag.container?.let { add("Container: $it") }
+                        if (vf != null) {
+                            add("Video: ${vf.sampleMimeType?.substringAfterLast('/') ?: "?"} ${vf.width}x${vf.height}")
+                            if (vf.bitrate > 0) add("Video bitrate: ${vf.bitrate / 1000} kbps")
+                            if (vf.frameRate > 0f) add("Frame rate: ${"%.2f".format(vf.frameRate)} fps")
+                        }
+                        if (af != null) {
+                            add("Audio: ${af.sampleMimeType?.substringAfterLast('/') ?: "?"} ${af.channelCount}ch")
+                            if (af.bitrate > 0) add("Audio bitrate: ${af.bitrate / 1000} kbps")
+                        }
+                        if (vf == null && af == null) add("Waiting for track info…")
+                    }
+                    statLines.forEach { line ->
+                        Text(
+                            text = line,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.85f),
+                        )
+                    }
+                }
+            }
         }
     }
 
     if (showTrackSheet) {
         TrackSelectionSheet(player = player, onDismiss = { showTrackSheet = false })
+    }
+
+    if (showQualitySheet && jellyfinId != null) {
+        QualitySelectionSheet(
+            current = currentQuality,
+            changing = qualityChanging,
+            onSelect = { quality ->
+                showQualitySheet = false
+                if (quality == currentQuality) return@QualitySelectionSheet
+                qualityChanging = true
+                coroutineScope.launch {
+                    val resumeMs = player.currentPosition
+                    val wasPlaying = player.isPlaying
+                    val (url, diag) = viewModel.changeStreamQuality(jellyfinId, quality)
+                    player.setMediaItem(MediaItem.fromUri(url))
+                    player.prepare()
+                    if (resumeMs > 0) player.seekTo(resumeMs)
+                    player.playWhenReady = wasPlaying
+                    currentQuality = quality
+                    playbackDiagnostics = diag
+                    qualityChanging = false
+                }
+            },
+            onDismiss = { showQualitySheet = false },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun QualitySelectionSheet(
+    current: com.fuzzymistborn.jellyjar.model.PlaybackQuality?,
+    changing: Boolean,
+    onSelect: (com.fuzzymistborn.jellyjar.model.PlaybackQuality) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Surface) {
+        Column(
+            modifier = Modifier
+                .padding(horizontal = Spacing.xl)
+                .padding(bottom = 32.dp),
+        ) {
+            Text(
+                "Streaming Quality",
+                style = MaterialTheme.typography.titleMedium,
+                color = SectionHeading,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+            com.fuzzymistborn.jellyjar.model.PlaybackQuality.entries.forEach { quality ->
+                TrackRow(
+                    label = quality.label,
+                    selected = quality == current,
+                    enabled = !changing,
+                    onClick = { onSelect(quality) },
+                )
+            }
+        }
     }
 }
 
@@ -470,13 +598,13 @@ private fun formatPlayerTime(ms: Long): String {
 }
 
 @Composable
-private fun TrackRow(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun TrackRow(label: String, selected: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = Spacing.md),
+        modifier = Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick).padding(vertical = Spacing.md),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, color = if (selected) Primary else OnSurface)
+        Text(label, color = if (!enabled) OnSurfaceMuted else if (selected) Primary else OnSurface)
         if (selected) Icon(Icons.Default.Check, contentDescription = null, tint = Primary)
     }
     HorizontalDivider(color = OnSurfaceMuted.copy(alpha = 0.2f))
