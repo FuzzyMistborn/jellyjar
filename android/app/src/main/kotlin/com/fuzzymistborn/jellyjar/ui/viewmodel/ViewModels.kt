@@ -525,13 +525,7 @@ class DetailViewModel @Inject constructor(
             // default `true` in a cold-start race, whereas NetworkMonitor's StateFlow is always
             // current the moment it's constructed.
             if (!networkMonitor.isOnline.value) {
-                val cached = jellyfinRepo.getCachedItem(itemId)
-                if (cached != null) {
-                    _state.update { it.copy(item = cached, isLoading = false, error = null) }
-                    if (cached.type == "Series") loadOfflineSeasons(cached.name)
-                } else {
-                    _state.update { it.copy(isLoading = false, error = "Unavailable offline") }
-                }
+                loadOfflineItem(itemId)
             } else {
                 jellyfinRepo.getItem(itemId)
                     .onSuccess { item ->
@@ -541,13 +535,7 @@ class DetailViewModel @Inject constructor(
                     }
                     .onFailure {
                         // Offline fallback: load from local cache
-                        val cached = jellyfinRepo.getCachedItem(itemId)
-                        if (cached != null) {
-                            _state.update { it.copy(item = cached, isLoading = false, error = null) }
-                            if (cached.type == "Series") loadOfflineSeasons(cached.name)
-                        } else {
-                            _state.update { it.copy(isLoading = false, error = "Unavailable offline") }
-                        }
+                        loadOfflineItem(itemId)
                     }
             }
             // Watch all download statuses (movie + episodes)
@@ -559,6 +547,33 @@ class DetailViewModel @Inject constructor(
                         .associateBy { it.jellyfinId }
                     _state.update { it.copy(download = thisItem, episodeDownloads = epMap) }
                 }
+        }
+    }
+
+    // loadOfflineLibrary's TV Shows tile falls back to a synthetic "offline-series-$seriesName"
+    // id when no cached_items "Series" row exists for a series whose episodes are still
+    // downloaded (e.g. the cache row was pruned independently of the downloads table). That id
+    // was never persisted, so getCachedItem's by-id lookup always misses it — handle it directly
+    // by name instead of erroring out with "Unavailable offline".
+    private suspend fun loadOfflineItem(itemId: String) {
+        val syntheticSeriesName = itemId.removePrefix("offline-series-").takeIf { itemId.startsWith("offline-series-") }
+        if (syntheticSeriesName != null) {
+            val stub = JellyfinItem(
+                id = itemId, name = syntheticSeriesName, type = "Series",
+                overview = null, year = null, communityRating = null, runTimeTicks = null,
+                seriesName = null, seasonName = null, indexNumber = null, parentIndexNumber = null,
+                mediaSources = null, imageTags = null, backdropImageTags = null, userData = null,
+            )
+            _state.update { it.copy(item = stub, isLoading = false, error = null) }
+            loadOfflineSeasons(syntheticSeriesName)
+            return
+        }
+        val cached = jellyfinRepo.getCachedItem(itemId)
+        if (cached != null) {
+            _state.update { it.copy(item = cached, isLoading = false, error = null) }
+            if (cached.type == "Series") loadOfflineSeasons(cached.name)
+        } else {
+            _state.update { it.copy(isLoading = false, error = "Unavailable offline") }
         }
     }
 
