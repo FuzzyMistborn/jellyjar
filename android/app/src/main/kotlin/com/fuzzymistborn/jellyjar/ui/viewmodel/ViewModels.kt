@@ -711,6 +711,7 @@ data class AdminState(
     val authError: String? = null,
     val isTestingShim: Boolean = false,
     val shimOk: Boolean? = null,
+    val shimVersion: String? = null,
     val storageInfo: String? = null,
     val activeJobs: List<JobSummary> = emptyList(),
     val wifiOnly: Boolean = false,
@@ -853,7 +854,7 @@ class AdminViewModel @Inject constructor(
 
     fun testShim() = viewModelScope.launch {
         commitShimUrl()
-        _state.update { it.copy(isTestingShim = true, shimOk = null) }
+        _state.update { it.copy(isTestingShim = true, shimOk = null, shimVersion = null) }
         val shimUrl = ensureScheme(_state.value.shimUrl)
         if (shimUrl.isBlank()) {
             _state.update { it.copy(isTestingShim = false, shimOk = false) }
@@ -869,10 +870,12 @@ class AdminViewModel @Inject constructor(
                 .build()
             retrofit.create(com.fuzzymistborn.jellyjar.api.ShimApiService::class.java).health()
         }
-            .onSuccess { _state.update { it.copy(isTestingShim = false, shimOk = true) } }
+            .onSuccess { health ->
+                _state.update { it.copy(isTestingShim = false, shimOk = true, shimVersion = health["version"]) }
+            }
             .onFailure { e ->
                 android.util.Log.e("JellyJar", "Press test failed: ${e.message}")
-                _state.update { it.copy(isTestingShim = false, shimOk = false) }
+                _state.update { it.copy(isTestingShim = false, shimOk = false, shimVersion = null) }
             }
     }
 

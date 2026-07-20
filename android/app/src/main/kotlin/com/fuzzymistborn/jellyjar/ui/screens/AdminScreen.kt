@@ -211,7 +211,10 @@ fun AdminScreen(
             icon = Icons.Default.Movie,
             statusBadge = {
                 when (state.shimOk) {
-                    true -> StatusChip(label = "Reachable", color = Success)
+                    true -> StatusChip(
+                        label = state.shimVersion?.let { "Reachable · v$it" } ?: "Reachable",
+                        color = Success,
+                    )
                     false -> StatusChip(label = "Unreachable", color = Error)
                     null -> {}
                 }

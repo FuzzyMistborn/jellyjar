@@ -225,7 +225,7 @@ function formatDuration(seconds) {
 async function refreshHealth() {
   try {
     const h = await (await fetch('/health')).json();
-    healthEl.innerHTML = `encoder: <b>${h.encoder}</b> &nbsp;·&nbsp; media root: <b>${h.media_root}</b> &nbsp;·&nbsp; output root: <b>${h.output_root}</b>`;
+    healthEl.innerHTML = `v${h.version} &nbsp;·&nbsp; encoder: <b>${h.encoder}</b> &nbsp;·&nbsp; media root: <b>${h.media_root}</b> &nbsp;·&nbsp; output root: <b>${h.output_root}</b>`;
   } catch (e) {
     healthEl.textContent = 'unable to reach Press service';
   }

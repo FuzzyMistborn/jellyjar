@@ -536,7 +536,14 @@ class DownloadRepository @Inject constructor(
     suspend fun startQueuedItem(entity: DownloadEntity): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val mediaPath = entity.mediaSourcePath ?: error("No source path saved")
-            val filename = "${entity.jellyfinId}_${entity.preset}.mp4"
+            // Named after the original source file (sanitized) instead of the opaque Jellyfin
+            // item ID, so both the Press output file and the file saved on-device read as the
+            // actual title instead of a GUID. The item ID is kept as a short suffix purely to
+            // rule out a collision between two source files that happen to share a base name.
+            val sourceName = File(mediaPath).nameWithoutExtension
+                .replace(Regex("[/\\\\:*?\"<>|]"), "_")
+                .ifBlank { entity.jellyfinId }
+            val filename = "${sourceName}_${entity.preset}_${entity.jellyfinId.take(8)}.mp4"
             val job = shimService().startTranscode(
                 TranscodeRequest(
                     source_path = mediaPath,

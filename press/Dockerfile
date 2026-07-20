@@ -1,5 +1,8 @@
 FROM python:3.14-slim
 
+ARG PRESS_VERSION=dev
+ENV PRESS_VERSION=$PRESS_VERSION
+
 # Enable non-free for intel-media-va-driver
 RUN sed -i 's/^Components: main$/Components: main contrib non-free non-free-firmware/' \
         /etc/apt/sources.list.d/debian.sources

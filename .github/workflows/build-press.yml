@@ -34,6 +34,17 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
+      - name: Derive version from release tag
+        id: version
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Tag '$TAG' is not a vMAJOR.MINOR.PATCH tag" >&2
+            exit 1
+          fi
+          echo "name=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
@@ -41,5 +52,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            PRESS_VERSION=${{ steps.version.outputs.name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -16,6 +16,10 @@ from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+# Set at Docker build time from the release tag (see .github/workflows/build-press.yml), so this
+# always matches the JellyJar app version released alongside it. "dev" for local/unreleased builds.
+PRESS_VERSION = os.environ.get("PRESS_VERSION", "dev")
+
 # The web UI polls these on a timer; they'd otherwise flood the access log every couple seconds.
 _QUIET_PATHS = ("GET /jobs ", "GET /api/queue/stats ", "GET /health ")
 
@@ -165,7 +169,7 @@ async def lifespan(app_: FastAPI):
     cleanup_task.cancel()
 
 
-app = FastAPI(title="JellyJar Press", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="JellyJar Press", version=PRESS_VERSION, lifespan=lifespan)
 
 MEDIA_ROOT = os.environ.get("MEDIA_ROOT", "/media")
 OUTPUT_ROOT = os.environ.get("OUTPUT_ROOT", "/output")
@@ -761,7 +765,13 @@ async def stream_job(job_id: str):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "media_root": MEDIA_ROOT, "output_root": OUTPUT_ROOT, "encoder": _active_encoder}
+    return {
+        "status": "ok",
+        "version": PRESS_VERSION,
+        "media_root": MEDIA_ROOT,
+        "output_root": OUTPUT_ROOT,
+        "encoder": _active_encoder,
+    }
 
 
 @app.get("/api/disk")
