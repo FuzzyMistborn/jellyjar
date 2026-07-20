@@ -11,7 +11,6 @@ import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -202,7 +201,6 @@ fun PlayerScreen(
 
     // ── In-player streaming quality switcher ──────────────────────────────────
     var currentQuality by remember { mutableStateOf<com.fuzzymistborn.jellyjar.model.PlaybackQuality?>(null) }
-    var showQualitySheet by remember { mutableStateOf(false) }
     var qualityChanging by remember { mutableStateOf(false) }
     LaunchedEffect(jellyfinId) {
         if (isStreamed) currentQuality = viewModel.currentPlaybackQuality()
@@ -330,16 +328,6 @@ fun PlayerScreen(
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
 
-            if (isStreamed) {
-                IconButton(
-                    onClick = { showQualitySheet = true },
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(start = 56.dp, top = Spacing.sm),
-                ) {
-                    Icon(Icons.Filled.Settings, contentDescription = "Streaming quality", tint = Color.White)
-                }
-            }
         }
 
         // Kept visible independent of `controlsVisible` (which auto-hides a few seconds into
@@ -394,16 +382,13 @@ fun PlayerScreen(
     }
 
     if (showTrackSheet) {
-        TrackSelectionSheet(player = player, onDismiss = { showTrackSheet = false })
-    }
-
-    if (showQualitySheet && jellyfinId != null) {
-        QualitySelectionSheet(
-            current = currentQuality,
-            changing = qualityChanging,
-            onSelect = { quality ->
-                showQualitySheet = false
-                if (quality == currentQuality) return@QualitySelectionSheet
+        PlayerSettingsSheet(
+            player = player,
+            quality = if (isStreamed) currentQuality else null,
+            showQuality = isStreamed,
+            qualityChanging = qualityChanging,
+            onSelectQuality = { quality ->
+                if (quality == currentQuality || jellyfinId == null) return@PlayerSettingsSheet
                 qualityChanging = true
                 coroutineScope.launch {
                     val resumeMs = player.currentPosition
@@ -418,46 +403,24 @@ fun PlayerScreen(
                     qualityChanging = false
                 }
             },
-            onDismiss = { showQualitySheet = false },
+            onDismiss = { showTrackSheet = false },
         )
     }
 }
 
+// Combines streaming-quality and audio/subtitle track selection into a single sheet, reached
+// from the one gear icon in the bottom control bar — previously this was two separate gear
+// icons (one custom, one from ExoPlayer's controls), which read as duplicated settings.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun QualitySelectionSheet(
-    current: com.fuzzymistborn.jellyjar.model.PlaybackQuality?,
-    changing: Boolean,
-    onSelect: (com.fuzzymistborn.jellyjar.model.PlaybackQuality) -> Unit,
+private fun PlayerSettingsSheet(
+    player: ExoPlayer,
+    quality: com.fuzzymistborn.jellyjar.model.PlaybackQuality?,
+    showQuality: Boolean,
+    qualityChanging: Boolean,
+    onSelectQuality: (com.fuzzymistborn.jellyjar.model.PlaybackQuality) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Surface) {
-        Column(
-            modifier = Modifier
-                .padding(horizontal = Spacing.xl)
-                .padding(bottom = 32.dp),
-        ) {
-            Text(
-                "Streaming Quality",
-                style = MaterialTheme.typography.titleMedium,
-                color = SectionHeading,
-                modifier = Modifier.padding(bottom = 4.dp),
-            )
-            com.fuzzymistborn.jellyjar.model.PlaybackQuality.entries.forEach { quality ->
-                TrackRow(
-                    label = quality.label,
-                    selected = quality == current,
-                    enabled = !changing,
-                    onClick = { onSelect(quality) },
-                )
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun TrackSelectionSheet(player: ExoPlayer, onDismiss: () -> Unit) {
     val tracks = remember { player.currentTracks }
     val audioGroups = remember(tracks) { tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO } }
     val textGroups = remember(tracks) { tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT } }
@@ -468,6 +431,24 @@ private fun TrackSelectionSheet(player: ExoPlayer, onDismiss: () -> Unit) {
                 .padding(horizontal = Spacing.xl)
                 .padding(bottom = 32.dp),
         ) {
+            if (showQuality) {
+                Text(
+                    "Streaming Quality",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = SectionHeading,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+                com.fuzzymistborn.jellyjar.model.PlaybackQuality.entries.forEach { entry ->
+                    TrackRow(
+                        label = entry.label,
+                        selected = entry == quality,
+                        enabled = !qualityChanging,
+                        onClick = { onSelectQuality(entry) },
+                    )
+                }
+                Spacer(Modifier.height(Spacing.lg))
+            }
+
             if (audioGroups.isEmpty() && textGroups.isEmpty()) {
                 Text("No alternate tracks available",
                     style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted,
