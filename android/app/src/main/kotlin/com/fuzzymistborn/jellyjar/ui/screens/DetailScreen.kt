@@ -386,9 +386,18 @@ private fun TitleAndMetaRow(item: JellyfinItem, accentColor: Color, compact: Boo
     }
     // A long movie title wraps to multiple lines at displayMedium in the narrower two-pane
     // sidebar, pushing the action buttons below the fold — drop to a smaller heading there.
+    // Subtle text shadow as a legibility backstop where the title overlaps the still-fading
+    // edge of the backdrop (heroBackdropScrim's gradient doesn't fully solidify until partway
+    // down) — negligible over the flat background further down, cheap insurance either way.
     Text(
         text = if (item.type == "Episode") item.name else item.displayTitle,
-        style = if (compact) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.displayMedium,
+        style = (if (compact) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.displayMedium).copy(
+            shadow = androidx.compose.ui.graphics.Shadow(
+                color = Color.Black.copy(alpha = 0.4f),
+                offset = androidx.compose.ui.geometry.Offset(0f, 2f),
+                blurRadius = 6f,
+            ),
+        ),
         color = OnSurface,
     )
     Spacer(Modifier.height(Spacing.sm))
@@ -614,7 +623,7 @@ private fun SeasonsSection(
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
             itemsIndexed(state.seasons) { index, season ->
-                Column(modifier = Modifier.width(110.dp)) {
+                Column(modifier = Modifier.width(PosterSize.standard)) {
                     PosterImage(
                         // A synthetic offline season (see DetailViewModel.loadOfflineSeasons) has no
                         // real Jellyfin id, so its own poster art can't be fetched — fall back to the
@@ -848,7 +857,7 @@ internal fun EpisodeRow(
                         Icon(
                             Icons.Default.CheckCircle,
                             contentDescription = "Watched",
-                            tint = Primary,
+                            tint = Success,
                             modifier = Modifier.padding(2.dp).size(IconSize.sm),
                         )
                     }
@@ -858,7 +867,7 @@ internal fun EpisodeRow(
                 if (watchFraction > 0.01f) {
                     LinearProgressIndicator(
                         progress = { watchFraction },
-                        modifier = Modifier.fillMaxWidth().height(3.dp).align(Alignment.BottomCenter),
+                        modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.BottomCenter),
                         color = Primary,
                         trackColor = Color.Transparent,
                     )
@@ -1043,7 +1052,7 @@ internal fun EpisodeThumb(
                     Icon(
                         Icons.Default.CheckCircle,
                         contentDescription = "Watched",
-                        tint = Primary,
+                        tint = Success,
                         modifier = Modifier.padding(2.dp).size(IconSize.sm),
                     )
                 }
@@ -1053,7 +1062,7 @@ internal fun EpisodeThumb(
             if (watchFraction > 0.01f) {
                 LinearProgressIndicator(
                     progress = { watchFraction },
-                    modifier = Modifier.fillMaxWidth().height(3.dp).align(Alignment.BottomCenter),
+                    modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.BottomCenter),
                     color = Primary,
                     trackColor = Color.Transparent,
                 )

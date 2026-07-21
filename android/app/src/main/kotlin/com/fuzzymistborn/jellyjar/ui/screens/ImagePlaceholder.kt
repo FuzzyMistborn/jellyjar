@@ -1,6 +1,8 @@
 package com.fuzzymistborn.jellyjar.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -21,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
@@ -59,7 +62,7 @@ fun PosterImage(
     contentDescription: String?,
     modifier: Modifier = Modifier,
     aspectRatio: Float = 2f / 3f,
-    cornerRadius: Dp = Radius.sm,
+    cornerRadius: Dp = Radius.md,
     cacheKey: String? = null,
     onClick: (() -> Unit)? = null,
     overlay: @Composable BoxScope.() -> Unit = {},
@@ -67,11 +70,14 @@ fun PosterImage(
     val context = LocalContext.current
     var imageState by remember(imageUrl) { mutableStateOf(ImageLoadState.LOADING) }
 
+    // Thin hairline border in addition to the elevation shadow — posters otherwise blend into
+    // the near-black background and read as a soft blur rather than a distinct card edge.
     var boxModifier = modifier
         .aspectRatio(aspectRatio)
         .shadow(elevation = Elevation.poster, shape = RoundedCornerShape(cornerRadius), clip = false)
         .clip(RoundedCornerShape(cornerRadius))
         .background(SurfaceVariant)
+        .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.06f)), RoundedCornerShape(cornerRadius))
     if (onClick != null) boxModifier = boxModifier.clickable(onClick = onClick)
 
     Box(modifier = boxModifier) {

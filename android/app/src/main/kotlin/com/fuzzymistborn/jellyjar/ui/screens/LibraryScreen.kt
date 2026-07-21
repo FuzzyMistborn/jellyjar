@@ -475,7 +475,7 @@ private fun ResumeCard(
         val runtimeTicks = item.runTimeTicks ?: return@let null
         if (runtimeTicks > 0) (ticks.toFloat() / runtimeTicks).coerceIn(0f, 0.99f) else null
     }
-    Column(modifier = Modifier.width(130.dp)) {
+    Column(modifier = Modifier.width(PosterSize.large)) {
         PosterImage(
             imageUrl = imageUrl,
             contentDescription = item.name,
@@ -486,13 +486,13 @@ private fun ResumeCard(
             if (progressFraction != null) {
                 LinearProgressIndicator(
                     progress = { progressFraction },
-                    modifier = Modifier.fillMaxWidth().height(3.dp).align(Alignment.BottomCenter),
+                    modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.BottomCenter),
                     color = Primary,
                     trackColor = Color.Transparent,
                 )
             }
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(Spacing.xs))
         Text(
             text = item.displayTitle,
             style = MaterialTheme.typography.labelMedium,
@@ -528,7 +528,7 @@ private fun PosterCard(
     imageUrl: String,
     onClick: () -> Unit,
 ) {
-    Column(modifier = Modifier.width(110.dp)) {
+    Column(modifier = Modifier.width(PosterSize.standard)) {
         PosterImage(
             imageUrl = imageUrl,
             contentDescription = item?.name,
@@ -537,7 +537,7 @@ private fun PosterCard(
             onClick = onClick,
         )
         if (item != null) {
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(Spacing.xs))
             Text(
                 text = item.displayTitle,
                 style = MaterialTheme.typography.labelMedium,
@@ -745,7 +745,7 @@ private fun MediaCard(
 
     Column(
         modifier = Modifier
-            .clip(RoundedCornerShape(Radius.sm))
+            .clip(RoundedCornerShape(Radius.md))
             .clickable { onFocus(); onClick() }
     ) {
         PosterImage(
@@ -756,7 +756,7 @@ private fun MediaCard(
         ) {
             item.communityRating?.let { rating ->
                 Surface(
-                    modifier = Modifier.align(Alignment.TopEnd).padding(6.dp),
+                    modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.sm),
                     color = ScrimStrong,
                     shape = RoundedCornerShape(Radius.sm),
                 ) {
@@ -768,17 +768,18 @@ private fun MediaCard(
                     )
                 }
             }
-            // Watched indicator
+            // Watched indicator — tinted Success (not Primary) so it reads as a status marker
+            // rather than an interactive/selected element; Primary is reserved for those.
             if (item.userData?.played == true) {
                 Surface(
-                    modifier = Modifier.align(Alignment.TopStart).padding(6.dp),
+                    modifier = Modifier.align(Alignment.TopStart).padding(Spacing.sm),
                     color = ScrimStrong,
                     shape = RoundedCornerShape(Radius.pill),
                 ) {
                     Icon(
                         Icons.Default.CheckCircle,
                         contentDescription = "Watched",
-                        tint = Primary,
+                        tint = Success,
                         modifier = Modifier.padding(3.dp).size(IconSize.sm),
                     )
                 }
@@ -793,7 +794,7 @@ private fun MediaCard(
                     else -> Icons.Default.Downloading to Primary
                 }
                 Surface(
-                    modifier = Modifier.align(Alignment.BottomStart).padding(4.dp),
+                    modifier = Modifier.align(Alignment.BottomStart).padding(Spacing.sm),
                     color = ScrimStrong,
                     shape = RoundedCornerShape(Radius.pill),
                 ) {
@@ -817,14 +818,14 @@ private fun MediaCard(
                 if (isActive && downloadProgress != null && downloadProgress > 0f) {
                     LinearProgressIndicator(
                         progress = { downloadProgress / 100f },
-                        modifier = Modifier.fillMaxWidth().height(3.dp).align(Alignment.BottomCenter),
+                        modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.BottomCenter),
                         color = Primary,
                         trackColor = Color.Transparent,
                     )
                 }
             }
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(Spacing.sm))
         Text(text = item.name, style = MaterialTheme.typography.titleMedium,
             color = OnSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
         item.year?.let {
@@ -858,10 +859,10 @@ private fun SkeletonCard(modifier: Modifier = Modifier) {
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(2f / 3f)
-                .clip(RoundedCornerShape(Radius.sm))
+                .clip(RoundedCornerShape(Radius.md))
                 .background(SurfaceVariant.copy(alpha = alpha)),
         )
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(Spacing.sm))
         Box(
             Modifier
                 .fillMaxWidth(0.8f)

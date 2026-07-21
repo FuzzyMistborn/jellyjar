@@ -68,6 +68,14 @@ object Elevation {
     val poster = 4.dp
 }
 
+// Canonical poster card widths — pick the tier closest to a row's current card size rather
+// than inventing a new one-off value (e.g. Continue Watching cards read slightly larger than
+// standard poster rows).
+object PosterSize {
+    val standard = 110.dp
+    val large = 130.dp
+}
+
 // Full-screen background — diagonal gradient from dark indigo to near-black
 val BackgroundGradient = Brush.linearGradient(
     colors = listOf(

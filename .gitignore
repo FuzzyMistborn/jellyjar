@@ -20,3 +20,6 @@ __pycache__/
 
 # Claude Code internal
 .claude/
+
+# Other
+images/
