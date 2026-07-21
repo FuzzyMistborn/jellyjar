@@ -422,28 +422,35 @@ private fun OverviewBlock(item: JellyfinItem, isWide: Boolean, accentColor: Colo
     val overview = item.overview ?: return
     var overviewExpanded by remember(item.id) { mutableStateOf(false) }
     var overviewOverflows by remember(item.id) { mutableStateOf(false) }
-    Text(
-        text = overview,
-        style = MaterialTheme.typography.bodyLarge,
-        color = OnSurface.copy(alpha = 0.85f),
-        maxLines = if (isWide || overviewExpanded) Int.MAX_VALUE else 4,
-        overflow = TextOverflow.Ellipsis,
-        onTextLayout = { result -> overviewOverflows = result.hasVisualOverflow },
+    // The overview sits directly over the backdrop image (most visibly in the two-pane tablet
+    // layout, where it's right beside the poster near the top of the hero art) — a soft scrim
+    // card behind the text keeps it legible over busy/bright parts of the image without needing
+    // the whole backdrop darkened further.
+    Column(
         modifier = Modifier
             .widthIn(max = 600.dp)
-            .let { mod ->
-                if (isWide) mod else mod.clickable { overviewExpanded = !overviewExpanded }
-            },
-    )
-    if (!isWide && (overviewOverflows || overviewExpanded)) {
+            .background(ScrimSoft, RoundedCornerShape(Radius.sm))
+            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+    ) {
         Text(
-            text = if (overviewExpanded) "Read less" else "Read more",
-            style = MaterialTheme.typography.labelLarge,
-            color = accentColor,
-            modifier = Modifier
-                .clickable { overviewExpanded = !overviewExpanded }
-                .padding(top = 2.dp),
+            text = overview,
+            style = MaterialTheme.typography.bodyLarge,
+            color = OnSurface.copy(alpha = 0.85f),
+            maxLines = if (isWide || overviewExpanded) Int.MAX_VALUE else 4,
+            overflow = TextOverflow.Ellipsis,
+            onTextLayout = { result -> overviewOverflows = result.hasVisualOverflow },
+            modifier = if (isWide) Modifier else Modifier.clickable { overviewExpanded = !overviewExpanded },
         )
+        if (!isWide && (overviewOverflows || overviewExpanded)) {
+            Text(
+                text = if (overviewExpanded) "Read less" else "Read more",
+                style = MaterialTheme.typography.labelLarge,
+                color = accentColor,
+                modifier = Modifier
+                    .clickable { overviewExpanded = !overviewExpanded }
+                    .padding(top = 2.dp),
+            )
+        }
     }
 }
 
