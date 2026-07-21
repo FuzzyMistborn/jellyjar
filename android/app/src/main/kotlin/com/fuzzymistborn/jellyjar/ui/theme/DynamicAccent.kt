@@ -2,6 +2,8 @@ package com.fuzzymistborn.jellyjar.ui.theme
 
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -23,14 +25,21 @@ import kotlinx.coroutines.withContext
  * Falls back to [fallback] while loading, on failure, or when the swatch is too dark/desaturated
  * to read well against the app's dark UI.
  */
+private val accentColorCache = mutableMapOf<String, Color>()
+
 @Composable
 fun rememberDynamicAccentColor(imageUrl: String?, fallback: Color = Primary): Color {
-    var accent by remember(imageUrl) { mutableStateOf(fallback) }
+    val cached = imageUrl?.let { accentColorCache[it] }
+    var accent by remember(imageUrl) { mutableStateOf(cached ?: fallback) }
     val context = LocalContext.current
 
     androidx.compose.runtime.LaunchedEffect(imageUrl) {
         if (imageUrl.isNullOrBlank()) {
             accent = fallback
+            return@LaunchedEffect
+        }
+        accentColorCache[imageUrl]?.let {
+            accent = it
             return@LaunchedEffect
         }
         val extracted = withContext(Dispatchers.IO) {
@@ -44,10 +53,15 @@ fun rememberDynamicAccentColor(imageUrl: String?, fallback: Color = Primary): Co
                 extractAccentColor(bitmap)
             }.getOrNull()
         }
-        accent = extracted ?: fallback
+        val resolved = extracted ?: fallback
+        if (extracted != null) accentColorCache[imageUrl] = resolved
+        accent = resolved
     }
 
-    return accent
+    // Animate rather than snap so a same-screen color change (extraction finishing after the
+    // fallback blue is already visible) reads as a smooth shift instead of a jarring pop.
+    val animated by animateColorAsState(targetValue = accent, animationSpec = tween(400), label = "accentColor")
+    return animated
 }
 
 private fun extractAccentColor(bitmap: Bitmap): Color? {

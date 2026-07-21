@@ -260,8 +260,10 @@ private fun DetailStackedContent(
                         PosterImage(
                             imageUrl = state.download?.thumbnailUri ?: viewModel.posterUrl(item.id),
                             contentDescription = item.name,
+                            aspectRatio = if (item.type == "Episode") 16f / 9f else 2f / 3f,
                             modifier = detailPosterModifier(
-                                Modifier.width(posterWidth), item.id, sharedTransitionScope, animatedVisibilityScope,
+                                (if (item.type == "Episode") Modifier.width(posterWidth * 2) else Modifier.width(posterWidth)),
+                                item.id, sharedTransitionScope, animatedVisibilityScope,
                             ),
                         )
                         Spacer(Modifier.width(if (isWide) Spacing.lg else Spacing.lg))
@@ -333,8 +335,10 @@ private fun DetailTwoPaneContent(
                 PosterImage(
                     imageUrl = state.download?.thumbnailUri ?: viewModel.posterUrl(item.id),
                     contentDescription = item.name,
+                    aspectRatio = if (item.type == "Episode") 16f / 9f else 2f / 3f,
                     modifier = detailPosterModifier(
-                        Modifier.fillMaxWidth().widthIn(max = 120.dp), item.id, sharedTransitionScope, animatedVisibilityScope,
+                        Modifier.fillMaxWidth().widthIn(max = if (item.type == "Episode") 260.dp else 120.dp),
+                        item.id, sharedTransitionScope, animatedVisibilityScope,
                     ),
                 )
                 Spacer(Modifier.height(Spacing.xs))
