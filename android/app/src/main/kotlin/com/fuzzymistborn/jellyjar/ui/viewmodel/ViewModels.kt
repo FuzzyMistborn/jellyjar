@@ -111,6 +111,14 @@ class LibraryViewModel @Inject constructor(
         // single edge can miss the case where the app is already offline at cold start and this
         // collector's first reading races the "online" one above, or where downloads change while
         // already offline — recomputing on every relevant change avoids that class of bug entirely.
+        // Mirrors the shared cross-screen signal into local state so a live-call failure
+        // discovered on another screen (Detail, Player) flips this screen's offline view too,
+        // without waiting for this ViewModel's own next Jellyfin call to fail.
+        viewModelScope.launch {
+            networkMonitor.serverReachable.collect { reachable ->
+                _state.update { it.copy(jellyfinAvailable = reachable) }
+            }
+        }
         viewModelScope.launch {
             combine(
                 networkMonitor.isOnline,
@@ -213,13 +221,17 @@ class LibraryViewModel @Inject constructor(
         }
         jellyfinRepo.getLibraries()
             .onSuccess { libs ->
-                _state.update { s -> s.copy(libraries = libs, jellyfinAvailable = true) }
+                networkMonitor.reportServerReachable(true)
+                _state.update { s -> s.copy(libraries = libs) }
                 loadHomeRows()
             }
             .onFailure {
-                // jellyfinAvailable=false is picked up by the reactive offline-libraries collector
-                // in init{}, which rebuilds `libraries` from what's actually downloaded.
-                _state.update { s -> s.copy(isLoading = false, isRefreshing = false, jellyfinAvailable = false, resumeItems = emptyList(), recentlyAdded = emptyList()) }
+                // Reported through NetworkMonitor rather than set on local state directly: the
+                // serverReachable mirror collector in init{} updates jellyfinAvailable, which the
+                // reactive offline-libraries collector then picks up to rebuild `libraries` from
+                // what's actually downloaded.
+                networkMonitor.reportServerReachable(false)
+                _state.update { s -> s.copy(isLoading = false, isRefreshing = false, resumeItems = emptyList(), recentlyAdded = emptyList()) }
                 return@launch
             }
         val selectedLib = _state.value.libraries
@@ -250,7 +262,8 @@ class LibraryViewModel @Inject constructor(
                 }
             }
             .onFailure {
-                _state.update { s -> s.copy(isLoading = false, isRefreshing = false, jellyfinAvailable = false) }
+                networkMonitor.reportServerReachable(false)
+                _state.update { s -> s.copy(isLoading = false, isRefreshing = false) }
             }
         genresDeferred?.await()?.onSuccess { genres ->
             _state.update { s -> s.copy(genres = genres) }
@@ -545,12 +558,16 @@ class DetailViewModel @Inject constructor(
             } else {
                 jellyfinRepo.getItem(itemId)
                     .onSuccess { item ->
+                        networkMonitor.reportServerReachable(true)
                         val isFav = favoriteRepo.isFavorite(item.id)
                         _state.update { it.copy(item = item, isLoading = false, isFavorite = isFav, isPlayed = item.userData?.played == true) }
                         if (item.type == "Series") loadSeasons(itemId)
                     }
                     .onFailure {
-                        // Offline fallback: load from local cache
+                        // Reports through NetworkMonitor so the Library screen (and any other
+                        // screen) reflects "server unreachable" immediately, instead of only this
+                        // screen falling back to its offline cache.
+                        networkMonitor.reportServerReachable(false)
                         loadOfflineItem(itemId)
                     }
             }

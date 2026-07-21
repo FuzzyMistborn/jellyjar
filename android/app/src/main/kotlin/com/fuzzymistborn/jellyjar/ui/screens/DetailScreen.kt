@@ -314,16 +314,16 @@ private fun DetailTwoPaneContent(
                     imageUrl = state.download?.thumbnailUri ?: viewModel.posterUrl(item.id),
                     contentDescription = item.name,
                     modifier = detailPosterModifier(
-                        Modifier.fillMaxWidth().widthIn(max = 170.dp), item.id, sharedTransitionScope, animatedVisibilityScope,
+                        Modifier.fillMaxWidth().widthIn(max = 120.dp), item.id, sharedTransitionScope, animatedVisibilityScope,
                     ),
                 )
-                Spacer(Modifier.height(Spacing.sm))
+                Spacer(Modifier.height(Spacing.xs))
                 TitleAndMetaRow(item, accentColor, compact = true)
                 if (!item.mediaSources.isNullOrEmpty()) {
                     Spacer(Modifier.height(Spacing.xs))
                     TechSpecRow(item.mediaSources, accentColor)
                 }
-                Spacer(Modifier.height(Spacing.md))
+                Spacer(Modifier.height(Spacing.sm))
                 if (item.type != "Series") {
                     ActionButtonsSection(item, state, viewModel, accentColor, actions, coroutineScope, compact = true)
                 }

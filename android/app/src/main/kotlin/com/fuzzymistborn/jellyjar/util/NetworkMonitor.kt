@@ -74,6 +74,20 @@ class NetworkMonitor @Inject constructor(
     private val _reconnected = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val reconnected: Flow<Unit> = _reconnected
 
+    // Device-level connectivity (isOnline) says nothing about whether the Jellyfin server itself
+    // is actually reachable — a LAN-only server is unreachable the moment Wi-Fi drops even though
+    // the tablet may still show "online" over mobile data. Any ViewModel that makes a live
+    // Jellyfin call reports the real result here via reportServerReachable(), so a failure
+    // discovered on one screen (e.g. Detail, after tapping into a library item) is reflected
+    // immediately everywhere else (e.g. Library, still showing the stale "online" grid) instead of
+    // waiting for that other screen's own next call to fail independently.
+    private val _serverReachable = MutableStateFlow(true)
+    val serverReachable: StateFlow<Boolean> = _serverReachable.asStateFlow()
+
+    fun reportServerReachable(reachable: Boolean) {
+        _serverReachable.value = reachable
+    }
+
     init {
         // registerDefaultNetworkCallback (not a capability-filtered NetworkRequest) tracks
         // whatever the OS considers the active network, VPN-backed or not. A plain
