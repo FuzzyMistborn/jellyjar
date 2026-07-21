@@ -82,6 +82,44 @@ class JellyfinRepository @Inject constructor(
             }
         }
 
+    // QuickConnect: initiate() gets a Secret (kept client-side only, never shown) + a short
+    // human-readable Code (shown to the user to enter at jellyfin.org/quickconnect or the
+    // server's own UI). poll() is called on a timer against the same Secret until Authenticated
+    // flips true, then authenticateWithQuickConnect() exchanges the Secret for a real token —
+    // same AuthResult shape as password auth, so callers can reuse saveJellyfinAuth().
+    suspend fun initiateQuickConnect(url: String): Result<com.fuzzymistborn.jellyjar.api.QuickConnectState> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val service = buildJellyfinRetrofit(url).create(JellyfinApiService::class.java)
+                service.initiateQuickConnect(authHeader = JellyfinImageHelper.unauthHeader())
+            }
+        }
+
+    suspend fun pollQuickConnect(url: String, secret: String): Result<com.fuzzymistborn.jellyjar.api.QuickConnectState> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val service = buildJellyfinRetrofit(url).create(JellyfinApiService::class.java)
+                service.getQuickConnectState(authHeader = JellyfinImageHelper.unauthHeader(), secret = secret)
+            }
+        }
+
+    suspend fun authenticateWithQuickConnect(url: String, secret: String): Result<AuthResult> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val retrofit = buildJellyfinRetrofit(url)
+                val service = retrofit.create(JellyfinApiService::class.java)
+                val response = service.authenticateWithQuickConnect(
+                    authHeader = JellyfinImageHelper.unauthHeader(),
+                    body = com.fuzzymistborn.jellyjar.api.QuickConnectAuthRequest(Secret = secret),
+                )
+                AuthResult(
+                    userId = response.User.Id,
+                    token = response.AccessToken,
+                    username = response.User.Name,
+                )
+            }
+        }
+
     suspend fun getLibraries(): Result<List<JellyfinLibrary>> = withContext(Dispatchers.IO) {
         runCatching {
             val s = settings.currentSnapshot()

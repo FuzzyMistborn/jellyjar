@@ -816,6 +816,9 @@ data class AdminState(
     val isDiscovering: Boolean = false,
     val discoveredServers: List<com.fuzzymistborn.jellyjar.util.DiscoveredJellyfinServer> = emptyList(),
     val discoverError: String? = null,
+    val isQuickConnecting: Boolean = false,
+    val quickConnectCode: String? = null,
+    val quickConnectError: String? = null,
 )
 
 @HiltViewModel
@@ -927,6 +930,63 @@ class AdminViewModel @Inject constructor(
         }.onFailure { e ->
             _state.update { it.copy(isAuthenticating = false, isAuthenticated = false, authError = e.message) }
         }
+    }
+
+    private var quickConnectJob: Job? = null
+
+    // Starts a QuickConnect session and polls the server every 2s (Jellyfin's own web client
+    // uses the same interval) until the user approves the code in another session, or ~5 minutes
+    // pass and the secret expires server-side.
+    fun startQuickConnect() {
+        quickConnectJob?.cancel()
+        val url = ensureScheme(_state.value.jellyfinUrl)
+        if (url.isBlank()) {
+            _state.update { it.copy(quickConnectError = "Enter a server URL first") }
+            return
+        }
+        _state.update { it.copy(isQuickConnecting = true, quickConnectCode = null, quickConnectError = null) }
+        quickConnectJob = viewModelScope.launch {
+            val initResult = jellyfinRepo.initiateQuickConnect(url)
+            val session = initResult.getOrElse { e ->
+                _state.update { it.copy(isQuickConnecting = false, quickConnectError = e.message ?: "Quick Connect is not available on this server") }
+                return@launch
+            }
+            _state.update { it.copy(quickConnectCode = session.Code) }
+            val deadline = System.currentTimeMillis() + 5 * 60 * 1000
+            while (System.currentTimeMillis() < deadline) {
+                delay(2000)
+                val poll = jellyfinRepo.pollQuickConnect(url, session.Secret).getOrElse { e ->
+                    _state.update { it.copy(isQuickConnecting = false, quickConnectCode = null, quickConnectError = e.message) }
+                    return@launch
+                }
+                if (poll.Authenticated) {
+                    jellyfinRepo.authenticateWithQuickConnect(url, session.Secret)
+                        .onSuccess { result ->
+                            settings.saveJellyfinAuth(url, result.userId, result.token)
+                            jellyfinUrlDirty = false
+                            _state.update {
+                                it.copy(
+                                    isQuickConnecting = false,
+                                    quickConnectCode = null,
+                                    hasCredentials = true,
+                                    isAuthenticated = true,
+                                )
+                            }
+                        }
+                        .onFailure { e ->
+                            _state.update { it.copy(isQuickConnecting = false, quickConnectCode = null, quickConnectError = e.message) }
+                        }
+                    return@launch
+                }
+            }
+            _state.update { it.copy(isQuickConnecting = false, quickConnectCode = null, quickConnectError = "Quick Connect code expired") }
+        }
+    }
+
+    fun cancelQuickConnect() {
+        quickConnectJob?.cancel()
+        quickConnectJob = null
+        _state.update { it.copy(isQuickConnecting = false, quickConnectCode = null, quickConnectError = null) }
     }
 
     // Performs a real call to Jellyfin (not just "do we have a saved token") so the Admin

@@ -25,6 +25,16 @@ data class JellyfinUser(
     val Name: String,
 )
 
+data class QuickConnectState(
+    val Authenticated: Boolean = false,
+    val Secret: String = "",
+    val Code: String = "",
+)
+
+data class QuickConnectAuthRequest(
+    val Secret: String,
+)
+
 // ─── Playback session reporting ───────────────────────────────────────────────
 
 data class PlaybackStartRequest(
@@ -143,6 +153,23 @@ interface JellyfinApiService {
     suspend fun authenticate(
         @Header("Authorization") authHeader: String,
         @Body body: AuthRequest,
+    ): AuthResponse
+
+    @POST("QuickConnect/Initiate")
+    suspend fun initiateQuickConnect(
+        @Header("Authorization") authHeader: String,
+    ): QuickConnectState
+
+    @GET("QuickConnect/Connect")
+    suspend fun getQuickConnectState(
+        @Header("Authorization") authHeader: String,
+        @Query("Secret") secret: String,
+    ): QuickConnectState
+
+    @POST("Users/AuthenticateWithQuickConnect")
+    suspend fun authenticateWithQuickConnect(
+        @Header("Authorization") authHeader: String,
+        @Body body: QuickConnectAuthRequest,
     ): AuthResponse
 
     @GET("Users/{userId}/Views")

@@ -245,6 +245,68 @@ fun AdminScreen(
                     Text(if (state.isAuthenticated) "Re-authenticate" else "Connect")
                 }
             }
+            OutlinedButton(
+                onClick = { if (state.isQuickConnecting) viewModel.cancelQuickConnect() else viewModel.startQuickConnect() },
+                enabled = !state.isAuthenticating,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (state.isQuickConnecting) {
+                    CircularProgressIndicator(modifier = Modifier.size(IconSize.sm), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text("Cancel Quick Connect")
+                } else {
+                    Icon(Icons.Default.QrCode2, contentDescription = null, modifier = Modifier.size(IconSize.md))
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text("Login with Quick Connect")
+                }
+            }
+            AnimatedVisibility(visible = state.quickConnectCode != null) {
+                state.quickConnectCode?.let { code ->
+                    Surface(
+                        color = Primary.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(Radius.sm),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(Spacing.md),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                "Enter this code on your Jellyfin server or another signed-in device",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = OnSurfaceMuted,
+                            )
+                            Spacer(Modifier.height(Spacing.sm))
+                            Text(
+                                code,
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = Primary,
+                            )
+                        }
+                    }
+                }
+            }
+            AnimatedVisibility(visible = state.quickConnectError != null) {
+                state.quickConnectError?.let { err ->
+                    Surface(
+                        color = Error.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(Radius.sm),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(Spacing.md),
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Default.ErrorOutline, contentDescription = null,
+                                tint = Error, modifier = Modifier.size(IconSize.sm))
+                            Text(err, style = MaterialTheme.typography.bodySmall, color = Error)
+                        }
+                    }
+                }
+            }
             AnimatedVisibility(visible = state.authError != null) {
                 state.authError?.let { err ->
                     Surface(
