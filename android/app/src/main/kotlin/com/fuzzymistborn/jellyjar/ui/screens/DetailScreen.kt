@@ -231,13 +231,13 @@ private fun DetailStackedContent(
             ) {}
         }
 
-        item(key = "hero_spacer") { Spacer(Modifier.height(100.dp)) }
+        item(key = "hero_spacer") { Spacer(Modifier.height(72.dp)) }
 
         if (item != null) {
             item(key = "metadata") {
                 BoxWithConstraints(modifier = Modifier.padding(horizontal = 32.dp)) {
                     val isWide = maxWidth >= 600.dp
-                    val posterWidth = if (isWide) 220.dp else 130.dp
+                    val posterWidth = if (isWide) 150.dp else 130.dp
 
                     Row {
                         PosterImage(
@@ -247,20 +247,23 @@ private fun DetailStackedContent(
                                 Modifier.width(posterWidth), item.id, sharedTransitionScope, animatedVisibilityScope,
                             ),
                         )
-                        Spacer(Modifier.width(if (isWide) Spacing.xl else Spacing.lg))
+                        Spacer(Modifier.width(if (isWide) Spacing.lg else Spacing.lg))
 
                         Column(modifier = Modifier.weight(1f)) {
                             TitleAndMetaRow(item, accentColor)
-                            Spacer(Modifier.height(Spacing.lg))
-                            OverviewBlock(item, isWide = isWide, accentColor = accentColor)
                             if (!item.mediaSources.isNullOrEmpty()) {
-                                Spacer(Modifier.height(Spacing.md))
+                                Spacer(Modifier.height(Spacing.sm))
                                 TechSpecRow(item.mediaSources, accentColor)
                             }
-                            Spacer(Modifier.height(28.dp))
+                            // Actions sit right under the title/tech specs, ahead of the overview
+                            // paragraph — a long description no longer pushes Play/Favorite/Download
+                            // below the fold on shorter windows.
                             if (item.type != "Series") {
+                                Spacer(Modifier.height(Spacing.sm))
                                 ActionButtonsSection(item, state, viewModel, accentColor, actions, coroutineScope)
                             }
+                            Spacer(Modifier.height(Spacing.md))
+                            OverviewBlock(item, isWide = isWide, accentColor = accentColor)
                         }
                     }
                 }
