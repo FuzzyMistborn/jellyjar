@@ -304,7 +304,7 @@ private fun DetailTwoPaneContent(
                 .padding(horizontal = Spacing.sm, vertical = 4.dp),
         ) {}
 
-        Spacer(Modifier.height(40.dp))
+        Spacer(Modifier.height(Spacing.sm))
 
         Row(modifier = Modifier.fillMaxSize()) {
             Column(
@@ -471,10 +471,7 @@ private fun ActionButtonsSection(
         else -> null
     }
 
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    val playRow: @Composable RowScope.() -> Unit = {
         if (hasPosition && resumeAction != null) {
             PrimaryActionButton("Resume", Icons.Default.PlayArrow, resumeAction, accentColor = accentColor)
         }
@@ -493,15 +490,25 @@ private fun ActionButtonsSection(
         }
     }
 
-    Spacer(Modifier.height(Spacing.sm))
+    if (!compact) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            verticalAlignment = Alignment.CenterVertically,
+            content = playRow,
+        )
+        Spacer(Modifier.height(Spacing.sm))
+    }
 
-    // Separate row for the secondary/status actions — on narrow screens these previously
-    // overflowed off-screen when combined with the play row above, clipping the watched/download
-    // buttons and squeezing the favorite icon's touch target into its neighbor.
+    // On the two-pane tablet layout (compact=true) the play button(s) and the status icons share
+    // one row instead of stacking on two — the left pane is a fixed-width column with limited
+    // vertical room, and a second row here was routinely pushed out of view, requiring a scroll
+    // just to reach Favorite/Played/Download. Non-compact layouts keep the original two-row split,
+    // where there's room to spare and the extra weight of a full-width row reads better.
     Row(
-        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+        horizontalArrangement = Arrangement.spacedBy(if (compact) Spacing.xs else Spacing.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (compact) playRow()
         IconButton(onClick = { viewModel.toggleFavorite() }) {
             Icon(
                 if (state.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
