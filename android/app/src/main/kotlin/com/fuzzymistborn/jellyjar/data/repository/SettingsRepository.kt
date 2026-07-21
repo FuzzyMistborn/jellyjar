@@ -54,7 +54,7 @@ class SettingsRepository @Inject constructor(
             downloadPath = prefs[Keys.DOWNLOAD_PATH] ?: "",
             parentalPinHash = prefs[Keys.PARENTAL_PIN_HASH] ?: "",
             isPinEnabled = prefs[Keys.PIN_ENABLED] == "true",
-            episodeViewGrid = prefs[Keys.EPISODE_VIEW_GRID] ?: true,
+            episodeViewGrid = prefs[Keys.EPISODE_VIEW_GRID] ?: false,
             wifiOnly = prefs[Keys.WIFI_ONLY] ?: false,
             streamOverCellular = prefs[Keys.STREAM_OVER_CELLULAR] ?: false,
             showContinueWatching = prefs[Keys.SHOW_CONTINUE_WATCHING] ?: true,

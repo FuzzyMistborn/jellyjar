@@ -168,7 +168,7 @@ data class AppSettings(
     val downloadPath: String = "",
     val parentalPinHash: String = "",
     val isPinEnabled: Boolean = false,
-    val episodeViewGrid: Boolean = true,
+    val episodeViewGrid: Boolean = false,
     val wifiOnly: Boolean = false,
     val streamOverCellular: Boolean = false,
     val showContinueWatching: Boolean = true,
