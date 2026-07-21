@@ -67,6 +67,19 @@ fun DetailScreen(
     var showDeleteConfirm by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
+    // Tall/narrow (phone-style portrait) windows size the backdrop off its own 16:9 aspect ratio
+    // instead of a fraction of screen height — on a very tall display, 65% of screen height is far
+    // taller than a 16:9 image actually renders at that width, so the image ends abruptly partway
+    // down and leaves a dead gap of plain gradient before the title/poster content below. Wide
+    // (two-pane tablet) windows keep the original height-fraction sizing, which was tuned for
+    // normal tablet aspect ratios and doesn't have this problem.
+    val isWideScreen = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 840
+    val backdropModifier = if (isWideScreen) {
+        Modifier.fillMaxWidth().fillMaxHeight(0.65f)
+    } else {
+        Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(BackgroundGradient)) {
 
         // Backdrop — episodes fall back to series backdrop, then episode primary
@@ -80,17 +93,21 @@ fun DetailScreen(
                 contentDescription = null,
                 contentScale = ContentScale.FillWidth,
                 alignment = Alignment.TopCenter,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.65f)
-                    .clip(RectangleShape),
+                modifier = backdropModifier.clip(RectangleShape),
             )
         }
 
         // Gradient fade to background — same scrimStop/backdropHeight ratio as SeasonScreen's
         // hero (0.25/0.45), scaled to this screen's taller 0.65f backdrop so both screens shade
-        // by the same proportion instead of Detail reading lighter/darker than Season.
-        Box(modifier = Modifier.fillMaxSize().background(heroBackdropScrim(scrimStop = 0.36f, solidStop = 0.65f)))
+        // by the same proportion instead of Detail reading lighter/darker than Season. On narrow
+        // windows the scrim is confined to the same aspect-ratio box as the backdrop above it
+        // (rather than the full screen) so it doesn't keep darkening well past where the image
+        // itself has already ended.
+        if (isWideScreen) {
+            Box(modifier = Modifier.fillMaxSize().background(heroBackdropScrim(scrimStop = 0.36f, solidStop = 0.65f)))
+        } else {
+            Box(modifier = backdropModifier.background(heroBackdropScrim(scrimStop = 0.36f, solidStop = 0.65f)))
+        }
 
         val item = state.item
 
@@ -473,7 +490,7 @@ private fun ActionButtonsSection(
 
     val playRow: @Composable RowScope.() -> Unit = {
         if (hasPosition && resumeAction != null) {
-            PrimaryActionButton("Resume", Icons.Default.PlayArrow, resumeAction, accentColor = accentColor)
+            PrimaryActionButton("Resume", Icons.Default.PlayArrow, resumeAction, accentColor = accentColor, compact = compact)
         }
         if (playFromStartAction != null) {
             val isSecondary = hasPosition && resumeAction != null
@@ -485,7 +502,7 @@ private fun ActionButtonsSection(
                     compact = compact,
                 )
             } else {
-                PrimaryActionButton("Play", Icons.Default.PlayArrow, playFromStartAction, accentColor = accentColor)
+                PrimaryActionButton("Play", Icons.Default.PlayArrow, playFromStartAction, accentColor = accentColor, compact = compact)
             }
         }
     }
@@ -523,11 +540,15 @@ private fun ActionButtonsSection(
                 tint = if (state.isPlayed) accentColor else OnSurfaceMuted,
             )
         }
+        // Compact (two-pane sidebar) drops the label on the status button — Play/Resume still
+        // carries a shortened label, but a column this narrow can't also fit "Download"/"Remove"
+        // text without truncating to an ellipsis; the icon alone (plus contentDescription for
+        // accessibility) reads fine next to the Favorite/Played icons it already sits beside.
         when {
             dl == null && state.isOnline -> SecondaryActionButton(
                 icon = Icons.Default.Download,
                 onClick = actions.onShowPresetDialog,
-                text = "Download",
+                text = if (compact) null else "Download",
                 compact = compact,
             )
             dl != null && dl.status in listOf(
@@ -540,7 +561,7 @@ private fun ActionButtonsSection(
                 SecondaryActionButton(
                     icon = Icons.Default.Delete,
                     onClick = actions.onShowDeleteConfirm,
-                    text = "Remove",
+                    text = if (compact) null else "Remove",
                     contentColor = Error,
                     compact = compact,
                 )
@@ -549,7 +570,7 @@ private fun ActionButtonsSection(
                     SecondaryActionButton(
                         icon = Icons.Default.Refresh,
                         onClick = { viewModel.retryDownload(item.id) },
-                        text = "Retry",
+                        text = if (compact) null else "Retry",
                         compact = compact,
                     )
                 }

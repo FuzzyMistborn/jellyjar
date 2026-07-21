@@ -29,16 +29,22 @@ fun PrimaryActionButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     accentColor: Color = Primary,
+    compact: Boolean = false,
 ) {
     Button(
         onClick = onClick,
         colors = ButtonDefaults.buttonColors(containerColor = accentColor),
-        contentPadding = PaddingValues(horizontal = Spacing.xl, vertical = 14.dp),
+        contentPadding = PaddingValues(horizontal = if (compact) Spacing.md else Spacing.xl, vertical = 14.dp),
         modifier = modifier,
     ) {
         Icon(icon, contentDescription = null)
         Spacer(Modifier.width(Spacing.sm))
-        Text(text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            text,
+            style = if (compact) MaterialTheme.typography.labelMedium else LocalTextStyle.current,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
