@@ -1700,10 +1700,14 @@ class PlayerViewModel @Inject constructor(
     // Fetches and decodes one trickplay tile (a grid of thumbnails); cached per URL.
     suspend fun loadTrickplayTile(spec: TrickplaySpec, tileIndex: Int): android.graphics.Bitmap? =
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            val url = JellyfinImageHelper.trickplayTileUrl(spec.baseUrl, spec.itemId, spec.widthKey, tileIndex, spec.token)
+            val url = JellyfinImageHelper.trickplayTileUrl(spec.baseUrl, spec.itemId, spec.widthKey, tileIndex)
             tileCache.get(url)?.let { return@withContext it }
             runCatching {
-                val response = okHttpClient.newCall(okhttp3.Request.Builder().url(url).build()).execute()
+                val request = okhttp3.Request.Builder()
+                    .url(url)
+                    .header("Authorization", JellyfinImageHelper.authHeader(spec.token))
+                    .build()
+                val response = okHttpClient.newCall(request).execute()
                 response.use {
                     if (!it.isSuccessful) return@runCatching null
                     android.graphics.BitmapFactory.decodeStream(it.body.byteStream())

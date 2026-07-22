@@ -299,6 +299,9 @@ object JellyfinImageHelper {
         return "$baseUrl/Videos/$itemId/stream$ext?static=true$mediaSourceParam&api_key=$token"
     }
 
-    fun trickplayTileUrl(baseUrl: String, itemId: String, width: Int, tileIndex: Int, token: String): String =
-        "$baseUrl/Videos/$itemId/Trickplay/$width/$tileIndex.jpg?api_key=$token"
+    // Token is sent via the Authorization header (see loadTrickplayTile), not as a URL query
+    // param — query params get written into request-line logs by HttpLoggingInterceptor and
+    // any intermediary proxy/CDN access log.
+    fun trickplayTileUrl(baseUrl: String, itemId: String, width: Int, tileIndex: Int): String =
+        "$baseUrl/Videos/$itemId/Trickplay/$width/$tileIndex.jpg"
 }

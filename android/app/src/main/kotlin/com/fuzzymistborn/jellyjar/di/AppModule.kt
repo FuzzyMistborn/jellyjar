@@ -2,6 +2,7 @@ package com.fuzzymistborn.jellyjar.di
 
 import android.content.Context
 import androidx.room.Room
+import com.fuzzymistborn.jellyjar.BuildConfig
 import com.fuzzymistborn.jellyjar.api.JellyfinApiService
 import com.fuzzymistborn.jellyjar.api.ShimApiService
 import com.fuzzymistborn.jellyjar.data.local.JellyJarDatabase
@@ -41,7 +42,14 @@ object AppModule {
             .readTimeout(120, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BASIC
+                // BASIC logs full request lines, including the "api_key"/token query params
+                // JellyfinImageHelper appends to stream/trickplay URLs — never log those in a
+                // release build, only during local debugging.
+                level = if (BuildConfig.DEBUG) {
+                    HttpLoggingInterceptor.Level.BASIC
+                } else {
+                    HttpLoggingInterceptor.Level.NONE
+                }
             })
             .build()
 
