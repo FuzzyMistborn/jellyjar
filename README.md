@@ -3,6 +3,95 @@
 A clean, minimal Android media player that bridges Jellyfin with offline playback via
 transcoded local copies.
 
+## Screenshots
+
+<table>
+<tr>
+<td width="50%">
+
+**Home**
+<img src="screenshots/jellyjar/homescreen.jpg" width="100%">
+
+</td>
+<td width="50%">
+
+**Movies**
+<img src="screenshots/jellyjar/movies.jpg" width="100%">
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Movie Detail**
+<img src="screenshots/jellyjar/movie-detail.jpg" width="100%">
+
+</td>
+<td width="50%">
+
+**TV Shows**
+<img src="screenshots/jellyjar/tvshows.jpg" width="100%">
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Series Detail**
+<img src="screenshots/jellyjar/tvshow-seriesdetail.jpg" width="100%">
+
+</td>
+<td width="50%">
+
+**Season Detail**
+<img src="screenshots/jellyjar/tvshow-seasondetail.jpg" width="100%">
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Episode Detail**
+<img src="screenshots/jellyjar/tvshow-episodedetail.jpg" width="100%">
+
+</td>
+<td width="50%">
+
+**Storage Management**
+<img src="screenshots/jellyjar/storage.jpg" width="100%">
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Settings — Jellyfin Connection**
+<img src="screenshots/jellyjar/settings.jpg" width="100%">
+
+</td>
+<td width="50%">
+
+**Settings — Downloads & Home Screen**
+<img src="screenshots/jellyjar/settings2.jpg" width="100%">
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Settings — Playback & PIN**
+<img src="screenshots/jellyjar/settings3.jpg" width="100%">
+
+</td>
+<td width="50%">
+
+**Press Web Dashboard**
+<img src="screenshots/press.jpg" width="100%">
+
+</td>
+</tr>
+</table>
+
 ## Architecture
 
 ```
