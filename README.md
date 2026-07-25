@@ -106,11 +106,14 @@ Jellyfin Server  ──►  JellyJar Android App  ──►  local ExoPlayer pla
 
 ### 1. Configure Press
 
-Edit `docker-compose.yml` — point the volume at your Jellyfin media root:
+Edit `docker-compose.yml` — point the volumes at your Jellyfin media root(s), mirroring the
+paths Jellyfin itself uses so the paths returned by its API resolve correctly inside the
+container:
 
 ```yaml
 volumes:
-  - /your/actual/media/path:/media:ro
+  - /your/actual/movies/path:/mnt/movies:ro
+  - /your/actual/tv/path:/mnt/tv:ro
 ```
 
 Start Press:
@@ -133,6 +136,18 @@ environment:
   MAX_WORKERS: 1   # concurrent transcode jobs
 ```
 
+**Hardware encoding**: the container exposes `/dev/dri` for Intel/AMD VAAPI or QSV encoding
+(`LIBVA_DRIVER_NAME: iHD` is set for Intel gen8+ iGPUs). For NVIDIA, uncomment the `deploy.
+resources.reservations.devices` block and install the NVIDIA Container Toolkit. Press probes
+for a working hardware encoder at startup and falls back to `libx264` if none is found; set
+`ENCODER` explicitly to skip the probe. `/health` reports which encoder is actually in use.
+
+**Job persistence**: job state is written to `$CONFIG_ROOT/jobs.json` on every status change, so
+history survives container restarts. Any job still `queued`/`running` at startup is
+automatically re-queued and restarted; if its preset or source file no longer exists, it's
+marked `failed` instead. Set `CLEANUP_AFTER_DAYS` (default `0`, disabled) to auto-delete
+completed jobs and their output files after N days.
+
 ### Web UI
 
 Press serves a small built-in dashboard at `http://<press-host>:8090/` — no extra setup needed.
@@ -145,8 +160,8 @@ It shows:
 - **Presets** — view, edit, add, or delete transcode presets (scale, video/audio bitrate, CRF) at runtime
 
 Preset edits persist across container restarts — they're written to `presets.json` on the
-`jellyjar-config` volume (mounted at `/config`, override with `CONFIG_ROOT`). Job history is
-still in-memory only and resets when the Press container restarts.
+`jellyjar-config` volume (mounted at `/config`, override with `CONFIG_ROOT`). Job history
+persists the same way (`jobs.json`, see above) and survives restarts too.
 
 ### 2. Build the Android APK
 
@@ -179,21 +194,27 @@ Or copy the APK to the tablet and open it in a file manager.
 
 ## Usage
 
-- **Browse**: Tap any poster to open the detail screen
-- **Download**: (Admin unlocked) tap **Download**, choose 1080p or 720p
-- **Play**: Once downloaded, tap **Play** — plays locally via ExoPlayer
+- **Browse**: Tap any poster to open the detail screen; genre chips filter server-side within a library
+- **Download**: Tap **Download** on a movie, an individual episode, or a whole season at once; pick a preset (Auto/1080p/720p). Downloads queue client-side and promote to Press as concurrency allows (1–2, configurable in Admin)
+- **Play**: Once downloaded, tap **Play** — plays locally via ExoPlayer, with skip-intro/credits and scrub-preview thumbnails where available
 - **Offline**: When not connected to your network, only downloaded files are shown
+- **Manage downloads**: The Downloads screen tracks active/completed/failed items, supports reorder/pause/resume/prioritize/retry, and links to a Storage screen for usage breakdown and bulk delete
+- **Admin**: Gear icon → optional PIN gate → Jellyfin/Press connection settings, download path, concurrency, Wi-Fi-only, playback toggles
 
 ## Press API
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/transcode` | Start a transcode job |
+| POST | `/transcode/batch` | Start multiple transcode jobs in one call (e.g. a whole season); bad items are recorded as failed jobs instead of aborting the batch |
 | GET | `/jobs` | List all jobs (queued/running/complete/failed) |
 | GET | `/jobs/{id}` | Poll job status, progress, fps, speed, ETA |
+| GET | `/jobs/{id}/stream` | Server-Sent Events stream of job status, pushed on change instead of polled |
 | GET | `/download/{id}` | Download completed file |
-| DELETE | `/jobs/{id}` | Cancel job + delete output |
-| GET | `/health` | Health check |
+| DELETE | `/jobs/{id}` | Cancel job (kills the ffmpeg process if running) + delete output |
+| DELETE | `/jobs` | Bulk-delete jobs, optionally filtered by `?status=` |
+| GET | `/health` | Health check — status, version, media/output roots, active encoder |
+| GET | `/api/disk` | Disk usage for the output volume, plus JellyJar's own output size |
 | GET | `/presets` | List available preset names (used by the Android app) |
 | GET | `/api/presets` | Full preset configs (scale, bitrate, CRF) |
 | PUT | `/api/presets/{name}` | Add or update a preset |
@@ -218,19 +239,20 @@ jellyjar/
     ├── gradle/libs.versions.toml
     └── app/src/main/
         ├── AndroidManifest.xml
+        ├── res/xml/network_security_config.xml   # cleartext HTTP allowlist for the LAN Jellyfin/Press hosts
         └── kotlin/com/fuzzymistborn/jellyjar/
             ├── JellyJarApp.kt
-            ├── MainActivity.kt      # Navigation host
-            ├── api/                 # Retrofit service interfaces
+            ├── MainActivity.kt          # Navigation host
+            ├── api/                     # Retrofit service interfaces (Jellyfin, Press)
             ├── data/
-            │   ├── local/           # Room database
-            │   └── repository/      # Business logic
-            ├── di/                  # Hilt modules
-            ├── model/               # Data classes
+            │   ├── local/               # Room database (downloads, cached items)
+            │   └── repository/         # Business logic, download queue manager, settings
+            ├── di/                      # Hilt modules
+            ├── model/                   # Data classes
             ├── ui/
-            │   ├── screens/         # Compose screens
-            │   ├── theme/           # Colors, typography
-            │   └── viewmodel/       # ViewModels
-            ├── util/                # NetworkMonitor
-            └── worker/              # WorkManager download worker
+            │   ├── screens/             # Compose screens (Library, Detail, Season, Downloads, Storage, Admin, Player)
+            │   ├── theme/               # Colors, typography, dynamic per-title accent
+            │   └── viewmodel/           # ViewModels
+            ├── util/                    # NetworkMonitor, Jellyfin server discovery
+            └── worker/                  # WorkManager download + metadata-refresh workers
 ```
