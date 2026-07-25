@@ -510,6 +510,12 @@ fun AdminScreen(
                 onCheckedChange = { viewModel.setAutoPlayNextEpisode(it) },
             )
             SettingsToggleRow(
+                title = "Playback Gestures",
+                subtitle = "Double-tap to seek 10s, swipe for brightness and volume",
+                checked = state.playbackGesturesEnabled,
+                onCheckedChange = { viewModel.setPlaybackGesturesEnabled(it) },
+            )
+            SettingsToggleRow(
                 title = "Skip Intro / Credits",
                 subtitle = "Show a skip button during intros and credits",
                 checked = state.introSkipEnabled,

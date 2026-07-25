@@ -294,21 +294,69 @@ async def get_duration_us(source: str) -> Optional[float]:
         return None
 
 
-def build_ffmpeg_command(source: str, output: str, preset: dict, encoder: str | None = None) -> list[str]:
+# mov_text is the only subtitle codec an MP4 container can carry, and it is text-only. Image
+# subtitles (PGS/VobSub, i.e. most Blu-ray and DVD rips) cannot be converted to it — asking
+# ffmpeg to try fails the whole encode, so those streams are deliberately left out.
+TEXT_SUBTITLE_CODECS = {"subrip", "srt", "ass", "ssa", "mov_text", "text", "webvtt", "subviewer"}
+
+
+async def probe_text_subtitle_count(source: str) -> int:
+    """Number of leading text-based subtitle streams that can be muxed into MP4.
+
+    Returns a count rather than a list of indices because the `-map 0:s:N` selector is indexed
+    within the subtitle streams only, in file order. Any image-based subtitle stream truncates
+    the run: mapping past it would renumber the remaining picks onto the wrong streams.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "-select_streams", "s", "-show_entries", "stream=codec_name", source,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await proc.communicate()
+        streams = json.loads(stdout).get("streams", [])
+        count = 0
+        for stream in streams:
+            if stream.get("codec_name") not in TEXT_SUBTITLE_CODECS:
+                break
+            count += 1
+        return count
+    except Exception:
+        return 0
+
+
+def build_ffmpeg_command(
+    source: str,
+    output: str,
+    preset: dict,
+    encoder: str | None = None,
+    subtitle_count: int = 0,
+) -> list[str]:
     enc = encoder if encoder is not None else _active_encoder
     scale = preset["scale"]
     sw_vf = (
         f"scale={scale}:force_original_aspect_ratio=decrease,"
         f"pad={scale}:(ow-iw)/2:(oh-ih)/2"
     )
-    common_audio = ["-c:a", "aac", "-b:a", preset["audio_bitrate"],
-                    "-movflags", "+faststart", "-progress", "pipe:1"]
+    # Without explicit maps, ffmpeg's default stream selection keeps exactly one video and one
+    # audio stream and drops every subtitle — so downloads lost alternate audio tracks and all
+    # subtitles, and the player's track picker had nothing to offer offline.
+    stream_map = ["-map", "0:v:0", "-map", "0:a?"]
+    for index in range(subtitle_count):
+        stream_map += ["-map", f"0:s:{index}"]
+
+    common_audio = ["-c:a", "aac", "-b:a", preset["audio_bitrate"]]
+    if subtitle_count:
+        common_audio += ["-c:s", "mov_text"]
+    common_audio += ["-movflags", "+faststart", "-progress", "pipe:1"]
 
     if enc == "h264_vaapi":
         return [
             "ffmpeg", "-y",
             "-vaapi_device", "/dev/dri/renderD128",
             "-i", source,
+            *stream_map,
             "-vf", f"{sw_vf},format=nv12,hwupload",
             "-c:v", "h264_vaapi",
             "-b:v", preset["video_bitrate"],
@@ -318,6 +366,7 @@ def build_ffmpeg_command(source: str, output: str, preset: dict, encoder: str | 
         return [
             "ffmpeg", "-y",
             "-i", source,
+            *stream_map,
             "-vf", sw_vf,
             "-c:v", "h264_qsv",
             "-global_quality", preset["crf"],
@@ -328,6 +377,7 @@ def build_ffmpeg_command(source: str, output: str, preset: dict, encoder: str | 
         return [
             "ffmpeg", "-y",
             "-i", source,
+            *stream_map,
             "-vf", sw_vf,
             "-c:v", "h264_nvenc",
             "-cq", preset["crf"],
@@ -339,6 +389,7 @@ def build_ffmpeg_command(source: str, output: str, preset: dict, encoder: str | 
     return [
         "ffmpeg", "-y",
         "-i", source,
+        *stream_map,
         "-vf", sw_vf,
         "-c:v", "libx264",
         "-crf", preset["crf"],
@@ -418,7 +469,8 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
         _save_jobs()
         _publish(job_id)
 
-        cmd = build_ffmpeg_command(source, output, preset)
+        subtitle_count = await probe_text_subtitle_count(source)
+        cmd = build_ffmpeg_command(source, output, preset, subtitle_count=subtitle_count)
 
         try:
             process = await asyncio.create_subprocess_exec(
@@ -447,7 +499,9 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
                 if _active_encoder != "libx264":
                     # Hardware encoder failed at runtime — fall back to libx264
                     print(f"[Press] {_active_encoder} failed (rc={process.returncode}), retrying with libx264", flush=True)
-                    sw_cmd = build_ffmpeg_command(source, output, preset, encoder="libx264")
+                    sw_cmd = build_ffmpeg_command(
+                        source, output, preset, encoder="libx264", subtitle_count=subtitle_count
+                    )
                     sw_process = await asyncio.create_subprocess_exec(
                         *sw_cmd,
                         stdout=asyncio.subprocess.PIPE,

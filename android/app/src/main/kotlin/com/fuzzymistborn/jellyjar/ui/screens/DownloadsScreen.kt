@@ -114,6 +114,8 @@ fun DownloadsScreen(
                         items(state.active, key = { it.jellyfinId }) { entity ->
                             ActiveDownloadCard(
                                 entity = entity,
+                                thumbnailUrl = entity.thumbnailUri
+                                    ?: viewModel.thumbnailUrl(entity.jellyfinId),
                                 etaMinutes = state.etaByJellyfinId[entity.jellyfinId],
                                 onCancel = { viewModel.cancelDownload(entity.jellyfinId) },
                             )
@@ -161,6 +163,8 @@ fun DownloadsScreen(
                         itemsIndexed(state.queued, key = { _, d -> d.jellyfinId }) { index, entity ->
                             QueuedDownloadCard(
                                 entity = entity,
+                                thumbnailUrl = entity.thumbnailUri
+                                    ?: viewModel.thumbnailUrl(entity.jellyfinId),
                                 position = index + 1,
                                 isFirst = index == 0,
                                 isLast = index == state.queued.lastIndex,
@@ -216,6 +220,8 @@ fun DownloadsScreen(
                         items(state.failed, key = { it.jellyfinId }) { entity ->
                             FailedDownloadCard(
                                 entity = entity,
+                                thumbnailUrl = entity.thumbnailUri
+                                    ?: viewModel.thumbnailUrl(entity.jellyfinId),
                                 onRemove = { viewModel.removeDownload(entity.jellyfinId) },
                                 onRetry = { viewModel.retryDownload(entity.jellyfinId) },
                             )
@@ -264,14 +270,20 @@ private fun SectionHeader(title: String, action: @Composable (() -> Unit)? = nul
 }
 
 @Composable
-private fun ActiveDownloadCard(entity: DownloadEntity, etaMinutes: Int?, onCancel: () -> Unit) {
+private fun ActiveDownloadCard(
+    entity: DownloadEntity,
+    thumbnailUrl: String,
+    etaMinutes: Int?,
+    onCancel: () -> Unit,
+) {
     Surface(color = SurfaceVariant, shape = RoundedCornerShape(Radius.md)) {
         Column(modifier = Modifier.padding(Spacing.lg)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                 verticalAlignment = Alignment.Top,
             ) {
+                DownloadRowPoster(thumbnailUrl)
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         entity.title,
@@ -332,6 +344,7 @@ private fun ActiveDownloadCard(entity: DownloadEntity, etaMinutes: Int?, onCance
 @Composable
 private fun QueuedDownloadCard(
     entity: DownloadEntity,
+    thumbnailUrl: String,
     position: Int,
     isFirst: Boolean,
     isLast: Boolean,
@@ -355,6 +368,7 @@ private fun QueuedDownloadCard(
                     color = OnSurfaceMuted,
                     modifier = Modifier.widthIn(min = Spacing.xl),
                 )
+                DownloadRowPoster(thumbnailUrl)
                 Text(
                     entity.title,
                     style = MaterialTheme.typography.titleMedium,
@@ -399,6 +413,18 @@ private fun QueuedDownloadCard(
             }
         }
     }
+}
+
+// Compact poster for the in-progress/queued/failed rows. Smaller than the completed row's
+// 80x120 — those rows are informational and shouldn't out-weigh finished, playable downloads.
+@Composable
+private fun DownloadRowPoster(thumbnailUrl: String) {
+    PosterImage(
+        imageUrl = thumbnailUrl,
+        contentDescription = null,
+        modifier = Modifier.size(width = 48.dp, height = 72.dp),
+        cornerRadius = Radius.sm,
+    )
 }
 
 @Composable
@@ -484,15 +510,21 @@ private fun CompletedDownloadCard(
 }
 
 @Composable
-private fun FailedDownloadCard(entity: DownloadEntity, onRemove: () -> Unit, onRetry: () -> Unit) {
+private fun FailedDownloadCard(
+    entity: DownloadEntity,
+    thumbnailUrl: String,
+    onRemove: () -> Unit,
+    onRetry: () -> Unit,
+) {
     Surface(color = SurfaceVariant, shape = RoundedCornerShape(Radius.md)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(Spacing.lg),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
+            DownloadRowPoster(thumbnailUrl)
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     entity.title,

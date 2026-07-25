@@ -1,11 +1,14 @@
 package com.fuzzymistborn.jellyjar.ui.screens
 
 import android.app.Activity
+import android.content.Context
 import android.view.ViewGroup
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
@@ -15,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -51,6 +55,12 @@ import com.fuzzymistborn.jellyjar.ui.viewmodel.PlayerViewModel
 import com.fuzzymistborn.jellyjar.ui.viewmodel.TrickplaySpec
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+// Seek step for a double-tap on the left/right half of the video.
+private const val SEEK_STEP_MS = 10_000L
+
+// Grace period before auto-play rolls into the next episode, long enough to cancel.
+private const val AUTO_PLAY_COUNTDOWN_SECONDS = 10
 
 @Composable
 fun PlayerScreen(
@@ -130,22 +140,34 @@ fun PlayerScreen(
         }
     }
 
-    // Auto-play: when the current episode finishes, look up what comes next and hand off to it.
+    // Auto-play: when the current episode finishes, look up what comes next and offer it behind a
+    // short countdown rather than cutting straight to it — an unattended tablet used to roll into
+    // the next episode with no way to stop it.
     val coroutineScope = rememberCoroutineScope()
     var autoPlayTriggered by remember { mutableStateOf(false) }
+    var pendingNext by remember { mutableStateOf<NextEpisodeTarget?>(null) }
+    var autoPlaySecondsLeft by remember { mutableIntStateOf(AUTO_PLAY_COUNTDOWN_SECONDS) }
     DisposableEffect(player, jellyfinId) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_ENDED && jellyfinId != null && !autoPlayTriggered) {
                     autoPlayTriggered = true
                     coroutineScope.launch {
-                        viewModel.resolveNextEpisode(jellyfinId)?.let { onPlayNext(it) }
+                        pendingNext = viewModel.resolveNextEpisode(jellyfinId)
                     }
                 }
             }
         }
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
+    }
+    LaunchedEffect(pendingNext) {
+        val target = pendingNext ?: return@LaunchedEffect
+        for (remaining in AUTO_PLAY_COUNTDOWN_SECONDS downTo 1) {
+            autoPlaySecondsLeft = remaining
+            delay(1_000)
+        }
+        onPlayNext(target)
     }
 
     BackHandler {
@@ -155,6 +177,20 @@ fun PlayerScreen(
 
     var controlsVisible by remember { mutableStateOf(false) }
     var showTrackSheet by remember { mutableStateOf(false) }
+
+    // ── Touch gestures ────────────────────────────────────────────────────────
+    // Off by default in state (not in the setting) so the very first frames can't respond to a
+    // gesture before the stored preference has been read back.
+    var gesturesEnabled by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { gesturesEnabled = viewModel.gesturesEnabled() }
+    var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
+    var gestureFeedback by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(gestureFeedback) {
+        if (gestureFeedback != null) {
+            delay(700)
+            gestureFeedback = null
+        }
+    }
 
     // ── Skip intro/credits ────────────────────────────────────────────────────
     var skipSegments by remember { mutableStateOf<List<SkipSegment>>(emptyList()) }
@@ -246,6 +282,7 @@ fun PlayerScreen(
                 (android.view.LayoutInflater.from(context)
                     .inflate(R.layout.player_view, null) as PlayerView).apply {
                     this.player = player
+                    playerViewRef = this
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -278,6 +315,114 @@ fun PlayerScreen(
             },
             modifier = Modifier.fillMaxSize(),
         )
+
+        // Gesture surface. Deliberately only present while the controls are hidden: it sits above
+        // the PlayerView and would otherwise swallow taps meant for the seek bar and buttons.
+        // With controls showing, taps fall through to PlayerView, which hides them as before.
+        if (gesturesEnabled && !controlsVisible) {
+            val audioManager = remember {
+                context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            }
+            var dragIsBrightness by remember { mutableStateOf(false) }
+            var dragValue by remember { mutableFloatStateOf(0f) }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = { playerViewRef?.showController() },
+                            onDoubleTap = { offset ->
+                                val forward = offset.x > size.width / 2f
+                                val target = player.currentPosition +
+                                    if (forward) SEEK_STEP_MS else -SEEK_STEP_MS
+                                val duration = player.duration
+                                player.seekTo(
+                                    if (duration > 0) target.coerceIn(0L, duration)
+                                    else target.coerceAtLeast(0L)
+                                )
+                                gestureFeedback = if (forward) "+10s" else "−10s"
+                            },
+                        )
+                    }
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures(
+                            onDragStart = { offset ->
+                                dragIsBrightness = offset.x < size.width / 2f
+                                dragValue = if (dragIsBrightness) {
+                                    val current = activity?.window?.attributes?.screenBrightness ?: -1f
+                                    // -1 means "follow the system setting"; there's no way to read
+                                    // the effective value back, so start the drag from the middle.
+                                    if (current < 0f) 0.5f else current
+                                } else {
+                                    val max = audioManager
+                                        .getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                                        .coerceAtLeast(1)
+                                    audioManager
+                                        .getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+                                        .toFloat() / max
+                                }
+                            },
+                            onVerticalDrag = { change, dragAmount ->
+                                change.consume()
+                                // Dragging up (negative dragAmount) increases; a full-height swipe
+                                // covers the whole range.
+                                dragValue = (dragValue - dragAmount / size.height).coerceIn(0f, 1f)
+                                val percent = (dragValue * 100).toInt()
+                                if (dragIsBrightness) {
+                                    activity?.window?.let { window ->
+                                        window.attributes = window.attributes.apply {
+                                            screenBrightness = dragValue.coerceAtLeast(0.01f)
+                                        }
+                                    }
+                                    gestureFeedback = "Brightness $percent%"
+                                } else {
+                                    val max = audioManager
+                                        .getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                                    audioManager.setStreamVolume(
+                                        android.media.AudioManager.STREAM_MUSIC,
+                                        (dragValue * max).toInt(),
+                                        0,
+                                    )
+                                    gestureFeedback = "Volume $percent%"
+                                }
+                            },
+                        )
+                    },
+            )
+        }
+
+        gestureFeedback?.let { feedback ->
+            androidx.compose.material3.Surface(
+                color = ScrimStrong,
+                shape = RoundedCornerShape(Radius.sm),
+                modifier = Modifier.align(Alignment.Center),
+            ) {
+                Text(
+                    text = feedback,
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+                )
+            }
+        }
+
+        pendingNext?.let { target ->
+            UpNextCard(
+                title = target.title,
+                secondsLeft = autoPlaySecondsLeft,
+                // Clearing this first cancels the countdown effect, so the handoff can't fire
+                // twice if navigation takes a moment to tear this screen down.
+                onPlayNow = {
+                    pendingNext = null
+                    onPlayNext(target)
+                },
+                onCancel = { pendingNext = null },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(Spacing.xl),
+            )
+        }
 
         // Trickplay preview while scrubbing
         val spec = trickplaySpec
@@ -565,6 +710,62 @@ private fun TrickplayPreview(
                 style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
             )
+        }
+    }
+}
+
+// Shown when playback ends and a next episode was resolved. Auto-play still happens on its own,
+// but never without a visible countdown and a way out.
+@Composable
+private fun UpNextCard(
+    title: String,
+    secondsLeft: Int,
+    onPlayNow: () -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.material3.Surface(
+        color = Surface,
+        shape = RoundedCornerShape(Radius.md),
+        modifier = modifier.widthIn(max = 360.dp),
+    ) {
+        Column(modifier = Modifier.padding(Spacing.lg)) {
+            Text(
+                "Up next",
+                style = MaterialTheme.typography.labelMedium,
+                color = OnSurfaceMuted,
+            )
+            if (title.isNotBlank()) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = OnSurface,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            Text(
+                "Playing in ${secondsLeft}s",
+                style = MaterialTheme.typography.bodySmall,
+                color = OnSurfaceMuted,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                modifier = Modifier.padding(top = Spacing.sm),
+            ) {
+                Button(
+                    onClick = onPlayNow,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Primary,
+                        contentColor = OnPrimary,
+                    ),
+                ) {
+                    Text("Play now")
+                }
+                TextButton(onClick = onCancel) {
+                    Text("Cancel", color = OnSurfaceMuted)
+                }
+            }
         }
     }
 }

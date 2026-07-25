@@ -178,6 +178,9 @@ data class AppSettings(
     val introSkipEnabled: Boolean = true,
     val trickplayEnabled: Boolean = true,
     val playbackStatsEnabled: Boolean = true,
+    // Double-tap-to-seek and swipe brightness/volume in the player. Off makes the player
+    // tap-only, which is what a kids' tablet wants — a stray palm can't scrub or dim the screen.
+    val playbackGesturesEnabled: Boolean = true,
     val genreFilterEnabled: Boolean = true,
     val downloadQueuePaused: Boolean = false,
     val maxConcurrentDownloads: Int = 1,

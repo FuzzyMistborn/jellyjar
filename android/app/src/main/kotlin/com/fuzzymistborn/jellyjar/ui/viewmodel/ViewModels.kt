@@ -823,6 +823,7 @@ data class AdminState(
     val showRecentlyAdded: Boolean = true,
     val showMyList: Boolean = true,
     val autoPlayNextEpisode: Boolean = true,
+    val playbackGesturesEnabled: Boolean = true,
     val introSkipEnabled: Boolean = true,
     val trickplayEnabled: Boolean = true,
     val playbackStatsEnabled: Boolean = true,
@@ -875,6 +876,7 @@ class AdminViewModel @Inject constructor(
                         showRecentlyAdded = s.showRecentlyAdded,
                         showMyList = s.showMyList,
                         autoPlayNextEpisode = s.autoPlayNextEpisode,
+                        playbackGesturesEnabled = s.playbackGesturesEnabled,
                         introSkipEnabled = s.introSkipEnabled,
                         trickplayEnabled = s.trickplayEnabled,
                         playbackStatsEnabled = s.playbackStatsEnabled,
@@ -1121,6 +1123,11 @@ class AdminViewModel @Inject constructor(
     fun setAutoPlayNextEpisode(v: Boolean) {
         _state.update { it.copy(autoPlayNextEpisode = v) }
         viewModelScope.launch { settings.saveAutoPlayNextEpisode(v) }
+    }
+
+    fun setPlaybackGesturesEnabled(v: Boolean) {
+        _state.update { it.copy(playbackGesturesEnabled = v) }
+        viewModelScope.launch { settings.savePlaybackGesturesEnabled(v) }
     }
 
     fun setIntroSkipEnabled(v: Boolean) {
@@ -1603,8 +1610,19 @@ class SeasonViewModel @Inject constructor(
 // ─── Player ViewModel ─────────────────────────────────────────────────────────
 
 sealed class NextEpisodeTarget {
-    data class Local(val localPath: String, val jellyfinId: String) : NextEpisodeTarget()
-    data class Stream(val streamUrl: String, val jellyfinId: String) : NextEpisodeTarget()
+    abstract val title: String
+
+    data class Local(
+        val localPath: String,
+        val jellyfinId: String,
+        override val title: String = "",
+    ) : NextEpisodeTarget()
+
+    data class Stream(
+        val streamUrl: String,
+        val jellyfinId: String,
+        override val title: String = "",
+    ) : NextEpisodeTarget()
 }
 
 // Everything the player needs to render trickplay scrub previews for one item
@@ -1728,9 +1746,13 @@ class PlayerViewModel @Inject constructor(
             val next = jellyfinRepo.findNextEpisodeOnline(onlineCurrent) ?: return null
             val dl = downloadRepo.findById(next.id)
             return if (dl?.status == com.fuzzymistborn.jellyjar.model.DownloadStatus.COMPLETE.name) {
-                NextEpisodeTarget.Local(dl.localPath, next.id)
+                NextEpisodeTarget.Local(dl.localPath, next.id, nextEpisodeLabel(next.name, next.parentIndexNumber, next.indexNumber))
             } else {
-                NextEpisodeTarget.Stream(jellyfinRepo.getStreamUrl(next.id), next.id)
+                NextEpisodeTarget.Stream(
+                    jellyfinRepo.getStreamUrl(next.id),
+                    next.id,
+                    nextEpisodeLabel(next.name, next.parentIndexNumber, next.indexNumber),
+                )
             }
         }
 
@@ -1755,9 +1777,23 @@ class PlayerViewModel @Inject constructor(
 
         val dl = downloadRepo.findById(next.id)
         return if (dl?.status == com.fuzzymistborn.jellyjar.model.DownloadStatus.COMPLETE.name) {
-            NextEpisodeTarget.Local(dl.localPath, next.id)
+            NextEpisodeTarget.Local(
+                dl.localPath,
+                next.id,
+                nextEpisodeLabel(next.name, next.parentIndexNumber, next.indexNumber),
+            )
         } else null
     }
+
+    // "S02E04 · Episode Name" when the numbering is known, bare name otherwise.
+    private fun nextEpisodeLabel(name: String?, season: Int?, episode: Int?): String {
+        val title = name.orEmpty()
+        if (season == null || episode == null) return title
+        val code = "S%02dE%02d".format(season, episode)
+        return if (title.isBlank()) code else "$code · $title"
+    }
+
+    suspend fun gesturesEnabled(): Boolean = settings.currentSnapshot().playbackGesturesEnabled
 
     fun savePosition(jellyfinId: String, positionMs: Long) = viewModelScope.launch {
         downloadRepo.updatePlaybackPosition(jellyfinId, positionMs)

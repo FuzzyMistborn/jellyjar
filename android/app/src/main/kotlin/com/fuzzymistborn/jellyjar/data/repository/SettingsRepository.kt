@@ -38,6 +38,7 @@ class SettingsRepository @Inject constructor(
         val INTRO_SKIP_ENABLED = booleanPreferencesKey("intro_skip_enabled")
         val TRICKPLAY_ENABLED = booleanPreferencesKey("trickplay_enabled")
         val PLAYBACK_STATS_ENABLED = booleanPreferencesKey("playback_stats_enabled")
+        val PLAYBACK_GESTURES_ENABLED = booleanPreferencesKey("playback_gestures_enabled")
         val GENRE_FILTER_ENABLED = booleanPreferencesKey("genre_filter_enabled")
         val DOWNLOAD_QUEUE_PAUSED = booleanPreferencesKey("download_queue_paused")
         val MAX_CONCURRENT_DOWNLOADS = intPreferencesKey("max_concurrent_downloads")
@@ -64,6 +65,7 @@ class SettingsRepository @Inject constructor(
             introSkipEnabled = prefs[Keys.INTRO_SKIP_ENABLED] ?: true,
             trickplayEnabled = prefs[Keys.TRICKPLAY_ENABLED] ?: true,
             playbackStatsEnabled = prefs[Keys.PLAYBACK_STATS_ENABLED] ?: true,
+            playbackGesturesEnabled = prefs[Keys.PLAYBACK_GESTURES_ENABLED] ?: true,
             genreFilterEnabled = prefs[Keys.GENRE_FILTER_ENABLED] ?: true,
             downloadQueuePaused = prefs[Keys.DOWNLOAD_QUEUE_PAUSED] ?: false,
             maxConcurrentDownloads = (prefs[Keys.MAX_CONCURRENT_DOWNLOADS] ?: 1).coerceIn(1, 2),
@@ -150,6 +152,10 @@ class SettingsRepository @Inject constructor(
 
     suspend fun savePlaybackStatsEnabled(enabled: Boolean) {
         context.dataStore.edit { prefs -> prefs[Keys.PLAYBACK_STATS_ENABLED] = enabled }
+    }
+
+    suspend fun savePlaybackGesturesEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs -> prefs[Keys.PLAYBACK_GESTURES_ENABLED] = enabled }
     }
 
     suspend fun saveGenreFilterEnabled(enabled: Boolean) {

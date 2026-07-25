@@ -32,8 +32,18 @@ class DownloadWorker @AssistedInject constructor(
         const val KEY_JOB_ID = "shim_job_id"
         const val KEY_FILENAME = "filename"
         const val CHANNEL_ID = "jellyjar_downloads"
+        const val NOTIFICATION_GROUP = "jellyjar_downloads_group"
 
         const val MAX_RETRY_ATTEMPTS = 5
+
+        // ForegroundInfo rejects id 0, and the terminal "complete/failed" notification has to
+        // survive WorkManager tearing the progress notification down when doWork() returns —
+        // so the two are deliberately given different ids derived from the same job.
+        private fun progressNotificationId(jobId: String): Int =
+            jobId.hashCode().let { if (it == 0) 1 else it }
+
+        private fun resultNotificationId(jobId: String): Int =
+            "$jobId:done".hashCode().let { if (it == 0) 2 else it }
 
         fun buildRequest(shimJobId: String, filename: String, wifiOnly: Boolean = false): OneTimeWorkRequest =
             OneTimeWorkRequestBuilder<DownloadWorker>()
@@ -56,9 +66,15 @@ class DownloadWorker @AssistedInject constructor(
         val jobId = inputData.getString(KEY_JOB_ID) ?: return Result.failure()
         val filename = inputData.getString(KEY_FILENAME) ?: return Result.failure()
         val downloadPath = settings.currentSnapshot().downloadPath
+        // Every concurrent worker used to post its progress under notification id 1, so with
+        // maxConcurrentDownloads = 2 the two jobs overwrote each other's progress bar. Derive a
+        // stable per-job id instead, and name the item so two simultaneous downloads are
+        // distinguishable at a glance.
+        val notificationId = progressNotificationId(jobId)
+        val itemTitle = downloadRepo.findByShimJobId(jobId)?.title
 
         createNotificationChannel()
-        setForeground(createForegroundInfo("Waiting for transcode…", 0))
+        setForeground(createForegroundInfo(notificationId, itemTitle, "Waiting for transcode…", 0))
 
         // Prefer a live SSE stream for smooth, low-latency progress; only falls back to polling
         // if Press doesn't support /stream (older deployment) or the connection drops.
@@ -69,7 +85,7 @@ class DownloadWorker @AssistedInject constructor(
                     "complete", "failed" -> terminal = j
                     else -> {
                         val progress = (j.progress ?: 0f).toInt()
-                        setForeground(createForegroundInfo("Transcoding $progress%", progress))
+                        setForeground(createForegroundInfo(notificationId, itemTitle, "Transcoding $progress%", progress))
                     }
                 }
             }
@@ -113,7 +129,7 @@ class DownloadWorker @AssistedInject constructor(
                     }
                     else -> {
                         val progress = (job!!.progress ?: 0f).toInt()
-                        setForeground(createForegroundInfo("Transcoding $progress%", progress))
+                        setForeground(createForegroundInfo(notificationId, itemTitle, "Transcoding $progress%", progress))
                         delay(5_000)
                     }
                 }
@@ -125,7 +141,7 @@ class DownloadWorker @AssistedInject constructor(
             return Result.failure(workDataOf("error" to (job!!.error ?: "Transcode failed")))
         }
 
-        setForeground(createForegroundInfo("Downloading…", 0))
+        setForeground(createForegroundInfo(notificationId, itemTitle, "Downloading…", 0))
         downloadRepo.downloadFile(jobId, downloadPath, filename, job!!.output_sha256).onFailure {
             android.util.Log.e("DownloadWorker", "Download failed: ${it.message}", it)
             return if (runAttemptCount < MAX_RETRY_ATTEMPTS) {
@@ -164,19 +180,26 @@ class DownloadWorker @AssistedInject constructor(
             )
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
+            .setGroup(NOTIFICATION_GROUP)
             .build()
-        NotificationManagerCompat.from(context).notify(jobId.hashCode(), notification)
+        NotificationManagerCompat.from(context).notify(resultNotificationId(jobId), notification)
     }
 
-    private fun createForegroundInfo(title: String, progress: Int): ForegroundInfo {
+    private fun createForegroundInfo(
+        notificationId: Int,
+        itemTitle: String?,
+        status: String,
+        progress: Int,
+    ): ForegroundInfo {
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setContentTitle("JellyJar")
-            .setContentText(title)
+            .setContentTitle(itemTitle ?: "JellyJar")
+            .setContentText(status)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setProgress(100, progress, progress == 0)
             .setOngoing(true)
+            .setGroup(NOTIFICATION_GROUP)
             .build()
-        return ForegroundInfo(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        return ForegroundInfo(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
     }
 
     private fun createNotificationChannel() {
