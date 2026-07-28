@@ -51,6 +51,35 @@ enum class PlaybackMethod { DIRECT_PLAY, DIRECT_STREAM, TRANSCODE }
 
 data class PlaybackDiagnostics(val method: PlaybackMethod, val reasons: List<String>, val container: String? = null)
 
+// A selectable audio or subtitle track as the *server* sees it, identified by its MediaStream
+// index (what AudioStreamIndex/SubtitleStreamIndex expect).
+data class ServerTrack(
+    val index: Int,
+    val label: String,
+    val isDefault: Boolean,
+)
+
+// An external subtitle the player can side-load, so text subtitles survive a transcode.
+data class ExternalSubtitle(
+    val index: Int,
+    val label: String,
+    val url: String,
+    val mimeType: String,
+    val language: String?,
+)
+
+// Everything one PlaybackInfo negotiation produced. `audioTracks` is the full server-side list,
+// which is a superset of what ExoPlayer sees whenever the stream is transcoded.
+data class StreamResolution(
+    val url: String,
+    val diagnostics: PlaybackDiagnostics,
+    val audioTracks: List<ServerTrack> = emptyList(),
+    val subtitleTracks: List<ServerTrack> = emptyList(),
+    val externalSubtitles: List<ExternalSubtitle> = emptyList(),
+    val selectedAudioIndex: Int? = null,
+    val selectedSubtitleIndex: Int? = null,
+)
+
 @Singleton
 class JellyfinRepository @Inject constructor(
     private val api: JellyfinApiService,
@@ -65,6 +94,7 @@ class JellyfinRepository @Inject constructor(
     // recent result per item so a diagnostics read right after the URL fetch reuses it instead of
     // re-negotiating.
     private val lastDiagnostics = mutableMapOf<String, PlaybackDiagnostics>()
+    private val lastResolution = mutableMapOf<String, StreamResolution>()
     suspend fun authenticate(url: String, username: String, password: String): Result<AuthResult> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -341,6 +371,10 @@ class JellyfinRepository @Inject constructor(
     // to the plain direct-play URL if PlaybackInfo fails for any reason (e.g. older server).
     suspend fun getStreamUrl(itemId: String): String = getStreamUrlWithDiagnostics(itemId).first
 
+    // Returns the full track list captured by the most recent negotiation for this item, if any.
+    // Consumed once, like takeCachedDiagnostics.
+    fun takeCachedResolution(itemId: String): StreamResolution? = lastResolution.remove(itemId)
+
     // Returns the diagnostics captured by the most recent getStreamUrlWithDiagnostics() call for
     // this item, if any, without re-negotiating with the server. Consumed once (removed from the
     // cache) so a later, unrelated read of the same item still triggers a fresh negotiation.
@@ -354,6 +388,17 @@ class JellyfinRepository @Inject constructor(
         itemId: String,
         qualityOverride: com.fuzzymistborn.jellyjar.model.PlaybackQuality? = null,
     ): Pair<String, PlaybackDiagnostics> =
+        resolveStream(itemId, qualityOverride).let { it.url to it.diagnostics }
+
+    // Negotiates playback and reports every track the server can offer. `audioStreamIndex` /
+    // `subtitleStreamIndex` re-negotiate for a specific track: they're what makes switching audio
+    // work on a transcoded stream, where the delivered HLS only ever carries one audio track.
+    suspend fun resolveStream(
+        itemId: String,
+        qualityOverride: com.fuzzymistborn.jellyjar.model.PlaybackQuality? = null,
+        audioStreamIndex: Int? = null,
+        subtitleStreamIndex: Int? = null,
+    ): StreamResolution =
         withContext(Dispatchers.IO) {
             val s = settings.currentSnapshot()
             val fallback = JellyfinImageHelper.streamUrl(s.jellyfinUrl, itemId, s.jellyfinToken)
@@ -377,6 +422,8 @@ class JellyfinRepository @Inject constructor(
                     itemId = itemId,
                     authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
                     userId = s.jellyfinUserId,
+                    audioStreamIndex = audioStreamIndex,
+                    subtitleStreamIndex = subtitleStreamIndex,
                     body = PlaybackInfoRequest(
                         DeviceProfile = DeviceProfile(
                             MaxStreamingBitrate = bitrateCap ?: 120_000_000,
@@ -387,21 +434,82 @@ class JellyfinRepository @Inject constructor(
                     ),
                 )
                 val source = response.MediaSources.firstOrNull()
-                    ?: return@runCatching Pair(fallback, PlaybackDiagnostics(PlaybackMethod.DIRECT_PLAY, emptyList()))
+                    ?: return@runCatching StreamResolution(fallback, PlaybackDiagnostics(PlaybackMethod.DIRECT_PLAY, emptyList()))
+                val streams = source.MediaStreams.orEmpty()
+                val audioTracks = streams.filter { it.Type == "Audio" }
+                    .map { ServerTrack(it.Index, trackLabel(it, "Audio"), it.IsDefault) }
+                val subtitleTracks = streams.filter { it.Type == "Subtitle" }
+                    .map { ServerTrack(it.Index, trackLabel(it, "Subtitle"), it.IsDefault) }
+                val externalSubtitles = streams
+                    .filter { it.Type == "Subtitle" && it.IsTextSubtitleStream && it.DeliveryUrl != null }
+                    .map { stream ->
+                        val deliveryUrl = stream.DeliveryUrl!!
+                        ExternalSubtitle(
+                            index = stream.Index,
+                            label = trackLabel(stream, "Subtitle"),
+                            // DeliveryUrl is server-relative. ExoPlayer fetches side-loaded
+                            // subtitles through a plain data source with no Authorization header,
+                            // so the token has to ride along in the query string the same way the
+                            // main /Videos/.../stream URL already does.
+                            url = withApiKey(
+                                if (deliveryUrl.startsWith("http")) deliveryUrl
+                                else s.jellyfinUrl.trimEnd('/') + deliveryUrl,
+                                s.jellyfinToken,
+                            ),
+                            mimeType = subtitleMimeType(deliveryUrl),
+                            language = stream.Language,
+                        )
+                    }
                 val transcodingUrl = source.TranscodingUrl
-                if (!source.SupportsDirectPlay && !source.SupportsDirectStream && transcodingUrl != null) {
+                val base = if (!source.SupportsDirectPlay && !source.SupportsDirectStream && transcodingUrl != null) {
                     val url = s.jellyfinUrl.trimEnd('/') + transcodingUrl
-                    Pair(url, PlaybackDiagnostics(PlaybackMethod.TRANSCODE, source.TranscodeReasons ?: emptyList(), source.Container))
+                    url to PlaybackDiagnostics(PlaybackMethod.TRANSCODE, source.TranscodeReasons ?: emptyList(), source.Container)
                 } else {
                     val url = JellyfinImageHelper.streamUrl(
                         s.jellyfinUrl, itemId, s.jellyfinToken,
                         container = source.Container, mediaSourceId = source.Id,
                     )
                     val method = if (source.SupportsDirectPlay) PlaybackMethod.DIRECT_PLAY else PlaybackMethod.DIRECT_STREAM
-                    Pair(url, PlaybackDiagnostics(method, emptyList(), source.Container))
+                    url to PlaybackDiagnostics(method, emptyList(), source.Container)
                 }
-            }.getOrDefault(Pair(fallback, PlaybackDiagnostics(PlaybackMethod.DIRECT_PLAY, emptyList())))
-                .also { (_, diagnostics) -> lastDiagnostics[itemId] = diagnostics }
+                StreamResolution(
+                    url = base.first,
+                    diagnostics = base.second,
+                    audioTracks = audioTracks,
+                    subtitleTracks = subtitleTracks,
+                    externalSubtitles = externalSubtitles,
+                    selectedAudioIndex = audioStreamIndex ?: source.DefaultAudioStreamIndex,
+                    selectedSubtitleIndex = subtitleStreamIndex ?: source.DefaultSubtitleStreamIndex,
+                )
+            }.getOrDefault(StreamResolution(fallback, PlaybackDiagnostics(PlaybackMethod.DIRECT_PLAY, emptyList())))
+                .also {
+                    lastDiagnostics[itemId] = it.diagnostics
+                    lastResolution[itemId] = it
+                }
+        }
+
+    // Jellyfin's DisplayTitle is usually the nicest ("English - AAC 5.1"); fall back to language
+    // and title so a track is never listed as a bare number.
+    private fun trackLabel(stream: com.fuzzymistborn.jellyjar.api.PlaybackMediaStream, kind: String): String =
+        stream.DisplayTitle?.takeIf { it.isNotBlank() }
+            ?: listOfNotNull(
+                stream.Language?.takeIf { it.isNotBlank() }?.uppercase(),
+                stream.Title?.takeIf { it.isNotBlank() },
+                stream.Codec?.takeIf { it.isNotBlank() }?.uppercase(),
+            ).joinToString(" · ").takeIf { it.isNotBlank() }
+            ?: "$kind ${stream.Index}"
+
+    private fun withApiKey(url: String, token: String): String = when {
+        token.isBlank() || url.contains("api_key=") -> url
+        url.contains('?') -> "$url&api_key=$token"
+        else -> "$url?api_key=$token"
+    }
+
+    private fun subtitleMimeType(deliveryUrl: String): String =
+        when (deliveryUrl.substringAfterLast('.').substringBefore('?').lowercase()) {
+            "vtt" -> androidx.media3.common.MimeTypes.TEXT_VTT
+            "ass", "ssa" -> androidx.media3.common.MimeTypes.TEXT_SSA
+            else -> androidx.media3.common.MimeTypes.APPLICATION_SUBRIP
         }
 
     fun primaryImageUrl(itemId: String, baseUrl: String): String =
@@ -540,6 +648,7 @@ class DownloadRepository @Inject constructor(
                     return@runCatching
                 }
             }
+            requireDownloadFolder()
             checkFreeSpace(preset, item.runtimeMinutes)
             // Capture intro/credits markers now so the skip button works offline later
             val segments = runCatching { jellyfinRepo.getSkipSegments(item.id) }.getOrDefault(emptyList())
@@ -825,6 +934,16 @@ class DownloadRepository @Inject constructor(
         )
     }
 
+    // getDeviceStorageInfo()/downloadFile() both silently fall back to internal or external
+    // storage when no folder has been picked, so a download with no configured destination used
+    // to run all the way through Press and then land somewhere the user never chose. Fail at
+    // queue time instead, where the screen can surface it.
+    private suspend fun requireDownloadFolder() {
+        check(settings.currentSnapshot().downloadPath.isNotBlank()) {
+            "No download folder set — pick one in Settings → Downloads"
+        }
+    }
+
     // Estimates transcode output size from the preset's configured bitrates and the source
     // runtime, then requires a safety margin of free space beyond that before allowing the
     // download to start. Falls back to a flat minimum when the estimate can't be computed.
@@ -859,6 +978,7 @@ class DownloadRepository @Inject constructor(
     // Puts a failed item back at the end of the local queue; the queue manager restarts it.
     suspend fun retryTranscode(entity: DownloadEntity): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            requireDownloadFolder()
             checkFreeSpace(entity.preset, entity.runtimeMinutes)
             if (entity.mediaSourcePath == null) error("No source path saved for retry")
             downloadDao.upsert(

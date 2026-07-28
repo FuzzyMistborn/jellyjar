@@ -105,6 +105,15 @@ data class CodecProfile(
     val Conditions: List<ProfileCondition>,
 )
 
+// Without any SubtitleProfiles the server has no delivery method it's allowed to use for text
+// subtitles, so a transcoded stream simply arrives without them. "External" makes Jellyfin hand
+// back a DeliveryUrl per subtitle stream, which the player side-loads — that keeps every text
+// track selectable instead of baking one into the video.
+data class SubtitleProfile(
+    val Format: String,
+    val Method: String,
+)
+
 data class DeviceProfile(
     val MaxStreamingBitrate: Int = 120_000_000,
     // MaxStreamingBitrate alone only caps the transcode *output* target — it's MaxStaticBitrate
@@ -114,11 +123,38 @@ data class DeviceProfile(
     val DirectPlayProfiles: List<DirectPlayProfile> = listOf(DirectPlayProfile()),
     val TranscodingProfiles: List<TranscodingProfile> = listOf(TranscodingProfile()),
     val CodecProfiles: List<CodecProfile> = emptyList(),
+    val SubtitleProfiles: List<SubtitleProfile> = listOf(
+        SubtitleProfile("vtt", "External"),
+        SubtitleProfile("srt", "External"),
+        SubtitleProfile("subrip", "External"),
+        SubtitleProfile("ass", "External"),
+        SubtitleProfile("ssa", "External"),
+        // Image subtitles can't be side-loaded as text; burning them in is the only way they can
+        // be shown at all, and only happens when one is explicitly selected.
+        SubtitleProfile("pgssub", "Encode"),
+        SubtitleProfile("dvdsub", "Encode"),
+    ),
 )
 
 data class PlaybackInfoRequest(
     val DeviceProfile: DeviceProfile = DeviceProfile(),
     val MaxStreamingBitrate: Int? = null,
+)
+
+// One stream inside a negotiated MediaSource. This is the authoritative track list: when the
+// server transcodes, the delivered HLS carries a single audio track, so ExoPlayer's own track
+// list is a subset of what's actually available and can't be used to build the picker.
+data class PlaybackMediaStream(
+    val Index: Int,
+    val Type: String? = null,          // Video | Audio | Subtitle
+    val Codec: String? = null,
+    val Language: String? = null,
+    val Title: String? = null,
+    val DisplayTitle: String? = null,
+    val IsDefault: Boolean = false,
+    val IsExternal: Boolean = false,
+    val IsTextSubtitleStream: Boolean = false,
+    val DeliveryUrl: String? = null,
 )
 
 data class PlaybackMediaSource(
@@ -128,6 +164,9 @@ data class PlaybackMediaSource(
     val SupportsDirectStream: Boolean = false,
     val TranscodingUrl: String? = null,
     val TranscodeReasons: List<String>? = null,
+    val MediaStreams: List<PlaybackMediaStream>? = null,
+    val DefaultAudioStreamIndex: Int? = null,
+    val DefaultSubtitleStreamIndex: Int? = null,
 )
 
 data class PlaybackInfoResponse(
@@ -254,6 +293,10 @@ interface JellyfinApiService {
         @Path("itemId") itemId: String,
         @Header("Authorization") authHeader: String,
         @Query("UserId") userId: String,
+        // Which tracks the *server* should put in the delivered stream. Only meaningful when it
+        // transcodes; direct play ignores them and hands over the original file untouched.
+        @Query("AudioStreamIndex") audioStreamIndex: Int? = null,
+        @Query("SubtitleStreamIndex") subtitleStreamIndex: Int? = null,
         @Body body: PlaybackInfoRequest = PlaybackInfoRequest(),
     ): PlaybackInfoResponse
 

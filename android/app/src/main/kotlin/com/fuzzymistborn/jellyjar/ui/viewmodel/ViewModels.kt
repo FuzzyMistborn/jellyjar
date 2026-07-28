@@ -1669,14 +1669,36 @@ class PlayerViewModel @Inject constructor(
             ?: jellyfinRepo.getStreamUrlWithDiagnostics(jellyfinId).second
     }
 
+    // The server's full track list for the stream currently playing. ExoPlayer's own track list
+    // is only equal to this when the file direct-plays: a transcode delivers one audio track and
+    // no embedded subtitles, so the picker has to be built from the negotiation instead.
+    suspend fun loadStreamResolution(jellyfinId: String): com.fuzzymistborn.jellyjar.data.repository.StreamResolution? =
+        jellyfinRepo.takeCachedResolution(jellyfinId)
+            ?: runCatching { jellyfinRepo.resolveStream(jellyfinId) }.getOrNull()
+
+    // Re-negotiates the same playback with different server-side track selections. Needed for
+    // audio on a transcoded stream, and for image subtitles (which can only be burned in).
+    suspend fun changeStreamTracks(
+        jellyfinId: String,
+        audioStreamIndex: Int?,
+        subtitleStreamIndex: Int?,
+    ): com.fuzzymistborn.jellyjar.data.repository.StreamResolution =
+        jellyfinRepo.resolveStream(
+            jellyfinId,
+            audioStreamIndex = audioStreamIndex,
+            subtitleStreamIndex = subtitleStreamIndex,
+        )
+
     // Re-negotiates the stream at a different quality mid-playback (in-player quality switcher).
     // Session-only — deliberately doesn't touch the persisted Admin default, so switching for one
     // title doesn't silently change what every other title streams at.
     suspend fun changeStreamQuality(
         jellyfinId: String,
         quality: com.fuzzymistborn.jellyjar.model.PlaybackQuality,
-    ): Pair<String, PlaybackDiagnostics> =
-        jellyfinRepo.getStreamUrlWithDiagnostics(jellyfinId, quality)
+        audioStreamIndex: Int? = null,
+        subtitleStreamIndex: Int? = null,
+    ): com.fuzzymistborn.jellyjar.data.repository.StreamResolution =
+        jellyfinRepo.resolveStream(jellyfinId, quality, audioStreamIndex, subtitleStreamIndex)
 
     suspend fun currentPlaybackQuality(): com.fuzzymistborn.jellyjar.model.PlaybackQuality =
         settings.currentSnapshot().playbackQuality
