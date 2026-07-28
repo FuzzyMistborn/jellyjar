@@ -54,6 +54,7 @@ import com.fuzzymistborn.jellyjar.ui.viewmodel.NextEpisodeTarget
 import com.fuzzymistborn.jellyjar.ui.viewmodel.PlayerViewModel
 import com.fuzzymistborn.jellyjar.ui.viewmodel.TrickplaySpec
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 // Seek step for a double-tap on the left/right half of the video.
@@ -157,8 +158,6 @@ fun PlayerScreen(
     // short countdown rather than cutting straight to it — an unattended tablet used to roll into
     // the next episode with no way to stop it.
     val coroutineScope = rememberCoroutineScope()
-    var autoPlayTriggered by remember { mutableStateOf(false) }
-    var autoPlayCancelled by remember { mutableStateOf(false) }
     var pendingNext by remember { mutableStateOf<NextEpisodeTarget?>(null) }
     var autoPlaySecondsLeft by remember { mutableIntStateOf(AUTO_PLAY_FALLBACK_SECONDS) }
     var playbackEnded by remember { mutableStateOf(false) }
@@ -216,19 +215,35 @@ fun PlayerScreen(
         positionMs >= it.startMs && positionMs < maxOf(it.startMs, it.endMs - 1_000)
     }
 
-    // Offer the next episode during the outro rather than after the picture has already stopped.
-    // Prefers the credits marker when the server has one; otherwise a fixed lead time.
-    val creditsStartMs = remember(skipSegments) {
-        skipSegments.firstOrNull { it.type == "Outro" }?.startMs
-    }
-    val shouldOfferNext = jellyfinId != null && !autoPlayTriggered && (
-        (creditsStartMs != null && positionMs >= creditsStartMs) ||
-            (durationMs > 0 && durationMs - positionMs <= UP_NEXT_LEAD_MS && positionMs > 0)
-        )
-    LaunchedEffect(shouldOfferNext) {
-        if (shouldOfferNext && jellyfinId != null) {
-            autoPlayTriggered = true
-            pendingNext = viewModel.resolveNextEpisode(jellyfinId)
+    // Resolving what plays next, and deciding whether to leave, both live in this one coroutine —
+    // keyed only on the item. An earlier version keyed the effect on the "should offer next now"
+    // condition and flipped that same condition inside the body, which cancelled the coroutine
+    // mid-lookup: the card never appeared and the player just exited at the end of every episode.
+    LaunchedEffect(jellyfinId) {
+        if (jellyfinId == null) {
+            // Nothing to look up (a local file opened without its Jellyfin id) — just don't sit on
+            // a frozen last frame.
+            snapshotFlow { playbackEnded }.first { it }
+            onBack()
+            return@LaunchedEffect
+        }
+        // Waits for whichever comes first: the outro (the credits marker when the server has one,
+        // otherwise a fixed lead time), or the episode simply ending — short files, or a duration
+        // the player never reported. Every value here is read *inside* the snapshotFlow lambda:
+        // computing the condition outside it would capture one stale value and never re-evaluate.
+        snapshotFlow {
+            val creditsStartMs = skipSegments.firstOrNull { it.type == "Outro" }?.startMs
+            playbackEnded ||
+                (creditsStartMs != null && positionMs >= creditsStartMs) ||
+                (durationMs > 0 && positionMs > 0 && durationMs - positionMs <= UP_NEXT_LEAD_MS)
+        }.first { it }
+        val target = viewModel.resolveNextEpisode(jellyfinId)
+        if (target != null) {
+            pendingNext = target
+        } else {
+            // Auto-play off, series finale, or a movie: leave once playback is actually over.
+            snapshotFlow { playbackEnded }.first { it }
+            onBack()
         }
     }
 
@@ -253,17 +268,6 @@ fun PlayerScreen(
             }
         }
         onPlayNext(target)
-    }
-
-    // Nothing to play next (auto-play off, series finale, a movie) — leave the player instead of
-    // sitting on a frozen last frame. A cancelled countdown is an explicit "stay here".
-    LaunchedEffect(playbackEnded) {
-        if (!playbackEnded) return@LaunchedEffect
-        if (jellyfinId != null && !autoPlayTriggered) {
-            autoPlayTriggered = true
-            pendingNext = viewModel.resolveNextEpisode(jellyfinId)
-        }
-        if (pendingNext == null && !autoPlayCancelled) onBack()
     }
 
     // ── Trickplay scrub previews ──────────────────────────────────────────────
@@ -501,10 +505,7 @@ fun PlayerScreen(
                     pendingNext = null
                     onPlayNext(target)
                 },
-                onCancel = {
-                    autoPlayCancelled = true
-                    pendingNext = null
-                },
+                onCancel = { pendingNext = null },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(Spacing.xl),
