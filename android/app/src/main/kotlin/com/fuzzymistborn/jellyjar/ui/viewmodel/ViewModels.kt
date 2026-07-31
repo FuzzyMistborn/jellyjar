@@ -13,6 +13,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -86,6 +87,11 @@ class LibraryViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(LibraryState())
     val state: StateFlow<LibraryState> = _state.asStateFlow()
+
+    // loadLibrary() fires from seven places (network-state and offline-libraries collectors,
+    // refresh, selectLibrary, setSortOrder). Two overlapping loads race to write `items`, and the
+    // slower one wins — leaving the grid showing the library you just switched away from.
+    private var libraryJob: Job? = null
 
     init {
         // Handles the very first time we observe `online == true` (app start); every later
@@ -215,7 +221,25 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
-    private fun loadLibrary(isRefresh: Boolean = false) = viewModelScope.launch {
+    private fun loadLibrary(isRefresh: Boolean = false) {
+        libraryJob?.cancel()
+        libraryJob = viewModelScope.launch {
+            val self = coroutineContext[Job]
+            try {
+                loadLibraryInner(isRefresh)
+            } finally {
+                // Cancellation skips the _state.update that normally clears these, which would
+                // strand the grid spinner (and refresh()'s isRefreshing guard) on forever. Guarded
+                // on identity so a cancelled predecessor can't clear flags its replacement — e.g.
+                // the isRefreshing that refresh() sets just before cancelling — has already set.
+                if (libraryJob === self) {
+                    _state.update { s -> s.copy(isLoading = false, isRefreshing = false) }
+                }
+            }
+        }
+    }
+
+    private suspend fun loadLibraryInner(isRefresh: Boolean): Unit = coroutineScope {
         if (!isRefresh) {
             _state.update { s -> s.copy(isLoading = true, items = emptyList(), totalCount = 0) }
         }
@@ -223,7 +247,9 @@ class LibraryViewModel @Inject constructor(
             .onSuccess { libs ->
                 networkMonitor.reportServerReachable(true)
                 _state.update { s -> s.copy(libraries = libs) }
-                loadHomeRows()
+                // Launched as a child of this scope, not viewModelScope, so cancelling a stale
+                // load also stops it writing stale resumeItems/recentlyAdded.
+                launch { loadHomeRows() }
             }
             .onFailure {
                 // Reported through NetworkMonitor rather than set on local state directly: the
@@ -232,7 +258,7 @@ class LibraryViewModel @Inject constructor(
                 // what's actually downloaded.
                 networkMonitor.reportServerReachable(false)
                 _state.update { s -> s.copy(isLoading = false, isRefreshing = false, resumeItems = emptyList(), recentlyAdded = emptyList()) }
-                return@launch
+                return@coroutineScope
             }
         val selectedLib = _state.value.libraries
             .find { lib -> lib.name == _state.value.selectedLibrary }
@@ -270,7 +296,7 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
-    private fun loadHomeRows() = viewModelScope.launch {
+    private suspend fun loadHomeRows() {
         jellyfinRepo.getResumeItems().onSuccess { items ->
             _state.update { it.copy(resumeItems = items) }
         }
@@ -1248,6 +1274,9 @@ class DownloadsViewModel @Inject constructor(
                         newEtas[d.jellyfinId] = _state.value.etaByJellyfinId[d.jellyfinId]
                     }
                 }
+                // newEtas holds exactly the currently-active ids; anything else in the sample map
+                // has completed or failed and would otherwise be kept for the ViewModel's lifetime.
+                progressSamples.keys.retainAll(newEtas.keys)
 
                 val completed = all.filter { d -> d.status == com.fuzzymistborn.jellyjar.model.DownloadStatus.COMPLETE.name }
                 val totalMb = completed.sumOf { it.sizeBytes } / (1024 * 1024)

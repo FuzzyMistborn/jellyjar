@@ -26,6 +26,10 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): JellyJarDatabase =
         Room.databaseBuilder(context, JellyJarDatabase::class.java, "jellyjar.db")
+            // Every schema bump wipes all download records — deliberate while the app isn't
+            // distributed, since downloads are just re-fetchable copies of server media. Once it
+            // ships this must become a real addMigrations() chain; the exported schemas under
+            // app/schemas (see room.schemaLocation in build.gradle.kts) exist to make that possible.
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
 

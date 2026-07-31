@@ -30,6 +30,10 @@ data class DownloadEntity(
     // skip button works during offline playback.
     val segmentsJson: String? = null,
     val played: Boolean = false,
+    // The SAF document URI the file was written to, when the download folder is a content:// tree.
+    // Deletion used to re-find the file by name under the tree, which silently no-ops if the file
+    // was renamed or the folder re-picked — leaving an orphan the Storage screen can't see.
+    val localUri: String? = null,
 ) {
     // thumbnailPath is a bare filesystem path (see DownloadRepository.saveThumbnailLocally); Coil
     // only resolves recognized URI schemes, so callers need the `file://` form to load it locally.
@@ -228,8 +232,11 @@ interface CachedItemDao {
 
 @Database(
     entities = [DownloadEntity::class, CachedItemEntity::class, PlaybackPositionEntity::class, FavoriteEntity::class],
-    version = 7,
-    exportSchema = false,
+    version = 8,
+    // Exported to app/schemas (see room.schemaLocation in build.gradle.kts) so a real migration
+    // can be written and reviewed once the app is distributed — see the destructive-migration
+    // note in AppModule.
+    exportSchema = true,
 )
 abstract class JellyJarDatabase : RoomDatabase() {
     abstract fun downloadDao(): DownloadDao

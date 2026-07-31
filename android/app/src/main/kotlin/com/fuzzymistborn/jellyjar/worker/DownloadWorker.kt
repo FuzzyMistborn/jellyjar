@@ -210,8 +210,3 @@ class DownloadWorker @AssistedInject constructor(
         nm.createNotificationChannel(channel)
     }
 }
-
-// Stub foreground service declaration (WorkManager manages lifecycle)
-class DownloadService : android.app.Service() {
-    override fun onBind(intent: android.content.Intent?) = null
-}

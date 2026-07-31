@@ -5,6 +5,12 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// Room writes the exported schema here (@Database(exportSchema = true)). Commit these — they're
+// what makes a future migration writable and reviewable instead of another destructive wipe.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 android {
     namespace = "com.fuzzymistborn.jellyjar"
     compileSdk = 37

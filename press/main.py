@@ -4,17 +4,46 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import shutil
 import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
-from datetime import datetime, timedelta
+from typing import Any, Optional
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError, field_validator
+
+
+def _now_iso() -> str:
+    """Current time as a timezone-aware ISO string. All persisted timestamps use this."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_ts(value: str) -> datetime:
+    """Parse a persisted timestamp, treating legacy naive values as UTC.
+
+    Timestamps written before the move off datetime.utcnow() have no offset. Comparing one of
+    those to an aware datetime raises TypeError, which would silently kill the cleanup loop.
+    """
+    parsed = datetime.fromisoformat(value)
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+
+
+def _atomic_write_json(path: Path, data: Any) -> None:
+    """Write JSON via a temp file + rename so a crash mid-write can't truncate the original.
+
+    The temp file must live in the target's own directory for os.replace to be atomic — a
+    rename across filesystems is not.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    os.replace(tmp, path)
+
 
 # Set at Docker build time from the release tag (see .github/workflows/build-press.yml), so this
 # always matches the JellyJar app version released alongside it. "dev" for local/unreleased builds.
@@ -93,6 +122,20 @@ def _publish(job_id: str) -> None:
         q.put_nowait(None)
 
 
+def _fail_job(job_id: str, error: str, output: str | None) -> None:
+    """Mark a job failed and remove whatever partial output ffmpeg left behind.
+
+    A failed encode still leaves a truncated .mp4 on disk, which sits in /output consuming
+    space until someone deletes the job by hand. Only call this on *final* failure — the
+    hardware-encoder fallback retries to the same path, so the partial file from the first
+    attempt has to survive until that retry has had its turn.
+    """
+    if output and Path(output).exists():
+        Path(output).unlink(missing_ok=True)
+    jobs[job_id]["status"] = "failed"
+    jobs[job_id]["error"] = error
+
+
 async def resume_interrupted_jobs():
     """Restart transcodes that were queued/running when the service last stopped."""
     changed = 0
@@ -106,12 +149,12 @@ async def resume_interrupted_jobs():
         if preset_name not in PRESETS:
             job["status"] = "failed"
             job["error"] = f"Preset '{preset_name}' no longer exists"
-            job["updated_at"] = datetime.utcnow().isoformat()
+            job["updated_at"] = _now_iso()
             continue
         if not Path(source).exists():
             job["status"] = "failed"
             job["error"] = f"Source file not found: {source}"
-            job["updated_at"] = datetime.utcnow().isoformat()
+            job["updated_at"] = _now_iso()
             continue
         duration_us = await get_duration_us(source)
         job["duration_seconds"] = (duration_us / 1_000_000) if duration_us else None
@@ -129,13 +172,13 @@ async def cleanup_loop():
     if CLEANUP_AFTER_DAYS <= 0:
         return
     while True:
-        cutoff = datetime.utcnow() - timedelta(days=CLEANUP_AFTER_DAYS)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=CLEANUP_AFTER_DAYS)
         removed = 0
         for job_id, job in list(jobs.items()):
             if job["status"] != "complete":
                 continue
             try:
-                completed_at = datetime.fromisoformat(job["updated_at"])
+                completed_at = _parse_ts(job["updated_at"])
             except (TypeError, ValueError):
                 continue
             if completed_at < cutoff:
@@ -193,19 +236,69 @@ DEFAULT_PRESETS = {
 }
 
 
+# Preset values are interpolated straight into ffmpeg's argv and -vf filter graph (see
+# build_ffmpeg_command), so a malformed one doesn't fail validation somewhere useful — it
+# breaks every subsequent encode with a filter-graph parse error, and persists to disk.
+_SCALE_RE = re.compile(r"^\d{1,5}:\d{1,5}$")
+_BITRATE_RE = re.compile(r"^\d{1,7}[kKmM]?$")
+
+
+class PresetConfig(BaseModel):
+    video_bitrate: str
+    audio_bitrate: str
+    scale: str
+    crf: str
+
+    @field_validator("scale")
+    @classmethod
+    def _check_scale(cls, v: str) -> str:
+        if not _SCALE_RE.match(v.strip()):
+            raise ValueError("scale must be WIDTH:HEIGHT, e.g. 1920:1080")
+        return v.strip()
+
+    @field_validator("video_bitrate", "audio_bitrate")
+    @classmethod
+    def _check_bitrate(cls, v: str) -> str:
+        # Kept in sync with parseBitrateBps() in the Android app's Repositories.kt, which
+        # estimates output size from these and only understands the same k/M suffixes.
+        if not _BITRATE_RE.match(v.strip()):
+            raise ValueError("bitrate must be digits with an optional k/M suffix, e.g. 4000k")
+        return v.strip()
+
+    @field_validator("crf")
+    @classmethod
+    def _check_crf(cls, v: str) -> str:
+        try:
+            crf = int(v.strip())
+        except ValueError:
+            raise ValueError("crf must be an integer between 0 and 51")
+        if not 0 <= crf <= 51:
+            raise ValueError("crf must be an integer between 0 and 51")
+        return str(crf)
+
+
 def load_presets() -> dict:
     try:
-        return json.loads(PRESETS_FILE.read_text())
+        raw = json.loads(PRESETS_FILE.read_text())
     except FileNotFoundError:
         return dict(DEFAULT_PRESETS)
     except Exception as e:
         print(f"[Press] Failed to read {PRESETS_FILE}, using defaults: {e}", flush=True)
         return dict(DEFAULT_PRESETS)
 
+    # Drop anything that no longer validates rather than letting a bad preset survive a
+    # restart and break encodes long after whatever wrote it.
+    valid = {}
+    for name, config in raw.items():
+        try:
+            valid[name] = PresetConfig(**config).model_dump()
+        except (ValidationError, TypeError) as e:
+            print(f"[Press] Ignoring invalid preset '{name}': {e}", flush=True)
+    return valid or dict(DEFAULT_PRESETS)
+
 
 def save_presets() -> None:
-    PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    PRESETS_FILE.write_text(json.dumps(PRESETS, indent=2))
+    _atomic_write_json(PRESETS_FILE, PRESETS)
 
 
 PRESETS = load_presets()
@@ -224,7 +317,7 @@ def load_jobs() -> dict:
     # Ones with a persisted source_path/preset are re-queued and restarted at
     # startup (see resume_interrupted_jobs); older jobs saved before those
     # fields existed can't be retried automatically.
-    now = datetime.utcnow().isoformat()
+    now = _now_iso()
     for job in raw.values():
         if job["status"] in ("queued", "running"):
             if job.get("source_path") and job.get("preset"):
@@ -242,8 +335,7 @@ def load_jobs() -> dict:
 
 
 def _save_jobs() -> None:
-    JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    JOBS_FILE.write_text(json.dumps(jobs, indent=2))
+    _atomic_write_json(JOBS_FILE, jobs)
 
 
 jobs: dict[str, dict] = load_jobs()
@@ -254,13 +346,6 @@ class TranscodeRequest(BaseModel):
     preset: str               # "1080p" or "720p"
     output_filename: Optional[str] = None
     display_name: Optional[str] = None   # e.g. "The Matrix" or "Breaking Bad · S01E03 · Title"
-
-
-class PresetConfig(BaseModel):
-    video_bitrate: str
-    audio_bitrate: str
-    scale: str
-    crf: str
 
 
 class JobStatus(BaseModel):
@@ -455,7 +540,7 @@ async def stream_progress(process: asyncio.subprocess.Process, job_id: str, dura
                 remaining_us = max(duration_us - current_us, 0)
                 jobs[job_id]["eta_seconds"] = round(remaining_us / 1_000_000 / speed, 1)
 
-            jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+            jobs[job_id]["updated_at"] = _now_iso()
             _publish(job_id)
 
 
@@ -465,7 +550,7 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
             return  # cancelled while queued, before it got a chance to start
 
         jobs[job_id]["status"] = "running"
-        jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+        jobs[job_id]["updated_at"] = _now_iso()
         _save_jobs()
         _publish(job_id)
 
@@ -526,24 +611,21 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
                         jobs[job_id]["eta_seconds"] = 0.0
                     else:
                         print(f"[Press] libx264 fallback also failed:\n{sw_stderr}", flush=True)
-                        jobs[job_id]["status"] = "failed"
-                        jobs[job_id]["error"] = sw_stderr
+                        _fail_job(job_id, sw_stderr, output)
                 else:
                     print(f"[Press] transcode FAILED (job {job_id}, rc={process.returncode}):\n{error_text}", flush=True)
-                    jobs[job_id]["status"] = "failed"
-                    jobs[job_id]["error"] = error_text
+                    _fail_job(job_id, error_text, output)
 
         except Exception as e:
             _active_processes.pop(job_id, None)
             if job_id in jobs:
-                jobs[job_id]["status"] = "failed"
-                jobs[job_id]["error"] = str(e)
+                _fail_job(job_id, str(e), output)
 
         if job_id in jobs and jobs[job_id]["status"] == "complete":
             jobs[job_id]["output_sha256"] = await asyncio.to_thread(_sha256_file, jobs[job_id]["output_path"])
 
         if job_id in jobs:
-            jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+            jobs[job_id]["updated_at"] = _now_iso()
             _save_jobs()
             _publish(job_id)
 
@@ -587,7 +669,7 @@ async def _create_job(
 
     duration_us = await get_duration_us(str(source))
 
-    now = datetime.utcnow().isoformat()
+    now = _now_iso()
     jobs[job_id] = {
         "job_id": job_id,
         "status": "queued",
@@ -614,7 +696,7 @@ async def _create_job(
 def _failed_job_status(req: TranscodeRequest, detail: str) -> JobStatus:
     """Record a job that couldn't even be started (e.g. batch item with a bad source path)."""
     job_id = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat()
+    now = _now_iso()
     jobs[job_id] = {
         "job_id": job_id,
         "status": "failed",
@@ -812,7 +894,17 @@ async def stream_job(job_id: str):
                 if jobs[job_id]["status"] in ("complete", "failed"):
                     break
         finally:
-            _subscribers.get(job_id, []).remove(q)
+            # .get(job_id, []) hands back a throwaway list once the key is gone, and .remove()
+            # on it raises ValueError out of this cleanup. Prune the key when it empties so
+            # _subscribers doesn't accumulate an empty list per completed job either.
+            subs = _subscribers.get(job_id)
+            if subs is not None:
+                try:
+                    subs.remove(q)
+                except ValueError:
+                    pass
+                if not subs:
+                    _subscribers.pop(job_id, None)
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 

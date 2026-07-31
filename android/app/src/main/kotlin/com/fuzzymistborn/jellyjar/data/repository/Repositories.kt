@@ -93,8 +93,10 @@ class JellyfinRepository @Inject constructor(
     // then show "Transcoding" for a stream that's actually playing Direct Play. Cache the most
     // recent result per item so a diagnostics read right after the URL fetch reuses it instead of
     // re-negotiating.
-    private val lastDiagnostics = mutableMapOf<String, PlaybackDiagnostics>()
-    private val lastResolution = mutableMapOf<String, StreamResolution>()
+    // Concurrent, not plain maps: these are written from Dispatchers.IO during stream resolution
+    // and drained by takeCached*() on whatever thread the player happens to be on.
+    private val lastDiagnostics = java.util.concurrent.ConcurrentHashMap<String, PlaybackDiagnostics>()
+    private val lastResolution = java.util.concurrent.ConcurrentHashMap<String, StreamResolution>()
     suspend fun authenticate(url: String, username: String, password: String): Result<AuthResult> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -822,7 +824,7 @@ class DownloadRepository @Inject constructor(
                 var downloadedBytes = 0L
                 var lastReportedProgressInt = -1
 
-                val (outputStream, savedPath) = if (destinationDir.startsWith("content://")) {
+                val (outputStream, savedPath, savedUri) = if (destinationDir.startsWith("content://")) {
                     val treeUri = Uri.parse(destinationDir)
                     val tree = DocumentFile.fromTreeUri(context, treeUri)
                         ?: error("Cannot open tree URI: $destinationDir")
@@ -839,12 +841,12 @@ class DownloadRepository @Inject constructor(
                     // ExternalStorageProvider unless the URI came from ACTION_OPEN_DOCUMENT.
                     val filePath = documentUriToFilePath(doc.uri)
                         ?: error("Cannot resolve file path for: ${doc.uri}")
-                    Pair(stream, filePath)
+                    Triple(stream, filePath, doc.uri.toString())
                 } else {
                     val dir = destinationDir.ifBlank { context.filesDir.absolutePath }
                     val destFile = File(dir, filename)
                     destFile.parentFile?.mkdirs()
-                    Pair(destFile.outputStream() as java.io.OutputStream, destFile.absolutePath)
+                    Triple(destFile.outputStream() as java.io.OutputStream, destFile.absolutePath, null)
                 }
 
                 outputStream.use { output ->
@@ -894,6 +896,7 @@ class DownloadRepository @Inject constructor(
                 downloadDao.upsert(
                     entity.copy(
                         localPath = savedPath,
+                        localUri = savedUri,
                         status = DownloadStatus.COMPLETE.name,
                         progress = 100f,
                         sizeBytes = downloadedBytes,
@@ -1044,14 +1047,30 @@ class DownloadRepository @Inject constructor(
         }
         if (entity.localPath.isNotBlank()) {
             val downloadPath = settings.currentSnapshot().downloadPath
-            if (downloadPath.startsWith("content://")) {
-                // File was created via SAF; File.delete() has no permission — use DocumentFile instead
-                val filename = File(entity.localPath).name
-                DocumentFile.fromTreeUri(context, Uri.parse(downloadPath))
-                    ?.findFile(filename)
-                    ?.delete()
-            } else {
-                File(entity.localPath).delete()
+            val deleted = when {
+                // The document URI recorded at download time: unambiguous, and unaffected by the
+                // file being renamed or the user re-picking a different download folder.
+                entity.localUri != null ->
+                    DocumentFile.fromSingleUri(context, Uri.parse(entity.localUri))?.delete() == true
+
+                // Rows written before localUri existed: fall back to re-finding by name under the
+                // currently-configured tree. File.delete() has no permission on a SAF file.
+                downloadPath.startsWith("content://") -> {
+                    val filename = File(entity.localPath).name
+                    DocumentFile.fromTreeUri(context, Uri.parse(downloadPath))
+                        ?.findFile(filename)
+                        ?.delete() == true
+                }
+
+                else -> File(entity.localPath).delete()
+            }
+            if (!deleted) {
+                // The DB row goes away regardless, so without this the file becomes an orphan
+                // that no screen in the app can see or account for.
+                android.util.Log.w(
+                    "DownloadRepository",
+                    "Could not delete media for $jellyfinId (uri=${entity.localUri}, path=${entity.localPath})"
+                )
             }
         }
         entity.thumbnailPath?.let { File(it).delete() }

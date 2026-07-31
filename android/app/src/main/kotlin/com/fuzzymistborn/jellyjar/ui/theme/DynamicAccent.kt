@@ -25,11 +25,13 @@ import kotlinx.coroutines.withContext
  * Falls back to [fallback] while loading, on failure, or when the swatch is too dark/desaturated
  * to read well against the app's dark UI.
  */
-private val accentColorCache = mutableMapOf<String, Color>()
+// Bounded and internally synchronized: this is keyed by image URL and written from composition,
+// so a plain map would both grow for the lifetime of the process and be written concurrently.
+private val accentColorCache = android.util.LruCache<String, Color>(50)
 
 @Composable
 fun rememberDynamicAccentColor(imageUrl: String?, fallback: Color = Primary): Color {
-    val cached = imageUrl?.let { accentColorCache[it] }
+    val cached = imageUrl?.let { accentColorCache.get(it) }
     var accent by remember(imageUrl) { mutableStateOf(cached ?: fallback) }
     val context = LocalContext.current
 
@@ -38,7 +40,7 @@ fun rememberDynamicAccentColor(imageUrl: String?, fallback: Color = Primary): Co
             accent = fallback
             return@LaunchedEffect
         }
-        accentColorCache[imageUrl]?.let {
+        accentColorCache.get(imageUrl)?.let {
             accent = it
             return@LaunchedEffect
         }
@@ -54,7 +56,7 @@ fun rememberDynamicAccentColor(imageUrl: String?, fallback: Color = Primary): Co
             }.getOrNull()
         }
         val resolved = extracted ?: fallback
-        if (extracted != null) accentColorCache[imageUrl] = resolved
+        if (extracted != null) accentColorCache.put(imageUrl, resolved)
         accent = resolved
     }
 

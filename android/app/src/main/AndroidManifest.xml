@@ -42,12 +42,6 @@
             android:foregroundServiceType="dataSync"
             android:exported="false" />
 
-        <!-- Download foreground service stub -->
-        <service
-            android:name=".worker.DownloadService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
-
         <!-- Disable WorkManager auto-init so HiltWorkerFactory is used instead -->
         <provider
             android:name="androidx.startup.InitializationProvider"
