@@ -45,6 +45,7 @@ data class LibraryState(
     val showRecentlyAdded: Boolean = true,
     val showMyList: Boolean = true,
     val genreFilterEnabled: Boolean = true,
+    val kidModeEnabled: Boolean = false,
     val globalSearchActive: Boolean = false,
     val globalSearchQuery: String = "",
     val globalSearchResults: List<JellyfinItem> = emptyList(),
@@ -177,7 +178,7 @@ class LibraryViewModel @Inject constructor(
             settings.settings.collect { s ->
                 val prevToken = _state.value.jellyfinToken
                 val prevUrl = _state.value.jellyfinUrl
-                _state.update { it.copy(jellyfinUrl = s.jellyfinUrl, jellyfinToken = s.jellyfinToken, showContinueWatching = s.showContinueWatching, showRecentlyAdded = s.showRecentlyAdded, showMyList = s.showMyList, genreFilterEnabled = s.genreFilterEnabled) }
+                _state.update { it.copy(jellyfinUrl = s.jellyfinUrl, jellyfinToken = s.jellyfinToken, showContinueWatching = s.showContinueWatching, showRecentlyAdded = s.showRecentlyAdded, showMyList = s.showMyList, genreFilterEnabled = s.genreFilterEnabled, kidModeEnabled = s.kidModeEnabled) }
                 val tokenBecameAvailable = prevToken.isBlank() && s.jellyfinToken.isNotBlank()
                 val urlChanged = prevUrl != s.jellyfinUrl && s.jellyfinToken.isNotBlank()
                 if ((tokenBecameAvailable || urlChanged) && _state.value.isOnline && !_state.value.showingDownloads) {
@@ -519,6 +520,7 @@ data class DetailState(
     val streamPositionMs: Long = 0L,
     val isFavorite: Boolean = false,
     val isPlayed: Boolean = false,
+    val kidModeEnabled: Boolean = false,
 ) {
     // Streaming/direct-play requires Wi-Fi unless the user opted into cellular streaming;
     // library browsing and download-queueing stay gated on plain isOnline.
@@ -549,6 +551,11 @@ class DetailViewModel @Inject constructor(
                 .collect { (online, wifi, overCellular) ->
                     _state.update { it.copy(isOnline = online, isWifi = wifi, streamOverCellular = overCellular) }
                 }
+        }
+        viewModelScope.launch {
+            settings.settings.map { it.kidModeEnabled }.distinctUntilChanged().collect { kidMode ->
+                _state.update { it.copy(kidModeEnabled = kidMode) }
+            }
         }
         viewModelScope.launch {
             networkMonitor.reconnected.collect {
@@ -857,6 +864,7 @@ data class AdminState(
     val maxConcurrentDownloads: Int = 1,
     val playbackQuality: com.fuzzymistborn.jellyjar.model.PlaybackQuality = com.fuzzymistborn.jellyjar.model.PlaybackQuality.AUTO,
     val forceOfflineMode: Boolean = false,
+    val kidModeEnabled: Boolean = false,
     val isDiscovering: Boolean = false,
     val discoveredServers: List<com.fuzzymistborn.jellyjar.util.DiscoveredJellyfinServer> = emptyList(),
     val discoverError: String? = null,
@@ -910,6 +918,7 @@ class AdminViewModel @Inject constructor(
                         maxConcurrentDownloads = s.maxConcurrentDownloads,
                         playbackQuality = s.playbackQuality,
                         forceOfflineMode = s.forceOfflineMode,
+                        kidModeEnabled = s.kidModeEnabled,
                     )
                 }
                 refreshStorageInfo()
@@ -1176,6 +1185,13 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch { settings.saveGenreFilterEnabled(v) }
     }
 
+    // Enabling also applies the Kid Mode preset (see SettingsRepository.setKidMode), so the local
+    // update only covers the flag — the rest arrives via the settings collector as one emission.
+    fun setKidMode(v: Boolean) {
+        _state.update { it.copy(kidModeEnabled = v) }
+        viewModelScope.launch { settings.setKidMode(v) }
+    }
+
     fun setForceOfflineMode(v: Boolean) {
         _state.update { it.copy(forceOfflineMode = v) }
         viewModelScope.launch { settings.saveForceOfflineMode(v) }
@@ -1221,6 +1237,7 @@ data class DownloadsState(
     val storageStats: StorageStats? = null,
     val etaByJellyfinId: Map<String, Int?> = emptyMap(),
     val downloadError: String? = null,
+    val kidModeEnabled: Boolean = false,
 )
 
 @HiltViewModel
@@ -1237,7 +1254,13 @@ class DownloadsViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             settings.settings.collect { s ->
-                _state.update { it.copy(jellyfinUrl = s.jellyfinUrl, queuePaused = s.downloadQueuePaused) }
+                _state.update {
+                    it.copy(
+                        jellyfinUrl = s.jellyfinUrl,
+                        queuePaused = s.downloadQueuePaused,
+                        kidModeEnabled = s.kidModeEnabled,
+                    )
+                }
             }
         }
         viewModelScope.launch {
@@ -1459,6 +1482,7 @@ data class SeasonState(
     val downloadError: String? = null,
     val jellyfinUrl: String = "",
     val jellyfinToken: String = "",
+    val kidModeEnabled: Boolean = false,
 ) {
     val canStream: Boolean get() = isOnline && (isWifi || streamOverCellular)
 }
@@ -1485,6 +1509,11 @@ class SeasonViewModel @Inject constructor(
                 .collect { (online, wifi, overCellular) ->
                     _state.update { it.copy(isOnline = online, isWifi = wifi, streamOverCellular = overCellular) }
                 }
+        }
+        viewModelScope.launch {
+            settings.settings.map { it.kidModeEnabled }.distinctUntilChanged().collect { kidMode ->
+                _state.update { it.copy(kidModeEnabled = kidMode) }
+            }
         }
         viewModelScope.launch {
             networkMonitor.reconnected.collect {

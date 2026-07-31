@@ -270,7 +270,7 @@ private fun DetailStackedContent(
 
                         Column(modifier = Modifier.weight(1f)) {
                             TitleAndMetaRow(item, accentColor)
-                            if (!item.mediaSources.isNullOrEmpty()) {
+                            if (!item.mediaSources.isNullOrEmpty() && !state.kidModeEnabled) {
                                 Spacer(Modifier.height(Spacing.sm))
                                 TechSpecRow(item.mediaSources, accentColor)
                             }
@@ -343,7 +343,7 @@ private fun DetailTwoPaneContent(
                 )
                 Spacer(Modifier.height(Spacing.xs))
                 TitleAndMetaRow(item, accentColor, compact = true)
-                if (!item.mediaSources.isNullOrEmpty()) {
+                if (!item.mediaSources.isNullOrEmpty() && !state.kidModeEnabled) {
                     Spacer(Modifier.height(Spacing.xs))
                     TechSpecRow(item.mediaSources, accentColor)
                 }
@@ -564,7 +564,10 @@ private fun ActionButtonsSection(
         // carries a shortened label, but a column this narrow can't also fit "Download"/"Remove"
         // text without truncating to an ellipsis; the icon alone (plus contentDescription for
         // accessibility) reads fine next to the Favorite/Played icons it already sits beside.
+        // Kid Mode hides the whole download control — queueing, progress, remove and retry alike.
+        // Play/Resume and the Favorite/Played icons above stay: they're harmless and useful.
         when {
+            state.kidModeEnabled -> {}
             dl == null && state.isOnline -> SecondaryActionButton(
                 icon = Icons.Default.Download,
                 onClick = actions.onShowPresetDialog,
@@ -812,6 +815,8 @@ internal fun EpisodeRow(
     download: com.fuzzymistborn.jellyjar.data.local.DownloadEntity?,
     isOnline: Boolean,
     canStream: Boolean = isOnline,
+    // Kid Mode hides this row's download/progress/remove/retry controls, leaving Play and Resume.
+    kidMode: Boolean = false,
     onClick: () -> Unit,
     onStreamClick: ((startMs: Long) -> Unit)? = null,
     onDownloadClick: (preset: String) -> Unit,
@@ -941,6 +946,7 @@ internal fun EpisodeRow(
                         CompactActionButton(icon = Icons.Default.PlayArrow, onClick = playFromStartAction, text = "Play")
                     }
                     when {
+                        kidMode -> {}
                         download == null && isOnline -> CompactActionButton(
                             icon = Icons.Default.Download,
                             onClick = { showPresetDialog = true },
@@ -1004,6 +1010,8 @@ internal fun EpisodeThumb(
     download: com.fuzzymistborn.jellyjar.data.local.DownloadEntity?,
     isOnline: Boolean,
     canStream: Boolean = isOnline,
+    // Kid Mode hides this row's download/progress/remove/retry controls, leaving Play and Resume.
+    kidMode: Boolean = false,
     onClick: () -> Unit,
     onStreamClick: ((startMs: Long) -> Unit)? = null,
     onDownloadClick: (preset: String) -> Unit,
@@ -1125,6 +1133,7 @@ internal fun EpisodeThumb(
                 )
             }
             when {
+                kidMode -> {}
                 download == null && isOnline -> CompactActionButton(
                     icon = Icons.Default.Download,
                     onClick = { showPresetDialog = true },

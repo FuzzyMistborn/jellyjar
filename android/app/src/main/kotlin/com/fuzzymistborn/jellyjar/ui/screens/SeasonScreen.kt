@@ -190,6 +190,7 @@ fun SeasonScreen(
                                     download = epDownload,
                                     isOnline = state.isOnline,
                                     canStream = state.canStream,
+                                    kidMode = state.kidModeEnabled,
                                     onClick = { onEpisodeClick(episode.id) },
                                     onStreamClick = { startMs ->
                                         coroutineScope.launch {
@@ -216,6 +217,7 @@ fun SeasonScreen(
                             download = epDownload,
                             isOnline = state.isOnline,
                             canStream = state.canStream,
+                            kidMode = state.kidModeEnabled,
                             onClick = { onEpisodeClick(episode.id) },
                             onStreamClick = { startMs ->
                                 coroutineScope.launch {

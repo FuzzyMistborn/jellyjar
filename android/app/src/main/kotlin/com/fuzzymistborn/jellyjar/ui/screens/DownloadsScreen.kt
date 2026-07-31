@@ -27,8 +27,16 @@ fun DownloadsScreen(
     viewModel: DownloadsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val hasContent = state.active.isNotEmpty() || state.queued.isNotEmpty() ||
-        state.completed.isNotEmpty() || state.failed.isNotEmpty()
+    // Kid Mode keeps this screen as a way to *watch* what's already downloaded and nothing else:
+    // the in-progress, queue and failed sections are management surfaces a kid can't act on once
+    // their buttons are gone, so they're dropped wholesale rather than rendered inert.
+    val kidMode = state.kidModeEnabled
+    val hasContent = if (kidMode) {
+        state.completed.isNotEmpty()
+    } else {
+        state.active.isNotEmpty() || state.queued.isNotEmpty() ||
+            state.completed.isNotEmpty() || state.failed.isNotEmpty()
+    }
     var pendingDeleteId by remember { mutableStateOf<String?>(null) }
     var showDeleteAllConfirm by remember { mutableStateOf(false) }
 
@@ -41,9 +49,13 @@ fun DownloadsScreen(
                     .fillMaxWidth()
                     .statusBarsPadding()
                     .padding(horizontal = Spacing.md, vertical = Spacing.sm),
-                trailingContent = {
-                    IconButton(onClick = onStorageClick) {
-                        Icon(Icons.Default.Storage, contentDescription = "Manage Storage", tint = OnSurface)
+                // This is the only route to StorageScreen, so hiding it here is what keeps
+                // "Delete Everything" / "Delete Oldest" out of reach in Kid Mode.
+                trailingContent = if (kidMode) null else {
+                    {
+                        IconButton(onClick = onStorageClick) {
+                            Icon(Icons.Default.Storage, contentDescription = "Manage Storage", tint = OnSurface)
+                        }
                     }
                 },
             )
@@ -63,7 +75,7 @@ fun DownloadsScreen(
                     modifier = Modifier.fillMaxSize(),
                 ) {
                         // Smart storage suggestion
-                    state.storageStats?.let { stats ->
+                    if (!kidMode) state.storageStats?.let { stats ->
                         item {
                             Surface(
                                 color = Success.copy(alpha = 0.15f),
@@ -99,7 +111,7 @@ fun DownloadsScreen(
                         }
                     }
 
-                    if (state.active.isNotEmpty()) {
+                    if (state.active.isNotEmpty() && !kidMode) {
                         item {
                             SectionHeader("In Progress") {
                                 TextButton(onClick = { viewModel.cancelAllActive() }) {
@@ -121,7 +133,7 @@ fun DownloadsScreen(
                             )
                         }
                     }
-                    if (state.queued.isNotEmpty() || (state.queuePaused && state.active.isEmpty())) {
+                    if (!kidMode && (state.queued.isNotEmpty() || (state.queuePaused && state.active.isEmpty()))) {
                         item {
                             SectionHeader("Queue (${state.queued.size})") {
                                 TextButton(onClick = {
@@ -178,12 +190,14 @@ fun DownloadsScreen(
                     if (state.completed.isNotEmpty()) {
                         item {
                             SectionHeader("Available Offline") {
-                                TextButton(onClick = { showDeleteAllConfirm = true }) {
-                                    Text(
-                                        "Delete All",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = Error,
-                                    )
+                                if (!kidMode) {
+                                    TextButton(onClick = { showDeleteAllConfirm = true }) {
+                                        Text(
+                                            "Delete All",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Error,
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -193,11 +207,13 @@ fun DownloadsScreen(
                                 thumbnailUrl = entity.thumbnailUri
                                     ?: viewModel.thumbnailUrl(entity.jellyfinId),
                                 onPlay = { onPlayClick(entity.localPath, entity.jellyfinId) },
-                                onDelete = { pendingDeleteId = entity.jellyfinId },
+                                onDelete = if (kidMode) null else {
+                                    { pendingDeleteId = entity.jellyfinId }
+                                },
                             )
                         }
                     }
-                    if (state.failed.isNotEmpty()) {
+                    if (state.failed.isNotEmpty() && !kidMode) {
                         item {
                             SectionHeader("Failed") {
                                 Row {
@@ -432,7 +448,8 @@ private fun CompletedDownloadCard(
     entity: DownloadEntity,
     thumbnailUrl: String,
     onPlay: () -> Unit,
-    onDelete: () -> Unit,
+    // Null in Kid Mode — the row stays playable but loses its delete affordance.
+    onDelete: (() -> Unit)?,
 ) {
     Surface(color = SurfaceVariant, shape = RoundedCornerShape(Radius.md)) {
         Row(
@@ -496,12 +513,14 @@ private fun CompletedDownloadCard(
                         Spacer(Modifier.width(4.dp))
                         Text("Play Offline", style = MaterialTheme.typography.labelMedium)
                     }
-                    OutlinedButton(
-                        onClick = onDelete,
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
-                        contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = Spacing.sm),
-                    ) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete", modifier = Modifier.size(IconSize.sm))
+                    if (onDelete != null) {
+                        OutlinedButton(
+                            onClick = onDelete,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
+                            contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = Spacing.sm),
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete", modifier = Modifier.size(IconSize.sm))
+                        }
                     }
                 }
             }

@@ -44,6 +44,7 @@ class SettingsRepository @Inject constructor(
         val MAX_CONCURRENT_DOWNLOADS = intPreferencesKey("max_concurrent_downloads")
         val PLAYBACK_QUALITY = stringPreferencesKey("playback_quality")
         val FORCE_OFFLINE_MODE = booleanPreferencesKey("force_offline_mode")
+        val KID_MODE_ENABLED = booleanPreferencesKey("kid_mode_enabled")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { prefs ->
@@ -73,6 +74,7 @@ class SettingsRepository @Inject constructor(
                 runCatching { com.fuzzymistborn.jellyjar.model.PlaybackQuality.valueOf(name) }.getOrNull()
             } ?: com.fuzzymistborn.jellyjar.model.PlaybackQuality.AUTO,
             forceOfflineMode = prefs[Keys.FORCE_OFFLINE_MODE] ?: false,
+            kidModeEnabled = prefs[Keys.KID_MODE_ENABLED] ?: false,
         )
     }
 
@@ -176,6 +178,40 @@ class SettingsRepository @Inject constructor(
 
     suspend fun saveForceOfflineMode(enabled: Boolean) {
         context.dataStore.edit { prefs -> prefs[Keys.FORCE_OFFLINE_MODE] = enabled }
+    }
+
+    /**
+     * Turns Kid Mode on or off.
+     *
+     * Enabling also applies the preset — the toggles a kid-dedicated tablet wants — in a *single*
+     * [edit] block, so the whole change lands as one DataStore emission rather than a dozen
+     * consecutive ones each recomposing every screen that observes settings.
+     *
+     * Disabling only clears the flag; the preset is deliberately *not* reverted. The pre-Kid-Mode
+     * values aren't stored, so "restoring" them would mean guessing at defaults and silently
+     * undoing anything the user changed on purpose while Kid Mode was on.
+     */
+    suspend fun setKidMode(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.KID_MODE_ENABLED] = enabled
+            if (!enabled) return@edit
+
+            // Player: no gestures (a stray palm can't scrub or dim), no nerd overlay, no scrub previews.
+            prefs[Keys.PLAYBACK_GESTURES_ENABLED] = false
+            prefs[Keys.PLAYBACK_STATS_ENABLED] = false
+            prefs[Keys.TRICKPLAY_ENABLED] = false
+            // Browsing: fewer rows and chips to get lost in.
+            prefs[Keys.GENRE_FILTER_ENABLED] = false
+            prefs[Keys.SHOW_RECENTLY_ADDED] = false
+            prefs[Keys.SHOW_MY_LIST] = false
+            prefs[Keys.SHOW_CONTINUE_WATCHING] = true
+            // Playback: keep going without needing an adult to tap anything.
+            prefs[Keys.AUTO_PLAY_NEXT_EPISODE] = true
+            prefs[Keys.INTRO_SKIP_ENABLED] = true
+            // Network: nothing expensive happens by accident.
+            prefs[Keys.WIFI_ONLY] = true
+            prefs[Keys.STREAM_OVER_CELLULAR] = false
+        }
     }
 
     fun verifyPin(input: String, storedHash: String): Boolean =

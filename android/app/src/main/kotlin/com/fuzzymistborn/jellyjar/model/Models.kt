@@ -186,6 +186,11 @@ data class AppSettings(
     val maxConcurrentDownloads: Int = 1,
     val playbackQuality: PlaybackQuality = PlaybackQuality.AUTO,
     val forceOfflineMode: Boolean = false,
+    // Strips the UI down for a kid-dedicated tablet: hides the settings gear (long-press the
+    // "JellyJar" title instead), global search, every download/storage management control, and
+    // the tech-spec chips. It does NOT filter content — that comes from the Jellyfin account the
+    // app is signed in as (library access + MaxParentalRating are enforced server-side).
+    val kidModeEnabled: Boolean = false,
 )
 
 // Caps the negotiated streaming bitrate (server transcodes down when the source exceeds it);

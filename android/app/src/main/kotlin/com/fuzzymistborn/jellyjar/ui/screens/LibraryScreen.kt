@@ -7,8 +7,11 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.*
@@ -42,7 +45,7 @@ import com.fuzzymistborn.jellyjar.model.SortOrder
 import com.fuzzymistborn.jellyjar.ui.theme.*
 import com.fuzzymistborn.jellyjar.ui.viewmodel.LibraryViewModel
 
-@OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+@OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class, ExperimentalFoundationApi::class)
 @Composable
 fun LibraryScreen(
     onItemClick: (JellyfinItem) -> Unit,
@@ -110,6 +113,17 @@ fun LibraryScreen(
                         },
                         style = MaterialTheme.typography.headlineMedium,
                         color = OnSurface,
+                        // In Kid Mode the gear is gone, so the title is the way back to Settings —
+                        // long-press only, with no visual affordance a kid would find by tapping.
+                        modifier = if (state.kidModeEnabled) {
+                            Modifier.combinedClickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {},
+                                onLongClick = onAdminClick,
+                                onLongClickLabel = "Settings",
+                            )
+                        } else Modifier,
                     )
                 }
 
@@ -128,13 +142,15 @@ fun LibraryScreen(
                             }
                         }
                     }
-                    if (isHome) {
+                    if (isHome && !state.kidModeEnabled) {
                         IconButton(onClick = { viewModel.openGlobalSearch() }) {
                             Icon(Icons.Default.Search, contentDescription = "Search", tint = OnSurfaceMuted)
                         }
                     }
-                    IconButton(onClick = onAdminClick) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings", tint = OnSurfaceMuted)
+                    if (!state.kidModeEnabled) {
+                        IconButton(onClick = onAdminClick) {
+                            Icon(Icons.Default.Settings, contentDescription = "Settings", tint = OnSurfaceMuted)
+                        }
                     }
                 }
             }

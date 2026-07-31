@@ -15,6 +15,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
@@ -119,8 +120,8 @@ fun AdminScreen(
             .verticalScroll(rememberScrollState())
             .statusBarsPadding()
             .navigationBarsPadding()
-            .padding(Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.lg),
+            .padding(horizontal = Spacing.lg, vertical = Spacing.xl),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         // Header
         ScreenHeader(
@@ -129,9 +130,9 @@ fun AdminScreen(
         )
         Text(
             text = "Jellyfin connection, downloads, and playback preferences",
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodySmall,
             color = OnSurfaceMuted,
-            modifier = Modifier.padding(start = 56.dp, bottom = Spacing.sm),
+            modifier = Modifier.padding(start = 56.dp),
         )
 
         // ── Jellyfin Server ───────────────────────────────────────────────────
@@ -429,8 +430,7 @@ fun AdminScreen(
             }
 
             state.storageInfo?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted,
-                    modifier = Modifier.padding(horizontal = 4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
             }
 
             SettingsToggleRow(
@@ -441,21 +441,21 @@ fun AdminScreen(
             )
             SettingsToggleRow(
                 title = "Force Offline Mode",
-                subtitle = "Browse only what's downloaded, even with a working connection — useful for testing offline playback",
+                subtitle = "Browse only what's downloaded, even when online",
                 checked = state.forceOfflineMode,
                 onCheckedChange = { viewModel.setForceOfflineMode(it) },
             )
 
             // Simultaneous downloads (queue concurrency)
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Column(modifier = Modifier.weight(1f).padding(end = Spacing.sm)) {
                     Text("Simultaneous Downloads", style = MaterialTheme.typography.bodyMedium, color = OnSurface)
                     Text(
-                        "How many items transcode and download at once",
+                        "Items transcoding at once",
                         style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted,
                     )
                 }
@@ -474,76 +474,71 @@ fun AdminScreen(
         }
 
         // ── Home Screen ───────────────────────────────────────────────────────
-        SettingsCard(title = "Home Screen", icon = Icons.Default.Home) {
+        SettingsCard(title = "Home Screen", icon = Icons.Default.Home, dense = true) {
             SettingsToggleRow(
                 title = "Continue Watching",
-                subtitle = "Show the Continue Watching row",
                 checked = state.showContinueWatching,
                 onCheckedChange = { viewModel.setShowContinueWatching(it) },
             )
             SettingsToggleRow(
                 title = "Recently Added",
-                subtitle = "Show the Recently Added row",
                 checked = state.showRecentlyAdded,
                 onCheckedChange = { viewModel.setShowRecentlyAdded(it) },
             )
             SettingsToggleRow(
                 title = "My List",
-                subtitle = "Show the My List / Favorites row",
                 checked = state.showMyList,
                 onCheckedChange = { viewModel.setShowMyList(it) },
             )
             SettingsToggleRow(
                 title = "Genre Filter",
-                subtitle = "Show genre chips when browsing a library",
+                subtitle = "Genre chips when browsing a library",
                 checked = state.genreFilterEnabled,
                 onCheckedChange = { viewModel.setGenreFilterEnabled(it) },
             )
         }
 
         // ── Playback ──────────────────────────────────────────────────────────
-        SettingsCard(title = "Playback", icon = Icons.Default.PlayCircle) {
+        SettingsCard(title = "Playback", icon = Icons.Default.PlayCircle, dense = true) {
             SettingsToggleRow(
                 title = "Auto-play Next Episode",
-                subtitle = "Continue to the next episode when one finishes",
                 checked = state.autoPlayNextEpisode,
                 onCheckedChange = { viewModel.setAutoPlayNextEpisode(it) },
             )
             SettingsToggleRow(
                 title = "Playback Gestures",
-                subtitle = "Double-tap to seek 10s, swipe for brightness and volume",
+                subtitle = "Double-tap to seek, swipe for brightness and volume",
                 checked = state.playbackGesturesEnabled,
                 onCheckedChange = { viewModel.setPlaybackGesturesEnabled(it) },
             )
             SettingsToggleRow(
                 title = "Skip Intro / Credits",
-                subtitle = "Show a skip button during intros and credits",
                 checked = state.introSkipEnabled,
                 onCheckedChange = { viewModel.setIntroSkipEnabled(it) },
             )
             SettingsToggleRow(
                 title = "Scrubbing Previews",
-                subtitle = "Show thumbnail previews when seeking (streaming only)",
+                subtitle = "Thumbnails when seeking (streaming only)",
                 checked = state.trickplayEnabled,
                 onCheckedChange = { viewModel.setTrickplayEnabled(it) },
             )
             SettingsToggleRow(
                 title = "Playback Stats",
-                subtitle = "Show Direct Play / Transcoding info overlay during playback",
+                subtitle = "Direct Play / Transcoding overlay",
                 checked = state.playbackStatsEnabled,
                 onCheckedChange = { viewModel.setPlaybackStatsEnabled(it) },
             )
             SettingsToggleRow(
                 title = "Stream over Cellular",
-                subtitle = "Allow streaming/playback on mobile data (browsing always works)",
+                subtitle = "Browsing always works",
                 checked = state.streamOverCellular,
                 onCheckedChange = { viewModel.setStreamOverCellular(it) },
             )
+            HorizontalDivider(color = Background, modifier = Modifier.padding(vertical = Spacing.xs))
             Text(
                 "Streaming Quality",
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.bodyMedium,
                 color = OnSurface,
-                modifier = Modifier.padding(top = Spacing.sm),
             )
             Text(
                 "Caps the streamed bitrate and resolution; Jellyfin transcodes down when the source exceeds it. Downloads always use the preset chosen at queue time.",
@@ -552,7 +547,7 @@ fun AdminScreen(
             )
             Row(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                modifier = Modifier.padding(top = Spacing.xs),
+                modifier = Modifier.padding(top = Spacing.xs, bottom = Spacing.xs),
             ) {
                 com.fuzzymistborn.jellyjar.model.PlaybackQuality.entries.forEach { quality ->
                     FilterChip(
@@ -562,6 +557,48 @@ fun AdminScreen(
                         colors = themedChipColors(),
                     )
                 }
+            }
+        }
+
+        // ── Kid Mode ──────────────────────────────────────────────────────────
+        SettingsCard(
+            title = "Kid Mode",
+            icon = Icons.Default.ChildCare,
+            statusBadge = {
+                // Non-blocking nudge: without a PIN, PinGateScreen lets anyone straight through
+                // to Settings, so Kid Mode can be switched off by whoever finds the long-press.
+                if (state.kidModeEnabled && !state.isPinEnabled) {
+                    StatusChip(label = "Set a PIN", color = Warning)
+                }
+            },
+        ) {
+            SettingsToggleRow(
+                title = "Kid Mode",
+                subtitle = "Strip the app down for a kid's tablet",
+                checked = state.kidModeEnabled,
+                onCheckedChange = { viewModel.setKidMode(it) },
+            )
+            Text(
+                "Hides the settings gear, search, and every download and storage control, and turns " +
+                    "off player gestures, the stats overlay and scrub previews. To get back here, " +
+                    "press and hold the \"JellyJar\" title on the home screen.",
+                style = MaterialTheme.typography.bodySmall,
+                color = OnSurfaceMuted,
+            )
+            Text(
+                "Kid Mode does not filter what's in the library. Restrict library access and set a " +
+                    "maximum parental rating on the Jellyfin user this app signs in as — Jellyfin " +
+                    "enforces that on the server, so it holds no matter what the app does.",
+                style = MaterialTheme.typography.bodySmall,
+                color = OnSurfaceMuted,
+            )
+            if (state.kidModeEnabled) {
+                Text(
+                    "Turning Kid Mode off restores the hidden controls but leaves the other settings " +
+                        "where it put them — adjust them individually if you want them back.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OnSurfaceMuted,
+                )
             }
         }
 
@@ -686,11 +723,19 @@ fun AdminScreen(
 
 // ─── Shared composables ────────────────────────────────────────────────────────
 
+/**
+ * Card for server configuration and storage — roomy padding, a divider under the header.
+ *
+ * [dense] tightens the padding and drops the header divider; use it for cards that are just a
+ * list of [SettingsToggleRow]s, where the switches already delineate the rows and the extra
+ * vertical space reads as empty.
+ */
 @Composable
 private fun SettingsCard(
     title: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
     statusBadge: @Composable RowScope.() -> Unit = {},
+    dense: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Surface(
@@ -699,8 +744,11 @@ private fun SettingsCard(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
-            modifier = Modifier.padding(Spacing.lg),
-            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+            modifier = Modifier.padding(
+                horizontal = Spacing.lg,
+                vertical = if (dense) Spacing.md else Spacing.lg,
+            ),
+            verticalArrangement = Arrangement.spacedBy(if (dense) Spacing.xs else Spacing.md),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -722,7 +770,7 @@ private fun SettingsCard(
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { statusBadge() }
             }
-            HorizontalDivider(color = Background)
+            if (!dense) HorizontalDivider(color = Background)
             content()
         }
     }
@@ -743,21 +791,32 @@ private fun StatusChip(label: String, color: Color) {
     }
 }
 
+/**
+ * Compact toggle row: the whole row is the tap target, and [subtitle] is optional so a toggle
+ * whose title already says everything ("Continue Watching" under a "Home Screen" card) takes one
+ * line instead of two.
+ */
 @Composable
 private fun SettingsToggleRow(
     title: String,
-    subtitle: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    subtitle: String? = null,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.sm))
+            .clickable { onCheckedChange(!checked) }
+            .heightIn(min = 48.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier.weight(1f).padding(end = Spacing.sm)) {
             Text(title, style = MaterialTheme.typography.bodyMedium, color = OnSurface)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+            if (subtitle != null) {
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+            }
         }
         Switch(
             checked = checked,
