@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError, field_validator
+from starlette.background import BackgroundTask
 
 
 def _now_iso() -> str:
@@ -108,6 +109,9 @@ CLEANUP_INTERVAL_SECONDS = 3600
 
 # Processes currently running, keyed by job_id, so DELETE /jobs/{id} can kill an in-progress transcode.
 _active_processes: dict[str, asyncio.subprocess.Process] = {}
+# Refcounts in-flight GET /download/{job_id} streams so cleanup_loop doesn't unlink a completed
+# job's output file out from under a client that's actively reading it.
+_active_downloads: dict[str, int] = {}
 
 # Keeps strong references to transcode tasks restarted at startup (asyncio only holds weak ones).
 _resume_tasks: list[asyncio.Task] = []
@@ -177,6 +181,8 @@ async def cleanup_loop():
         for job_id, job in list(jobs.items()):
             if job["status"] != "complete":
                 continue
+            if _active_downloads.get(job_id):
+                continue  # a client is actively streaming this job's output right now
             try:
                 completed_at = _parse_ts(job["updated_at"])
             except (TypeError, ValueError):
@@ -365,6 +371,9 @@ class JobStatus(BaseModel):
     queue_position: Optional[int] = None       # 1-based position among queued (waiting) jobs
 
 
+PROBE_TIMEOUT_SECONDS = 30
+
+
 async def get_duration_us(source: str) -> Optional[float]:
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -372,7 +381,12 @@ async def get_duration_us(source: str) -> Optional[float]:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        stdout, _ = await proc.communicate()
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=PROBE_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return None
         info = json.loads(stdout)
         return float(info["format"]["duration"]) * 1_000_000
     except Exception:
@@ -399,7 +413,12 @@ async def probe_text_subtitle_count(source: str) -> int:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        stdout, _ = await proc.communicate()
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=PROBE_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return 0
         streams = json.loads(stdout).get("streams", [])
         count = 0
         for stream in streams:
@@ -555,7 +574,17 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
         _publish(job_id)
 
         subtitle_count = await probe_text_subtitle_count(source)
-        cmd = build_ffmpeg_command(source, output, preset, subtitle_count=subtitle_count)
+
+        # The job can be deleted while probing (a blocking ffprobe call with no lock held on
+        # `jobs`) — without this check ffmpeg would still start and produce an untracked file.
+        if job_id not in jobs:
+            return
+
+        # ffmpeg writes to a job-specific temp file and only the final os.replace() below makes
+        # a fully-encoded file appear at `output` — a killed/failed encode never leaves a partial
+        # or invalid file at the path other code treats as "this job's output".
+        tmp_output = output + ".part"
+        cmd = build_ffmpeg_command(source, tmp_output, preset, subtitle_count=subtitle_count)
 
         try:
             process = await asyncio.create_subprocess_exec(
@@ -572,20 +601,23 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
             _active_processes.pop(job_id, None)
 
             if job_id not in jobs:
+                Path(tmp_output).unlink(missing_ok=True)
                 return  # cancelled mid-transcode; delete_job already removed the output file
 
             if process.returncode == 0:
+                os.replace(tmp_output, output)
                 jobs[job_id]["status"] = "complete"
                 jobs[job_id]["output_path"] = output
                 jobs[job_id]["progress"] = 100.0
                 jobs[job_id]["eta_seconds"] = 0.0
             else:
                 error_text = stderr_bytes.decode(errors="replace")[-1000:]
+                Path(tmp_output).unlink(missing_ok=True)
                 if _active_encoder != "libx264":
                     # Hardware encoder failed at runtime — fall back to libx264
                     print(f"[Press] {_active_encoder} failed (rc={process.returncode}), retrying with libx264", flush=True)
                     sw_cmd = build_ffmpeg_command(
-                        source, output, preset, encoder="libx264", subtitle_count=subtitle_count
+                        source, tmp_output, preset, encoder="libx264", subtitle_count=subtitle_count
                     )
                     sw_process = await asyncio.create_subprocess_exec(
                         *sw_cmd,
@@ -601,16 +633,19 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
                     _active_processes.pop(job_id, None)
 
                     if job_id not in jobs:
+                        Path(tmp_output).unlink(missing_ok=True)
                         return  # cancelled during fallback retry
 
                     sw_stderr = sw_stderr_bytes.decode(errors="replace")[-1000:]
                     if sw_process.returncode == 0:
+                        os.replace(tmp_output, output)
                         jobs[job_id]["status"] = "complete"
                         jobs[job_id]["output_path"] = output
                         jobs[job_id]["progress"] = 100.0
                         jobs[job_id]["eta_seconds"] = 0.0
                     else:
                         print(f"[Press] libx264 fallback also failed:\n{sw_stderr}", flush=True)
+                        Path(tmp_output).unlink(missing_ok=True)
                         _fail_job(job_id, sw_stderr, output)
                 else:
                     print(f"[Press] transcode FAILED (job {job_id}, rc={process.returncode}):\n{error_text}", flush=True)
@@ -618,6 +653,7 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
 
         except Exception as e:
             _active_processes.pop(job_id, None)
+            Path(tmp_output).unlink(missing_ok=True)
             if job_id in jobs:
                 _fail_job(job_id, str(e), output)
 
@@ -804,10 +840,20 @@ async def download_file(job_id: str):
     if not output_path or not Path(output_path).exists():
         raise HTTPException(status_code=404, detail="Output file not found on disk")
 
+    _active_downloads[job_id] = _active_downloads.get(job_id, 0) + 1
+
+    def _release_download() -> None:
+        remaining = _active_downloads.get(job_id, 1) - 1
+        if remaining <= 0:
+            _active_downloads.pop(job_id, None)
+        else:
+            _active_downloads[job_id] = remaining
+
     return FileResponse(
         path=output_path,
         media_type="video/mp4",
         filename=Path(output_path).name,
+        background=BackgroundTask(_release_download),
     )
 
 

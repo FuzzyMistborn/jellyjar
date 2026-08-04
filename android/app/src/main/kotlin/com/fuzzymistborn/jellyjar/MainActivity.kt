@@ -24,7 +24,7 @@ import dagger.hilt.android.AndroidEntryPoint
 sealed class Screen(val route: String) {
     object Library : Screen("library")
     object Detail : Screen("detail/{itemId}") {
-        fun go(itemId: String) = "detail/$itemId"
+        fun go(itemId: String) = "detail/${itemId.encode()}"
     }
     object Player : Screen("player/{localPath}/{jellyfinId}?startMs={startMs}") {
         fun go(localPath: String, jellyfinId: String = "", startMs: Long = 0L) =
@@ -35,7 +35,7 @@ sealed class Screen(val route: String) {
             "stream/${streamUrl.encode()}/${jellyfinId.encode()}?startMs=$startMs"
     }
     object Season : Screen("season/{seasonId}/{seriesId}") {
-        fun go(seasonId: String, seriesId: String) = "season/$seasonId/$seriesId"
+        fun go(seasonId: String, seriesId: String) = "season/${seasonId.encode()}/${seriesId.encode()}"
     }
     object Downloads : Screen("downloads")
     object Storage : Screen("storage")
@@ -167,7 +167,7 @@ fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableSta
             route = Screen.Detail.route,
             arguments = listOf(navArgument("itemId") { type = NavType.StringType }),
         ) { backStack ->
-            val itemId = backStack.arguments?.getString("itemId") ?: return@composable
+            val itemId = backStack.arguments?.getString("itemId")?.decode() ?: return@composable
             DetailScreen(
                 itemId = itemId,
                 onPlayClick = { localPath, jellyfinId, startMs ->
@@ -195,8 +195,8 @@ fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableSta
                 navArgument("seriesId") { type = NavType.StringType },
             ),
         ) { backStack ->
-            val seasonId = backStack.arguments?.getString("seasonId") ?: return@composable
-            val seriesId = backStack.arguments?.getString("seriesId") ?: return@composable
+            val seasonId = backStack.arguments?.getString("seasonId")?.decode() ?: return@composable
+            val seriesId = backStack.arguments?.getString("seriesId")?.decode() ?: return@composable
             SeasonScreen(
                 seasonId = seasonId,
                 seriesId = seriesId,

@@ -706,6 +706,12 @@ class DownloadRepository @Inject constructor(
                     display_name = entity.title,
                 )
             )
+            // The row can be deleted while startTranscode() was in flight — an upsert here would
+            // resurrect it with a Press job the user never sees or can cancel. Kill that job instead.
+            if (downloadDao.findById(entity.jellyfinId) == null) {
+                runCatching { shimService().deleteJob(job.job_id) }
+                return@runCatching
+            }
             downloadDao.upsert(entity.copy(shimJobId = job.job_id, status = DownloadStatus.TRANSCODING.name, progress = 0f))
             WorkManager.getInstance(context).enqueueUniqueWork(
                 "download_${entity.jellyfinId}",
@@ -836,11 +842,12 @@ class DownloadRepository @Inject constructor(
                     // write is shorter, corrupting the MP4.
                     val stream = context.contentResolver.openOutputStream(doc.uri, "wt")
                         ?: error("Cannot open output stream for: ${doc.uri}")
-                    // Convert the document URI to a real file path so ExoPlayer can read it.
-                    // ContentResolver.open* on document URIs from tree access is blocked by
-                    // ExternalStorageProvider unless the URI came from ACTION_OPEN_DOCUMENT.
-                    val filePath = documentUriToFilePath(doc.uri)
-                        ?: error("Cannot resolve file path for: ${doc.uri}")
+                    // Convert the document URI to a real file path so ExoPlayer/File() can read it
+                    // directly. Only works for the "primary" (internal shared) storage volume —
+                    // SD cards and other document providers have no stable filesystem path.
+                    // ExoPlayer can still play the content:// URI directly (ContentDataSource), so
+                    // fall back to that string instead of failing the whole download.
+                    val filePath = documentUriToFilePath(doc.uri) ?: doc.uri.toString()
                     Triple(stream, filePath, doc.uri.toString())
                 } else {
                     val dir = destinationDir.ifBlank { context.filesDir.absolutePath }
@@ -871,12 +878,12 @@ class DownloadRepository @Inject constructor(
                 }
 
                 if (totalBytes > 0 && downloadedBytes != totalBytes) {
-                    File(savedPath).delete()
+                    deleteSavedOutput(savedPath, savedUri)
                     error("Download incomplete: got $downloadedBytes of $totalBytes bytes")
                 }
 
                 if (expectedSha256 != null) {
-                    val actualSha256 = File(savedPath).inputStream().use { stream ->
+                    val actualSha256 = openSavedOutput(savedPath, savedUri).use { stream ->
                         val digest = java.security.MessageDigest.getInstance("SHA-256")
                         val buffer = ByteArray(8192)
                         var read: Int
@@ -884,9 +891,17 @@ class DownloadRepository @Inject constructor(
                         digest.digest().joinToString("") { "%02x".format(it) }
                     }
                     if (!actualSha256.equals(expectedSha256, ignoreCase = true)) {
-                        File(savedPath).delete()
+                        deleteSavedOutput(savedPath, savedUri)
                         error("Downloaded file hash mismatch (integrity check failed)")
                     }
+                }
+
+                // The row can be deleted while the transfer was in flight — an upsert here would
+                // resurrect a "completed" download the user already removed, with the file it
+                // deleted still on disk under its old name.
+                if (downloadDao.findById(entity.jellyfinId) == null) {
+                    deleteSavedOutput(savedPath, savedUri)
+                    error("Download record for $jobId was deleted during transfer")
                 }
 
                 val thumbnailPath = runCatching {
@@ -906,6 +921,25 @@ class DownloadRepository @Inject constructor(
                 savedPath
             }
         }
+
+    // savedPath is a real filesystem path except on non-"primary" storage (SD cards, other
+    // document providers), where documentUriToFilePath() can't resolve one and savedPath is the
+    // content:// URI itself. These read/delete through whichever one applies.
+    private fun openSavedOutput(savedPath: String, savedUri: String?): java.io.InputStream =
+        if (savedUri != null && savedPath == savedUri) {
+            context.contentResolver.openInputStream(Uri.parse(savedUri))
+                ?: error("Cannot open input stream for: $savedUri")
+        } else {
+            File(savedPath).inputStream()
+        }
+
+    private fun deleteSavedOutput(savedPath: String, savedUri: String?) {
+        if (savedUri != null && savedPath == savedUri) {
+            DocumentFile.fromSingleUri(context, Uri.parse(savedUri))?.delete()
+        } else {
+            File(savedPath).delete()
+        }
+    }
 
     suspend fun markFailed(shimJobId: String) = withContext(Dispatchers.IO) {
         val entity = downloadDao.findByShimJobId(shimJobId) ?: return@withContext

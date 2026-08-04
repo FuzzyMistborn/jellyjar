@@ -275,14 +275,14 @@ fun PlayerScreen(
     val scrubPositionMs = remember { mutableStateOf<Long?>(null) }
     LaunchedEffect(jellyfinId) {
         // Only makes sense for streamed playback; local files have no tiles to fetch
-        if (jellyfinId != null && !localPath.startsWith("/")) {
+        if (jellyfinId != null && (localPath.startsWith("http://") || localPath.startsWith("https://"))) {
             trickplaySpec = viewModel.loadTrickplay(jellyfinId)
         }
     }
 
     // ── Codec diagnostics (Direct Play / Direct Stream / Transcoding) ────────────
     var playbackDiagnostics by remember { mutableStateOf<com.fuzzymistborn.jellyjar.data.repository.PlaybackDiagnostics?>(null) }
-    val isStreamed = jellyfinId != null && !localPath.startsWith("/")
+    val isStreamed = jellyfinId != null && (localPath.startsWith("http://") || localPath.startsWith("https://"))
     LaunchedEffect(jellyfinId) {
         // Downloaded files play straight off disk — no server negotiation happened, so there's
         // nothing to report.

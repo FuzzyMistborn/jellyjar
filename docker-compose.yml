@@ -22,7 +22,11 @@ services:
       - /mnt/Media/TV Shows:/mnt/tv:ro
       - jellyjar-output:/output
       - jellyjar-config:/config
-    # Intel / AMD GPU (VAAPI & QSV) — exposes /dev/dri/renderD128 inside container
+    # Intel / AMD GPU (VAAPI & QSV) — exposes /dev/dri/renderD128 inside container.
+    # This compose file is a reference example, not what actually runs the service — hosts
+    # without a /dev/dri device will fail to start the container with this mapping present.
+    # Comment it out (or move it to an override file) on a GPU-less host; Press falls back to
+    # libx264 software encoding automatically.
     devices:
       - /dev/dri:/dev/dri
     # NVIDIA GPU — uncomment if you have an NVIDIA card and the NVIDIA Container Toolkit installed

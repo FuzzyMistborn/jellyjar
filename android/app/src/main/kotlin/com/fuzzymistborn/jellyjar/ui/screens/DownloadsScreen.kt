@@ -60,6 +60,14 @@ fun DownloadsScreen(
                 },
             )
 
+            if (!kidMode && !notificationsPermissionGranted()) {
+                NotificationsDisabledBanner(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.xl, vertical = Spacing.sm),
+                )
+            }
+
             if (!hasContent) {
                 EmptyState(
                     icon = Icons.Default.DownloadDone,
@@ -263,6 +271,54 @@ fun DownloadsScreen(
                 onConfirm = { viewModel.deleteAllCompleted() },
                 onDismiss = { showDeleteAllConfirm = false },
             )
+        }
+    }
+}
+
+@Composable
+private fun notificationsPermissionGranted(): Boolean {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // POST_NOTIFICATIONS only exists from API 33 — below that, notifications are always allowed.
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) return true
+    return androidx.core.content.ContextCompat.checkSelfPermission(
+        context, android.Manifest.permission.POST_NOTIFICATIONS
+    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+}
+
+@Composable
+private fun NotificationsDisabledBanner(modifier: Modifier = Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Surface(
+        color = Warning.copy(alpha = 0.15f),
+        shape = RoundedCornerShape(Radius.md),
+        modifier = modifier,
+    ) {
+        Row(
+            modifier = Modifier.padding(Spacing.lg),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+        ) {
+            Icon(Icons.Default.NotificationsOff, contentDescription = null,
+                tint = Warning, modifier = Modifier.size(IconSize.md))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Notifications are off",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Warning,
+                )
+                Text(
+                    "You won't be notified when downloads finish or fail.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OnSurfaceMuted,
+                )
+            }
+            TextButton(onClick = {
+                val intent = android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                context.startActivity(intent)
+            }) {
+                Text("Settings", style = MaterialTheme.typography.labelSmall, color = Warning)
+            }
         }
     }
 }
