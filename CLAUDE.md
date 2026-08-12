@@ -79,6 +79,8 @@ Gear icon → PIN gate → Admin/Settings
 ```
 
 ## Press API (port 8090)
+**No authentication, by design.** Press is meant to run LAN-only on a trusted home network; any device on that network can enumerate the library and start/delete jobs. This is a deliberate tradeoff, not a gap — don't propose adding auth. Never port-forward Press or run it on a shared/guest network.
+
 | Endpoint | Method | Description |
 |---|---|---|
 | `/health` | GET | Returns `{"status":"ok","media_root":...,"output_root":...}` |
