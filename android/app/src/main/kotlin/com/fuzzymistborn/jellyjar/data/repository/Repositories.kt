@@ -677,11 +677,36 @@ class DownloadRepository @Inject constructor(
                 runtimeMinutes = item.runtimeMinutes,
                 type = item.type,
                 seriesName = item.seriesName,
+                seasonName = item.seasonName,
+                indexNumber = item.indexNumber,
+                parentIndexNumber = item.parentIndexNumber,
                 mediaSourcePath = mediaSourcePath,
                 queuePosition = downloadDao.maxQueuePosition() + 1,
                 segmentsJson = segments.takeIf { it.isNotEmpty() }?.let { com.google.gson.Gson().toJson(it) },
             )
             downloadDao.upsert(entity)
+        }
+    }
+
+    // Builds a Jellyfin-style relative path (subfolders + filename) under the download root:
+    //   Movies/Title (Year)/<filename>
+    //   TV Shows/Series/Season NN/<filename>
+    // Falls back to a flat Movies/ or TV Shows/ folder when the season/series metadata needed
+    // for a fuller path is missing (e.g. an episode whose series wasn't resolvable).
+    private fun downloadRelativePath(entity: DownloadEntity, filename: String): String {
+        fun sanitize(name: String) = name
+            .replace(Regex("[/\\\\:*?\"<>|]"), "_")
+            .trim()
+            .ifBlank { "Unknown" }
+
+        return if (entity.type == "Episode" && !entity.seriesName.isNullOrBlank()) {
+            val seasonFolder = entity.parentIndexNumber?.let { "Season %02d".format(it) } ?: "Season 00"
+            "TV Shows/${sanitize(entity.seriesName)}/$seasonFolder/$filename"
+        } else if (entity.type == "Episode") {
+            "TV Shows/$filename"
+        } else {
+            val yearSuffix = entity.year?.let { " ($it)" }.orEmpty()
+            "Movies/${sanitize(entity.title)}$yearSuffix/$filename"
         }
     }
 
@@ -698,6 +723,10 @@ class DownloadRepository @Inject constructor(
                 .replace(Regex("[/\\\\:*?\"<>|]"), "_")
                 .ifBlank { entity.jellyfinId }
             val filename = "${sourceName}_${entity.preset}_${entity.jellyfinId.take(8)}.mp4"
+            // Relative path under the user's chosen download root, laid out like Jellyfin's own
+            // library structure so files are browsable outside the app too, e.g.
+            // "TV Shows/Show/Season 01/..." or "Movies/Title (Year)/...".
+            val relativePath = downloadRelativePath(entity, filename)
             val job = shimService().startTranscode(
                 TranscodeRequest(
                     source_path = mediaPath,
@@ -716,7 +745,7 @@ class DownloadRepository @Inject constructor(
             WorkManager.getInstance(context).enqueueUniqueWork(
                 "download_${entity.jellyfinId}",
                 ExistingWorkPolicy.REPLACE,
-                DownloadWorker.buildRequest(job.job_id, filename, settings.currentSnapshot().wifiOnly),
+                DownloadWorker.buildRequest(job.job_id, relativePath, settings.currentSnapshot().wifiOnly),
             )
             Unit
         }.onFailure {
@@ -815,7 +844,10 @@ class DownloadRepository @Inject constructor(
     suspend fun downloadFile(
         jobId: String,
         destinationDir: String,
-        filename: String,
+        // A path relative to destinationDir — may include subfolders (e.g. the Jellyfin-style
+        // "TV Shows/Series/Season 01/file.mp4" produced by downloadRelativePath()), or just a
+        // bare filename for callers that don't need nesting.
+        relativePath: String,
         expectedSha256: String? = null,
     ): Result<String> =
         withContext(Dispatchers.IO) {
@@ -830,12 +862,21 @@ class DownloadRepository @Inject constructor(
                 var downloadedBytes = 0L
                 var lastReportedProgressInt = -1
 
+                val pathSegments = relativePath.split("/").filter { it.isNotBlank() }
+                val filename = pathSegments.lastOrNull() ?: relativePath
+                val subFolders = pathSegments.dropLast(1)
+
                 val (outputStream, savedPath, savedUri) = if (destinationDir.startsWith("content://")) {
                     val treeUri = Uri.parse(destinationDir)
-                    val tree = DocumentFile.fromTreeUri(context, treeUri)
+                    var dir = DocumentFile.fromTreeUri(context, treeUri)
                         ?: error("Cannot open tree URI: $destinationDir")
-                    val doc = tree.findFile(filename)
-                        ?: tree.createFile("video/mp4", filename)
+                    for (folder in subFolders) {
+                        dir = dir.findFile(folder)?.takeIf { it.isDirectory }
+                            ?: dir.createDirectory(folder)
+                            ?: error("Cannot create folder '$folder' in: $destinationDir")
+                    }
+                    val doc = dir.findFile(filename)
+                        ?: dir.createFile("video/mp4", filename)
                         ?: error("Cannot create file in: $destinationDir")
                     // "wt" truncates an existing file — findFile() can return one left by an
                     // interrupted attempt; plain "w" would leave stale trailing bytes if the new
@@ -851,7 +892,7 @@ class DownloadRepository @Inject constructor(
                     Triple(stream, filePath, doc.uri.toString())
                 } else {
                     val dir = destinationDir.ifBlank { context.filesDir.absolutePath }
-                    val destFile = File(dir, filename)
+                    val destFile = File(dir, relativePath)
                     destFile.parentFile?.mkdirs()
                     Triple(destFile.outputStream() as java.io.OutputStream, destFile.absolutePath, null)
                 }

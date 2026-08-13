@@ -698,9 +698,15 @@ async def _create_job(
     job_id = str(uuid.uuid4())
     # .name strips any directory components (and neutralizes an absolute override or ../
     # traversal), so a client-supplied output_filename can never write outside OUTPUT_ROOT.
-    output_filename = Path(req.output_filename or f"{source.stem}_{req.preset}.mp4").name
-    if not output_filename:
+    requested_filename = Path(req.output_filename or f"{source.stem}_{req.preset}.mp4").name
+    if not requested_filename:
         raise HTTPException(status_code=400, detail="Invalid output_filename")
+    # Prefixed with job_id so two jobs can never resolve to the same on-disk path — Press has no
+    # auth (LAN-only by design), so any client can pick output_filename, and a collision would
+    # let one job's os.replace() silently clobber another job's completed/in-flight output out
+    # from under a concurrent /download/{id} stream. The caller's requested name is kept as the
+    # download's Content-Disposition filename (see download_file) so this is invisible to them.
+    output_filename = f"{job_id}_{requested_filename}"
     output = str(Path(OUTPUT_ROOT) / output_filename)
 
     duration_us = await get_duration_us(str(source))
@@ -713,6 +719,7 @@ async def _create_job(
         "source_path": str(source),
         "preset": req.preset,
         "output_path": output,
+        "download_filename": requested_filename,
         "error": None,
         "created_at": now,
         "updated_at": now,
@@ -738,6 +745,7 @@ def _failed_job_status(req: TranscodeRequest, detail: str) -> JobStatus:
         "status": "failed",
         "progress": None,
         "output_path": None,
+        "download_filename": None,
         "error": detail,
         "created_at": now,
         "updated_at": now,
@@ -852,7 +860,10 @@ async def download_file(job_id: str):
     return FileResponse(
         path=output_path,
         media_type="video/mp4",
-        filename=Path(output_path).name,
+        # download_filename is the caller's requested name; the on-disk name is job_id-prefixed
+        # for uniqueness (see _create_job) and shouldn't leak into what the client saves as.
+        # Legacy jobs saved before this field existed fall back to the on-disk name.
+        filename=job.get("download_filename") or Path(output_path).name,
         background=BackgroundTask(_release_download),
     )
 

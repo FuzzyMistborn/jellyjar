@@ -22,6 +22,11 @@ data class DownloadEntity(
     val runtimeMinutes: Int?,
     val type: String,               // Movie / Episode
     val seriesName: String?,
+    // Season/episode numbering, mirroring CachedItemEntity — needed to lay downloads out in a
+    // Jellyfin-style folder tree (TV Shows/Series/Season NN/...) instead of one flat folder.
+    val seasonName: String? = null,
+    val indexNumber: Int? = null,
+    val parentIndexNumber: Int? = null,
     val mediaSourcePath: String? = null,
     val playbackPositionMs: Long = 0,
     // Order within the local download queue; only meaningful while status = QUEUED.
@@ -232,7 +237,7 @@ interface CachedItemDao {
 
 @Database(
     entities = [DownloadEntity::class, CachedItemEntity::class, PlaybackPositionEntity::class, FavoriteEntity::class],
-    version = 8,
+    version = 9,
     // Exported to app/schemas (see room.schemaLocation in build.gradle.kts) so a real migration
     // can be written and reviewed once the app is distributed — see the destructive-migration
     // note in AppModule.

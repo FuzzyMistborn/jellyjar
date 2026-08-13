@@ -30,6 +30,8 @@ class DownloadWorker @AssistedInject constructor(
 
     companion object {
         const val KEY_JOB_ID = "shim_job_id"
+        // Value may include subfolders (e.g. "TV Shows/Series/Season 01/file.mp4") — see
+        // DownloadRepository.downloadRelativePath()/downloadFile().
         const val KEY_FILENAME = "filename"
         const val CHANNEL_ID = "jellyjar_downloads"
         const val NOTIFICATION_GROUP = "jellyjar_downloads_group"
