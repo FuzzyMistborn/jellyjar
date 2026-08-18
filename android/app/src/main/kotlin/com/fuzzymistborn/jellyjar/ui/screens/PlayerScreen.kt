@@ -70,6 +70,10 @@ private const val EXTERNAL_SUBTITLE_ID_PREFIX = "jf-sub-"
 // Countdown used only when the duration is unknown, so no real remaining time can be shown.
 private const val AUTO_PLAY_FALLBACK_SECONDS = 10
 
+// Stopping at or past this fraction of the runtime counts as "finished" for resume-position
+// purposes, matching Jellyfin server's own default MaxResumePct (90%).
+private const val PLAYED_THRESHOLD = 0.90
+
 @Composable
 fun PlayerScreen(
     localPath: String,
@@ -147,8 +151,21 @@ fun PlayerScreen(
     DisposableEffect(Unit) {
         onDispose {
             if (jellyfinId != null) {
-                viewModel.savePosition(jellyfinId, player.currentPosition)
-                viewModel.reportStopped(jellyfinId, player.currentPosition, mediaSourceId)
+                // Playback ran to the end, or stopped close enough to it: don't persist a resume
+                // position sitting at (or near) the full duration, which would otherwise leave the
+                // Resume button showing at ~90-100% instead of disappearing once the item is
+                // watched. Mirrors Jellyfin server's own default MaxResumePct (90%) for
+                // PlaybackStopped reports, which already marks the item played server-side at that
+                // point — this just keeps the locally-cached download position in sync with it.
+                val duration = player.duration
+                val finished = player.playbackState == Player.STATE_ENDED ||
+                    (duration > 0 && player.currentPosition >= duration * PLAYED_THRESHOLD)
+                if (finished) {
+                    viewModel.markFinished(jellyfinId, mediaSourceId)
+                } else {
+                    viewModel.savePosition(jellyfinId, player.currentPosition)
+                    viewModel.reportStopped(jellyfinId, player.currentPosition, mediaSourceId)
+                }
             }
             player.release()
         }

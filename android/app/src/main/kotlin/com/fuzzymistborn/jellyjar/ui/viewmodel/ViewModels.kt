@@ -71,7 +71,9 @@ data class LibraryState(
             SortOrder.YEAR_ASC -> result.sortedBy { it.year ?: 0 }
             SortOrder.YEAR_DESC -> result.sortedByDescending { it.year ?: 0 }
             SortOrder.RATING_DESC -> result.sortedByDescending { it.communityRating ?: 0f }
-            SortOrder.UNWATCHED_FIRST -> result.sortedBy { it.userData?.played == true }
+            // Filters out watched items entirely rather than just sorting them last — the chip
+            // is labeled "Unwatched", which reads as a filter, not a sort.
+            SortOrder.UNWATCHED_FIRST -> result.filter { it.userData?.played != true }
         }
         return result
     }
@@ -1890,6 +1892,20 @@ class PlayerViewModel @Inject constructor(
     fun reportStopped(jellyfinId: String, positionMs: Long, mediaSourceId: String? = null) {
         detachedScope.launch {
             jellyfinRepo.reportPlaybackStopped(jellyfinId, positionMs, mediaSourceId)
+        }
+    }
+
+    // Called instead of reportStopped()/savePosition() when playback actually ran to the end
+    // (Player.STATE_ENDED) rather than being merely paused/backed-out mid-way. Reports position 0
+    // so the item doesn't linger with a near-100% resume position — the server marks watched items
+    // played on its own, but doesn't always zero PlaybackPositionTicks in the same response, and the
+    // local download's cached playbackPositionMs never gets touched by the server at all.
+    fun markFinished(jellyfinId: String, mediaSourceId: String? = null) {
+        detachedScope.launch {
+            downloadRepo.updatePlaybackPosition(jellyfinId, 0L)
+            downloadRepo.updatePlayed(jellyfinId, true)
+            jellyfinRepo.reportPlaybackStopped(jellyfinId, 0L, mediaSourceId)
+            jellyfinRepo.markPlayed(jellyfinId)
         }
     }
 }
