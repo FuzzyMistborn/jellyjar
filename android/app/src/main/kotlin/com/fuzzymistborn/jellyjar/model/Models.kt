@@ -43,7 +43,20 @@ data class MediaSource(
     @SerializedName("Size") val size: Long?,
     @SerializedName("Container") val container: String?,
     @SerializedName("MediaStreams") val mediaStreams: List<MediaStream>?,
-)
+) {
+    val audioStreamCount: Int
+        get() = mediaStreams?.count { it.type == "Audio" } ?: 0
+}
+
+// Some items (dual-audio releases stored as separate physical files, "alternate versions", a
+// remux alongside a smaller re-encode, etc.) expose more than one MediaSource. Every download
+// call site used to take mediaSources.firstOrNull() unconditionally — Jellyfin doesn't guarantee
+// that index 0 is the richest one, so a download could silently end up pointed at a source with
+// fewer audio tracks than a sibling source for the same item. Press faithfully muxes every audio
+// track *of whichever source it's handed*, so the fix belongs here, not in Press. Ties keep
+// server order.
+fun List<MediaSource>?.richestAudioSource(): MediaSource? =
+    this?.maxByOrNull { it.audioStreamCount }
 
 // A single stream within a MediaSource — Jellyfin returns one flat list per source with a
 // Type discriminator ("Video"/"Audio"/"Subtitle"), not separate video/audio arrays.

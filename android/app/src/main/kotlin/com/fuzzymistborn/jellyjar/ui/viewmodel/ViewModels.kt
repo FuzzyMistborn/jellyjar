@@ -650,7 +650,7 @@ class DetailViewModel @Inject constructor(
     }
 
     fun queueEpisodeDownload(episode: JellyfinItem, preset: String) = viewModelScope.launch {
-        val mediaPath = episode.mediaSources?.firstOrNull()?.path ?: return@launch
+        val mediaPath = episode.mediaSources.richestAudioSource()?.path ?: return@launch
         downloadRepo.queueTranscode(episode, preset, mediaPath).onFailure {
             _state.update { s -> s.copy(downloadError = "Couldn't start download: ${it.message ?: "unknown error"}") }
         }
@@ -663,7 +663,7 @@ class DetailViewModel @Inject constructor(
             val episodes = response.Items
             var failCount = 0
             episodes.forEachIndexed { idx, episode ->
-                val mediaPath = episode.mediaSources?.firstOrNull()?.path ?: return@forEachIndexed
+                val mediaPath = episode.mediaSources.richestAudioSource()?.path ?: return@forEachIndexed
                 downloadRepo.queueTranscode(episode, preset, mediaPath).onFailure { failCount++ }
                 val progress = ((idx + 1).toFloat() / episodes.size) * 100f
                 _state.update { it.copy(seasonDownloadProgress = it.seasonDownloadProgress + (seasonId to progress)) }
@@ -777,7 +777,7 @@ class DetailViewModel @Inject constructor(
 
     fun queueDownload(preset: String) = viewModelScope.launch {
         val item = _state.value.item ?: return@launch
-        val mediaPath = item.mediaSources?.firstOrNull()?.path ?: return@launch
+        val mediaPath = item.mediaSources.richestAudioSource()?.path ?: return@launch
         downloadRepo.queueTranscode(item, preset, mediaPath).onFailure {
             _state.update { s -> s.copy(downloadError = "Couldn't start download: ${it.message ?: "unknown error"}") }
         }
@@ -1598,7 +1598,7 @@ class SeasonViewModel @Inject constructor(
     }
 
     fun queueEpisodeDownload(episode: JellyfinItem, preset: String) = viewModelScope.launch {
-        val path = episode.mediaSources?.firstOrNull()?.path ?: return@launch
+        val path = episode.mediaSources.richestAudioSource()?.path ?: return@launch
         downloadRepo.queueTranscode(episode, preset, path).onFailure {
             _state.update { s -> s.copy(downloadError = "Couldn't start download: ${it.message ?: "unknown error"}") }
         }
@@ -1626,7 +1626,7 @@ class SeasonViewModel @Inject constructor(
                 dl == null || dl.status == DownloadStatus.FAILED.name
             }
             .forEach { ep ->
-                ep.mediaSources?.firstOrNull()?.path?.let { path ->
+                ep.mediaSources.richestAudioSource()?.path?.let { path ->
                     downloadRepo.queueTranscode(ep, preset, path).onFailure { failCount++ }
                 }
             }
@@ -1643,7 +1643,7 @@ class SeasonViewModel @Inject constructor(
             }
             .take(n)
             .forEach { ep ->
-                ep.mediaSources?.firstOrNull()?.path?.let { path ->
+                ep.mediaSources.richestAudioSource()?.path?.let { path ->
                     downloadRepo.queueTranscode(ep, preset, path).onFailure { failCount++ }
                 }
             }

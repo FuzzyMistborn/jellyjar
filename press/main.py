@@ -406,10 +406,25 @@ async def probe_text_subtitle_count(source: str) -> int:
     within the subtitle streams only, in file order. Any image-based subtitle stream truncates
     the run: mapping past it would renumber the remaining picks onto the wrong streams.
     """
+    count, _ = await probe_subtitle_plan(source)
+    return count
+
+
+async def probe_subtitle_plan(source: str) -> tuple[int, list[int]]:
+    """Leading text-subtitle count plus which of those (by output index) are forced.
+
+    Re-encoding SRT -> mov_text doesn't reliably carry the source's `forced`/`default`
+    disposition through to the output track on its own — without it, nothing tells the player
+    to auto-select a forced track (e.g. the "translate the aliens" captions), so it silently
+    plays with no subtitles even though the track exists in the file. The forced index is
+    re-applied explicitly via `-disposition:s:N forced` in build_ffmpeg_command.
+    """
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffprobe", "-v", "quiet", "-print_format", "json",
-            "-select_streams", "s", "-show_entries", "stream=codec_name", source,
+            "-select_streams", "s",
+            "-show_entries", "stream=codec_name:stream_disposition=forced",
+            source,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -418,16 +433,53 @@ async def probe_text_subtitle_count(source: str) -> int:
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
-            return 0
+            return 0, []
         streams = json.loads(stdout).get("streams", [])
         count = 0
+        forced_indices: list[int] = []
         for stream in streams:
             if stream.get("codec_name") not in TEXT_SUBTITLE_CODECS:
                 break
+            if stream.get("disposition", {}).get("forced") == 1:
+                forced_indices.append(count)
             count += 1
-        return count
+        return count, forced_indices
     except Exception:
-        return 0
+        return 0, []
+
+
+async def probe_default_audio_index(source: str) -> int | None:
+    """Which audio stream (0-based, among audio streams only) is flagged `default` in the source.
+
+    `-map 0:a?` keeps every audio stream in source order, so this index lines up directly with
+    the output stream's `-disposition:a:N`. Returns None if nothing is flagged (nothing to
+    override — ffmpeg/the player's own fallback applies) or the source has only one audio
+    stream (nothing to distinguish).
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "-select_streams", "a",
+            "-show_entries", "stream_disposition=default",
+            source,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=PROBE_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return None
+        streams = json.loads(stdout).get("streams", [])
+        if len(streams) <= 1:
+            return None
+        for index, stream in enumerate(streams):
+            if stream.get("disposition", {}).get("default") == 1:
+                return index
+        return None
+    except Exception:
+        return None
 
 
 def build_ffmpeg_command(
@@ -436,6 +488,8 @@ def build_ffmpeg_command(
     preset: dict,
     encoder: str | None = None,
     subtitle_count: int = 0,
+    forced_subtitle_indices: list[int] | None = None,
+    default_audio_index: int | None = None,
 ) -> list[str]:
     enc = encoder if encoder is not None else _active_encoder
     scale = preset["scale"]
@@ -451,8 +505,25 @@ def build_ffmpeg_command(
         stream_map += ["-map", f"0:s:{index}"]
 
     common_audio = ["-c:a", "aac", "-b:a", preset["audio_bitrate"]]
+    # Re-encoding (not stream-copying) audio doesn't reliably carry the source's `default`
+    # disposition through to the output track. The player has no configured preferred-audio-
+    # language, so with nothing marked default it just falls back to output track 0 — if the
+    # source's default/preferred track (e.g. English, dubbed after the original-language track)
+    # isn't first in file order, downloaded playback silently starts on the wrong language even
+    # though every track made it into the file. `-map 0:a?` preserves source order, so output
+    # audio index N is source audio stream N — stamp the disposition back explicitly rather than
+    # relying on ffmpeg to infer it, mirroring the same fix for forced subtitles below.
+    if default_audio_index is not None:
+        common_audio += [f"-disposition:a:{default_audio_index}", "default"]
     if subtitle_count:
         common_audio += ["-c:s", "mov_text"]
+        # Re-encoding SRT -> mov_text doesn't reliably preserve the source's `forced`
+        # disposition on its own, so a forced track (e.g. "aliens speaking" captions) can end
+        # up in the file but never auto-selected by the player. Stamp it back on explicitly,
+        # per output subtitle index (matches the -map order above, so index N here is the same
+        # stream as -map 0:s:N).
+        for index in forced_subtitle_indices or []:
+            common_audio += [f"-disposition:s:{index}", "forced"]
     common_audio += ["-movflags", "+faststart", "-progress", "pipe:1"]
 
     if enc == "h264_vaapi":
@@ -573,7 +644,8 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
         _save_jobs()
         _publish(job_id)
 
-        subtitle_count = await probe_text_subtitle_count(source)
+        subtitle_count, forced_subtitle_indices = await probe_subtitle_plan(source)
+        default_audio_index = await probe_default_audio_index(source)
 
         # The job can be deleted while probing (a blocking ffprobe call with no lock held on
         # `jobs`) — without this check ffmpeg would still start and produce an untracked file.
@@ -584,7 +656,11 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
         # a fully-encoded file appear at `output` — a killed/failed encode never leaves a partial
         # or invalid file at the path other code treats as "this job's output".
         tmp_output = output + ".part"
-        cmd = build_ffmpeg_command(source, tmp_output, preset, subtitle_count=subtitle_count)
+        cmd = build_ffmpeg_command(
+            source, tmp_output, preset,
+            subtitle_count=subtitle_count, forced_subtitle_indices=forced_subtitle_indices,
+            default_audio_index=default_audio_index,
+        )
 
         try:
             process = await asyncio.create_subprocess_exec(
@@ -617,7 +693,9 @@ async def run_transcode(job_id: str, source: str, output: str, preset: dict, dur
                     # Hardware encoder failed at runtime — fall back to libx264
                     print(f"[Press] {_active_encoder} failed (rc={process.returncode}), retrying with libx264", flush=True)
                     sw_cmd = build_ffmpeg_command(
-                        source, tmp_output, preset, encoder="libx264", subtitle_count=subtitle_count
+                        source, tmp_output, preset, encoder="libx264",
+                        subtitle_count=subtitle_count, forced_subtitle_indices=forced_subtitle_indices,
+                        default_audio_index=default_audio_index,
                     )
                     sw_process = await asyncio.create_subprocess_exec(
                         *sw_cmd,
