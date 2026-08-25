@@ -524,7 +524,11 @@ def build_ffmpeg_command(
         # stream as -map 0:s:N).
         for index in forced_subtitle_indices or []:
             common_audio += [f"-disposition:s:{index}", "forced"]
-    common_audio += ["-movflags", "+faststart", "-progress", "pipe:1"]
+    # The temp file is always "<...>.mp4.part" (see run_transcode) so the finished encode can be
+    # atomically renamed into place — but ffmpeg picks a muxer from the filename's last
+    # extension, and ".part" isn't one it knows. Forcing the container explicitly means output
+    # format selection no longer depends on what the temp filename happens to end in.
+    common_audio += ["-f", "mp4", "-movflags", "+faststart", "-progress", "pipe:1"]
 
     if enc == "h264_vaapi":
         return [
