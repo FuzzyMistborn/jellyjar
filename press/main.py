@@ -6,14 +6,17 @@ import json
 import logging
 import re
 import shutil
+import socket
 import subprocess
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+import httpx
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError, field_validator
 from starlette.background import BackgroundTask
@@ -100,8 +103,32 @@ async def detect_encoder() -> str:
     return "libx264"
 
 
-MAX_WORKERS = max(1, int(os.environ.get("MAX_WORKERS", "1")))
-_worker_semaphore: asyncio.Semaphore
+# standalone (default): one container does everything, exactly as before.
+# coordinator: same as standalone, but also hands queued jobs to remote `worker` containers.
+# worker: no API of its own — polls a coordinator for jobs and runs ffmpeg on this host's hardware.
+ROLE = os.environ.get("PRESS_ROLE", "standalone").strip().lower()
+if ROLE not in ("standalone", "coordinator", "worker"):
+    raise RuntimeError(f"PRESS_ROLE must be standalone, coordinator or worker (got {ROLE!r})")
+
+# Concurrent local ffmpeg slots. A coordinator may set 0 to dispatch only and leave all the
+# encoding to workers; everywhere else at least one slot is needed for anything to run.
+MAX_WORKERS = max(0 if ROLE == "coordinator" else 1, int(os.environ.get("MAX_WORKERS", "1")))
+
+LOCAL_WORKER_ID = "local"
+# A remote worker's claim on a job lapses if it stops heartbeating for this long; the job is
+# then re-queued for someone else. Also how long an idle worker stays listed as alive (x2).
+LEASE_SECONDS = float(os.environ.get("WORKER_LEASE_SECONDS", "30"))
+LEASE_CHECK_SECONDS = 5
+# A job whose worker vanishes this many times is failed rather than re-queued forever (e.g. a
+# source that OOM-kills every worker that touches it).
+MAX_JOB_ATTEMPTS = 3
+
+# Worker-role settings.
+COORDINATOR_URL = os.environ.get("COORDINATOR_URL", "").strip().rstrip("/")
+WORKER_NAME = os.environ.get("WORKER_NAME", "").strip() or socket.gethostname()
+WORKER_ID = str(uuid.uuid4())
+WORKER_HEARTBEAT_SECONDS = float(os.environ.get("WORKER_HEARTBEAT_SECONDS", "2"))
+WORKER_POLL_SECONDS = float(os.environ.get("WORKER_POLL_SECONDS", "3"))
 
 # Days a completed job's output is kept before automatic cleanup. 0 (default) disables cleanup.
 CLEANUP_AFTER_DAYS = float(os.environ.get("CLEANUP_AFTER_DAYS", "0"))
@@ -113,8 +140,20 @@ _active_processes: dict[str, asyncio.subprocess.Process] = {}
 # job's output file out from under a client that's actively reading it.
 _active_downloads: dict[str, int] = {}
 
-# Keeps strong references to transcode tasks restarted at startup (asyncio only holds weak ones).
-_resume_tasks: list[asyncio.Task] = []
+# Keeps strong references to background tasks (asyncio only holds weak ones).
+_bg_tasks: set[asyncio.Task] = set()
+
+# Set whenever a job is queued so idle local slots pick it up immediately instead of on their
+# next poll.
+_queue_event = asyncio.Event()
+
+# Remote workers seen recently, keyed by worker_id. In-memory only: workers re-announce
+# themselves on every claim, so nothing needs to survive a coordinator restart.
+_workers: dict[str, dict] = {}
+# Remote claims are held off briefly after startup so a worker still encoding a job from before
+# a coordinator restart is told to stop (its claim id is stale) before anyone else is handed
+# that job and starts writing the same .part file.
+_remote_claims_open_at = 0.0
 
 # Per-job SSE subscribers, so /jobs/{id}/stream can push updates the moment a job changes
 # instead of clients polling on a timer.
@@ -141,7 +180,11 @@ def _fail_job(job_id: str, error: str, output: str | None) -> None:
 
 
 async def resume_interrupted_jobs():
-    """Restart transcodes that were queued/running when the service last stopped."""
+    """Check jobs that were queued/running when the service last stopped.
+
+    load_jobs() has already put them back in the queue, and the local slots / workers pick them
+    up from there. This only refreshes durations and fails the ones that can no longer run.
+    """
     changed = 0
     resumed = 0
     for job in list(jobs.values()):
@@ -162,12 +205,9 @@ async def resume_interrupted_jobs():
             continue
         duration_us = await get_duration_us(source)
         job["duration_seconds"] = (duration_us / 1_000_000) if duration_us else None
-        _resume_tasks.append(asyncio.create_task(
-            run_transcode(job["job_id"], source, job["output_path"], PRESETS[preset_name], duration_us)
-        ))
         resumed += 1
     if changed:
-        print(f"[Press] Restarted {resumed} interrupted transcode job(s)", flush=True)
+        print(f"[Press] Re-queued {resumed} interrupted transcode job(s)", flush=True)
         _save_jobs()
 
 
@@ -201,21 +241,34 @@ async def cleanup_loop():
 
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
-    global _active_encoder, _worker_semaphore
-    _worker_semaphore = asyncio.Semaphore(MAX_WORKERS)
+    global _active_encoder, _remote_claims_open_at
     forced = os.environ.get("ENCODER", "").strip()
     if forced:
         print(f"[Press] Encoder forced via env: {forced}", flush=True)
         _active_encoder = forced
     else:
         _active_encoder = await detect_encoder()
-    print(f"[Press] Max concurrent transcode workers: {MAX_WORKERS}", flush=True)
+
+    if ROLE == "worker":
+        if not COORDINATOR_URL:
+            raise RuntimeError("COORDINATOR_URL must be set when PRESS_ROLE=worker")
+        print(f"[Press] Worker '{WORKER_NAME}' -> {COORDINATOR_URL} "
+              f"({MAX_WORKERS} slot(s), encoder {_active_encoder})", flush=True)
+        worker_task = asyncio.create_task(run_worker())
+        yield
+        worker_task.cancel()
+        return
+
+    print(f"[Press] Role: {ROLE}; local transcode slots: {MAX_WORKERS}", flush=True)
+    _remote_claims_open_at = time.monotonic() + min(LEASE_SECONDS, 15)
     await resume_interrupted_jobs()
     if CLEANUP_AFTER_DAYS > 0:
         print(f"[Press] Output cleanup: jobs older than {CLEANUP_AFTER_DAYS} day(s) will be removed", flush=True)
-    cleanup_task = asyncio.create_task(cleanup_loop())
+    tasks = [asyncio.create_task(cleanup_loop()), asyncio.create_task(lease_loop())]
+    tasks += [asyncio.create_task(local_slot()) for _ in range(MAX_WORKERS)]
     yield
-    cleanup_task.cancel()
+    for task in tasks:
+        task.cancel()
 
 
 app = FastAPI(title="JellyJar Press", version=PRESS_VERSION, lifespan=lifespan)
@@ -333,6 +386,9 @@ def load_jobs() -> dict:
                 job["fps"] = None
                 job["speed"] = None
                 job["eta_seconds"] = None
+                # Any worker still encoding this holds a claim that's now stale.
+                for key in ("worker_id", "worker", "claim_id", "lease_expires_at", "finalizing"):
+                    job.pop(key, None)
             else:
                 job["status"] = "failed"
                 job["error"] = "Interrupted by service restart"
@@ -369,6 +425,7 @@ class JobStatus(BaseModel):
     speed: Optional[float] = None              # ffmpeg encode speed, e.g. 2.5 = 2.5x realtime
     eta_seconds: Optional[float] = None        # estimated time remaining for this job
     queue_position: Optional[int] = None       # 1-based position among queued (waiting) jobs
+    worker: Optional[str] = None               # which host is (or last was) encoding this job
 
 
 PROBE_TIMEOUT_SECONDS = 30
@@ -594,15 +651,29 @@ async def _drain_stderr(process: asyncio.subprocess.Process) -> bytes:
     return tail
 
 
-async def stream_progress(process: asyncio.subprocess.Process, job_id: str, duration_us: Optional[float]) -> None:
-    """Read ffmpeg's `-progress pipe:1` output and update progress/fps/speed/eta on the job."""
+ProgressCallback = Any  # Callable[[float, Optional[float], Optional[float], Optional[float]], None]
+
+
+async def stream_progress(
+    process: asyncio.subprocess.Process,
+    duration_us: Optional[float],
+    on_progress: ProgressCallback,
+    is_cancelled: Any,
+) -> None:
+    """Read ffmpeg's `-progress pipe:1` output and report progress/fps/speed/eta via on_progress."""
     current_us = None
+    fps = None
+    speed = None
     while True:
         line = await process.stdout.readline()
         if not line:
             break
-        if job_id not in jobs:
-            break  # job was cancelled/deleted mid-transcode
+        if is_cancelled():
+            # Job was deleted mid-transcode. Whoever cancelled normally kills ffmpeg too, but a
+            # stopped progress reader with a live process would otherwise run to completion.
+            if process.returncode is None:
+                process.kill()
+            break
 
         decoded = line.decode().strip()
 
@@ -615,137 +686,436 @@ async def stream_progress(process: asyncio.subprocess.Process, job_id: str, dura
                 pass
         elif decoded.startswith("fps="):
             try:
-                jobs[job_id]["fps"] = float(decoded.split("=")[1])
+                fps = float(decoded.split("=")[1])
             except ValueError:
                 pass
         elif decoded.startswith("speed="):
             raw = decoded.split("=")[1].strip().rstrip("x")
             try:
-                jobs[job_id]["speed"] = float(raw) if raw else None
+                speed = float(raw) if raw else None
             except ValueError:
-                jobs[job_id]["speed"] = None
+                speed = None
 
         if duration_us and current_us and duration_us > 0:
-            progress = min((current_us / duration_us) * 100, 100)
-            jobs[job_id]["progress"] = round(progress, 1)
-
-            speed = jobs[job_id].get("speed")
+            progress = round(min((current_us / duration_us) * 100, 100), 1)
+            eta = None
             if speed and speed > 0:
                 remaining_us = max(duration_us - current_us, 0)
-                jobs[job_id]["eta_seconds"] = round(remaining_us / 1_000_000 / speed, 1)
-
-            jobs[job_id]["updated_at"] = _now_iso()
-            _publish(job_id)
+                eta = round(remaining_us / 1_000_000 / speed, 1)
+            on_progress(progress, fps, speed, eta)
 
 
-async def run_transcode(job_id: str, source: str, output: str, preset: dict, duration_us: Optional[float]):
-    async with _worker_semaphore:
-        if job_id not in jobs:
-            return  # cancelled while queued, before it got a chance to start
-
-        jobs[job_id]["status"] = "running"
-        jobs[job_id]["updated_at"] = _now_iso()
-        _save_jobs()
-        _publish(job_id)
-
-        subtitle_count, forced_subtitle_indices = await probe_subtitle_plan(source)
-        default_audio_index = await probe_default_audio_index(source)
-
-        # The job can be deleted while probing (a blocking ffprobe call with no lock held on
-        # `jobs`) — without this check ffmpeg would still start and produce an untracked file.
-        if job_id not in jobs:
-            return
-
-        # ffmpeg writes to a job-specific temp file and only the final os.replace() below makes
-        # a fully-encoded file appear at `output` — a killed/failed encode never leaves a partial
-        # or invalid file at the path other code treats as "this job's output".
-        tmp_output = output + ".part"
-        cmd = build_ffmpeg_command(
-            source, tmp_output, preset,
-            subtitle_count=subtitle_count, forced_subtitle_indices=forced_subtitle_indices,
-            default_audio_index=default_audio_index,
+async def _run_ffmpeg_once(
+    cmd: list[str],
+    duration_us: Optional[float],
+    on_progress: ProgressCallback,
+    is_cancelled: Any,
+    on_process: Any,
+) -> tuple[int, str]:
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    on_process(process)
+    try:
+        _, stderr_bytes = await asyncio.gather(
+            stream_progress(process, duration_us, on_progress, is_cancelled),
+            _drain_stderr(process),
         )
+        await process.wait()
+    finally:
+        on_process(None)
+    return process.returncode, stderr_bytes.decode(errors="replace")[-1000:]
 
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _active_processes[job_id] = process
-            _, stderr_bytes = await asyncio.gather(
-                stream_progress(process, job_id, duration_us),
-                _drain_stderr(process),
-            )
-            await process.wait()
-            _active_processes.pop(job_id, None)
 
-            if job_id not in jobs:
-                Path(tmp_output).unlink(missing_ok=True)
-                return  # cancelled mid-transcode; delete_job already removed the output file
+async def execute_ffmpeg(
+    label: str,
+    source: str,
+    output: str,
+    preset: dict,
+    duration_us: Optional[float],
+    on_progress: ProgressCallback,
+    is_cancelled: Any,
+    on_process: Any,
+) -> tuple[str, Optional[str]]:
+    """Probe, encode (with the hardware->libx264 fallback) and move the result into place.
 
-            if process.returncode == 0:
-                os.replace(tmp_output, output)
-                jobs[job_id]["status"] = "complete"
-                jobs[job_id]["output_path"] = output
-                jobs[job_id]["progress"] = 100.0
-                jobs[job_id]["eta_seconds"] = 0.0
-            else:
-                error_text = stderr_bytes.decode(errors="replace")[-1000:]
-                Path(tmp_output).unlink(missing_ok=True)
-                if _active_encoder != "libx264":
-                    # Hardware encoder failed at runtime — fall back to libx264
-                    print(f"[Press] {_active_encoder} failed (rc={process.returncode}), retrying with libx264", flush=True)
-                    sw_cmd = build_ffmpeg_command(
-                        source, tmp_output, preset, encoder="libx264",
-                        subtitle_count=subtitle_count, forced_subtitle_indices=forced_subtitle_indices,
-                        default_audio_index=default_audio_index,
-                    )
-                    sw_process = await asyncio.create_subprocess_exec(
-                        *sw_cmd,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    _active_processes[job_id] = sw_process
-                    _, sw_stderr_bytes = await asyncio.gather(
-                        stream_progress(sw_process, job_id, duration_us),
-                        _drain_stderr(sw_process),
-                    )
-                    await sw_process.wait()
-                    _active_processes.pop(job_id, None)
+    Shared by the local slots and by remote workers, so an encode behaves identically wherever
+    it runs. Returns ("ok" | "failed" | "cancelled", error). On "ok" the finished file is at
+    `output`; in every other case nothing is left behind at `output` or its .part temp file.
+    """
+    subtitle_count, forced_subtitle_indices = await probe_subtitle_plan(source)
+    default_audio_index = await probe_default_audio_index(source)
 
-                    if job_id not in jobs:
-                        Path(tmp_output).unlink(missing_ok=True)
-                        return  # cancelled during fallback retry
+    # The job can be deleted while probing (a blocking ffprobe call), and without this check
+    # ffmpeg would still start and produce an untracked file.
+    if is_cancelled():
+        return "cancelled", None
 
-                    sw_stderr = sw_stderr_bytes.decode(errors="replace")[-1000:]
-                    if sw_process.returncode == 0:
-                        os.replace(tmp_output, output)
-                        jobs[job_id]["status"] = "complete"
-                        jobs[job_id]["output_path"] = output
-                        jobs[job_id]["progress"] = 100.0
-                        jobs[job_id]["eta_seconds"] = 0.0
-                    else:
-                        print(f"[Press] libx264 fallback also failed:\n{sw_stderr}", flush=True)
-                        Path(tmp_output).unlink(missing_ok=True)
-                        _fail_job(job_id, sw_stderr, output)
-                else:
-                    print(f"[Press] transcode FAILED (job {job_id}, rc={process.returncode}):\n{error_text}", flush=True)
-                    _fail_job(job_id, error_text, output)
+    # ffmpeg writes to a job-specific temp file and only the final os.replace() below makes
+    # a fully-encoded file appear at `output` — a killed/failed encode never leaves a partial
+    # or invalid file at the path other code treats as "this job's output".
+    tmp_output = output + ".part"
+    cmd = build_ffmpeg_command(
+        source, tmp_output, preset,
+        subtitle_count=subtitle_count, forced_subtitle_indices=forced_subtitle_indices,
+        default_audio_index=default_audio_index,
+    )
 
-        except Exception as e:
-            _active_processes.pop(job_id, None)
+    try:
+        returncode, error_text = await _run_ffmpeg_once(cmd, duration_us, on_progress, is_cancelled, on_process)
+
+        if not is_cancelled() and returncode != 0 and _active_encoder != "libx264":
+            # Hardware encoder failed at runtime — fall back to libx264
+            print(f"[Press] {_active_encoder} failed (rc={returncode}), retrying with libx264", flush=True)
             Path(tmp_output).unlink(missing_ok=True)
-            if job_id in jobs:
-                _fail_job(job_id, str(e), output)
+            sw_cmd = build_ffmpeg_command(
+                source, tmp_output, preset, encoder="libx264",
+                subtitle_count=subtitle_count, forced_subtitle_indices=forced_subtitle_indices,
+                default_audio_index=default_audio_index,
+            )
+            returncode, error_text = await _run_ffmpeg_once(sw_cmd, duration_us, on_progress, is_cancelled, on_process)
+            if returncode != 0:
+                print(f"[Press] libx264 fallback also failed:\n{error_text}", flush=True)
+        elif returncode != 0 and not is_cancelled():
+            print(f"[Press] transcode FAILED (job {label}, rc={returncode}):\n{error_text}", flush=True)
 
-        if job_id in jobs and jobs[job_id]["status"] == "complete":
-            jobs[job_id]["output_sha256"] = await asyncio.to_thread(_sha256_file, jobs[job_id]["output_path"])
+        if is_cancelled():
+            Path(tmp_output).unlink(missing_ok=True)
+            return "cancelled", None  # the canceller already removed the output file
+        if returncode == 0:
+            os.replace(tmp_output, output)
+            return "ok", None
+        Path(tmp_output).unlink(missing_ok=True)
+        return "failed", error_text
+    except Exception as e:
+        Path(tmp_output).unlink(missing_ok=True)
+        return ("cancelled", None) if is_cancelled() else ("failed", str(e))
 
+
+# ─── Scheduling (coordinator side) ───────────────────────────────────────────────────────
+# Every job — whether a local slot or a remote worker ends up encoding it — goes through the same
+# path: queued -> _claim_next_job() -> running -> complete/failed. Remote claims carry a
+# claim_id and a lease that heartbeats keep alive, so a worker that dies mid-job is noticed and
+# its job handed to someone else (see lease_loop).
+
+
+def _spawn(coro) -> None:
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
+
+def _lease_deadline() -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=LEASE_SECONDS)).isoformat()
+
+
+def _claim_next_job(worker_id: str, worker_name: str) -> Optional[dict]:
+    """Hand the oldest queued job to a worker. Synchronous on purpose: with no await between
+    picking and marking it running, two claimers can never be given the same job."""
+    changed = False
+    try:
+        while True:
+            queued = [j for j in jobs.values() if j["status"] == "queued"]
+            if not queued:
+                return None
+            job = min(queued, key=lambda j: j["created_at"])
+
+            problem = None
+            if job["preset"] not in PRESETS:
+                problem = f"Preset '{job['preset']}' no longer exists"
+            elif not Path(job["source_path"]).exists():
+                problem = f"Source file not found: {job['source_path']}"
+            if problem:
+                job["status"] = "failed"
+                job["error"] = problem
+                job["updated_at"] = _now_iso()
+                changed = True
+                _publish(job["job_id"])
+                continue
+
+            job["status"] = "running"
+            job["progress"] = 0.0
+            job["fps"] = job["speed"] = job["eta_seconds"] = None
+            job["error"] = None
+            job["worker_id"] = worker_id
+            job["worker"] = worker_name
+            job["claim_id"] = str(uuid.uuid4())
+            job["attempts"] = job.get("attempts", 0) + 1
+            job["lease_expires_at"] = None if worker_id == LOCAL_WORKER_ID else _lease_deadline()
+            job["updated_at"] = _now_iso()
+            changed = True
+            _publish(job["job_id"])
+            return job
+    finally:
+        if changed:
+            _save_jobs()
+
+
+def _claimed_job(job_id: str, claim_id: str) -> Optional[dict]:
+    """The job, if this claim still owns it. None means it was deleted, re-queued after a lapsed
+    lease, or claimed by someone else — the caller should stop working on it."""
+    job = jobs.get(job_id)
+    if job and job["status"] == "running" and job.get("claim_id") == claim_id:
+        return job
+    return None
+
+
+def _apply_progress(job: dict, progress: Optional[float], fps: Optional[float],
+                    speed: Optional[float], eta: Optional[float]) -> None:
+    if progress is not None:
+        job["progress"] = progress
+    job["fps"] = fps
+    job["speed"] = speed
+    if eta is not None:
+        job["eta_seconds"] = eta
+    job["updated_at"] = _now_iso()
+    if job.get("lease_expires_at"):
+        job["lease_expires_at"] = _lease_deadline()
+    _publish(job["job_id"])
+
+
+async def _complete_job(job_id: str) -> None:
+    """Hash the finished output and only then mark the job complete, so nobody ever sees a
+    complete job without its checksum."""
+    job = jobs.get(job_id)
+    if job is None:
+        return
+    try:
+        sha256 = await asyncio.to_thread(_sha256_file, job["output_path"])
+    except OSError as e:
         if job_id in jobs:
-            jobs[job_id]["updated_at"] = _now_iso()
+            _fail_job(job_id, f"Output file unreadable: {e}", job["output_path"])
+            job["updated_at"] = _now_iso()
             _save_jobs()
             _publish(job_id)
+        return
+    if job_id not in jobs:
+        return
+    job["status"] = "complete"
+    job["output_sha256"] = sha256
+    job["progress"] = 100.0
+    job["eta_seconds"] = 0.0
+    job["lease_expires_at"] = None
+    job["finalizing"] = False
+    job["updated_at"] = _now_iso()
+    _save_jobs()
+    _publish(job_id)
+
+
+def _requeue_or_fail_lost_job(job: dict) -> None:
+    job_id = job["job_id"]
+    lost_worker = job.get("worker")
+    Path(job["output_path"] + ".part").unlink(missing_ok=True)
+    for key in ("worker_id", "worker", "claim_id", "lease_expires_at"):
+        job[key] = None
+    job["progress"] = 0.0
+    job["fps"] = job["speed"] = job["eta_seconds"] = None
+    job["updated_at"] = _now_iso()
+    if job.get("attempts", 0) >= MAX_JOB_ATTEMPTS:
+        job["status"] = "failed"
+        job["error"] = f"Worker '{lost_worker}' stopped responding; gave up after {MAX_JOB_ATTEMPTS} attempts"
+        print(f"[Press] Job {job_id} failed: lost its worker {MAX_JOB_ATTEMPTS} times", flush=True)
+    else:
+        job["status"] = "queued"
+        job["error"] = None
+        print(f"[Press] Worker '{lost_worker}' lost job {job_id}; re-queued", flush=True)
+        _queue_event.set()
+    _publish(job_id)
+
+
+async def lease_loop():
+    """Re-queue jobs whose remote worker stopped heartbeating, and forget workers long gone."""
+    while True:
+        await asyncio.sleep(LEASE_CHECK_SECONDS)
+        now = datetime.now(timezone.utc)
+        changed = False
+        for job in list(jobs.values()):
+            if job["status"] != "running" or job.get("finalizing"):
+                continue
+            if not job.get("worker_id") or job["worker_id"] == LOCAL_WORKER_ID:
+                continue
+            try:
+                lapsed = _parse_ts(job["lease_expires_at"]) < now
+            except (KeyError, TypeError, ValueError):
+                lapsed = True
+            if lapsed:
+                _requeue_or_fail_lost_job(job)
+                changed = True
+        if changed:
+            _save_jobs()
+        for worker_id, worker in list(_workers.items()):
+            if time.monotonic() - worker["last_seen"] > 600:
+                del _workers[worker_id]
+
+
+def _live_workers() -> list[dict]:
+    return [w for w in _workers.values() if time.monotonic() - w["last_seen"] <= LEASE_SECONDS * 2]
+
+
+async def local_slot():
+    """One local encode slot: repeatedly claims the next queued job and runs ffmpeg on it here."""
+    while True:
+        job = _claim_next_job(LOCAL_WORKER_ID, "local")
+        if job is None:
+            try:
+                await asyncio.wait_for(_queue_event.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                pass
+            _queue_event.clear()
+            continue
+        try:
+            await _run_local_job(job)
+        except Exception as e:
+            print(f"[Press] local slot error on job {job['job_id']}: {e!r}", flush=True)
+            if job["job_id"] in jobs and jobs[job["job_id"]]["status"] == "running":
+                _fail_job(job["job_id"], str(e), job["output_path"])
+                _save_jobs()
+                _publish(job["job_id"])
+
+
+async def _run_local_job(job: dict) -> None:
+    job_id = job["job_id"]
+    duration_seconds = job.get("duration_seconds")
+    duration_us = duration_seconds * 1_000_000 if duration_seconds else None
+
+    def on_progress(progress, fps, speed, eta):
+        if job_id in jobs:
+            _apply_progress(jobs[job_id], progress, fps, speed, eta)
+
+    def on_process(process):
+        if process is None:
+            _active_processes.pop(job_id, None)
+        else:
+            _active_processes[job_id] = process
+
+    result, error = await execute_ffmpeg(
+        job_id, job["source_path"], job["output_path"], PRESETS[job["preset"]], duration_us,
+        on_progress, lambda: job_id not in jobs, on_process,
+    )
+    if job_id not in jobs or result == "cancelled":
+        return
+    if result == "ok":
+        await _complete_job(job_id)
+        return
+    _fail_job(job_id, error or "Transcode failed", job["output_path"])
+    job["updated_at"] = _now_iso()
+    _save_jobs()
+    _publish(job_id)
+
+
+# ─── Worker side ──────────────────────────────────────────────────────────────────────────
+# A worker owns no job state. It announces itself with every claim, so a coordinator restart
+# needs no re-registration, and it treats "the coordinator says this claim is stale" as the
+# signal to kill its ffmpeg — which is also how DELETE /jobs/{id} reaches a remote encode.
+
+
+async def _report_to_coordinator(client: httpx.AsyncClient, path: str, body: dict) -> None:
+    """Deliver a terminal result, retrying through a coordinator restart or network blip."""
+    for _ in range(20):
+        try:
+            resp = await client.post(path, json=body)
+            if resp.status_code < 500:
+                return
+        except httpx.HTTPError:
+            pass
+        await asyncio.sleep(3)
+    print(f"[Press] Gave up reporting to coordinator: {path}", flush=True)
+
+
+async def _run_remote_job(client: httpx.AsyncClient, spec: dict) -> None:
+    job_id = spec["job_id"]
+    claim_id = spec["claim_id"]
+    source = spec["source_path"]
+    output = spec["output_path"]
+    duration_seconds = spec.get("duration_seconds")
+    duration_us = duration_seconds * 1_000_000 if duration_seconds else None
+    print(f"[Press] Claimed job {job_id}: {source}", flush=True)
+
+    # These two mismatches mean the shared-mount setup is wrong on this host; say so instead of
+    # letting ffmpeg fail with a bare "No such file or directory".
+    if not Path(source).exists():
+        await _report_to_coordinator(client, f"/internal/jobs/{job_id}/fail", {
+            "claim_id": claim_id,
+            "error": f"Source not visible on worker '{WORKER_NAME}': {source}. "
+                     "Media must be mounted at the same path on every host.",
+        })
+        return
+    if not Path(output).parent.is_dir():
+        await _report_to_coordinator(client, f"/internal/jobs/{job_id}/fail", {
+            "claim_id": claim_id,
+            "error": f"Output directory not visible on worker '{WORKER_NAME}': {Path(output).parent}. "
+                     "The output volume must be a shared mount at the same path on every host.",
+        })
+        return
+
+    state: dict[str, Any] = {"cancelled": False, "process": None, "progress": {}}
+
+    def on_progress(progress, fps, speed, eta):
+        state["progress"] = {"progress": progress, "fps": fps, "speed": speed, "eta_seconds": eta}
+
+    def on_process(process):
+        state["process"] = process
+
+    async def heartbeat():
+        while True:
+            await asyncio.sleep(WORKER_HEARTBEAT_SECONDS)
+            try:
+                resp = await client.post(
+                    f"/internal/jobs/{job_id}/progress",
+                    json={"worker_id": WORKER_ID, "claim_id": claim_id, **state["progress"]},
+                )
+                if resp.status_code == 200 and resp.json().get("cancel"):
+                    state["cancelled"] = True
+                    process = state["process"]
+                    if process and process.returncode is None:
+                        process.kill()
+                    return
+            except httpx.HTTPError:
+                pass  # coordinator restarting or briefly unreachable; the lease covers a short gap
+
+    heartbeat_task = asyncio.create_task(heartbeat())
+    try:
+        result, error = await execute_ffmpeg(
+            job_id, source, output, spec["preset"], duration_us,
+            on_progress, lambda: state["cancelled"], on_process,
+        )
+    finally:
+        heartbeat_task.cancel()
+
+    if result == "ok":
+        await _report_to_coordinator(client, f"/internal/jobs/{job_id}/complete", {"claim_id": claim_id})
+    elif result == "failed":
+        await _report_to_coordinator(client, f"/internal/jobs/{job_id}/fail", {
+            "claim_id": claim_id, "error": error or "Transcode failed",
+        })
+    # "cancelled": the coordinator already knows; there's nothing to report.
+
+
+async def _worker_slot(client: httpx.AsyncClient) -> None:
+    last_logged = 0.0
+    identity = {"worker_id": WORKER_ID, "name": WORKER_NAME, "encoder": _active_encoder, "max_workers": MAX_WORKERS}
+    while True:
+        try:
+            resp = await client.post("/internal/claim", json=identity)
+            if resp.status_code == 200:
+                await _run_remote_job(client, resp.json())
+                continue
+            if resp.status_code != 204:
+                resp.raise_for_status()
+        except httpx.HTTPError as e:
+            if time.monotonic() - last_logged > 30:
+                print(f"[Press] Coordinator unreachable ({COORDINATOR_URL}): {e!r}", flush=True)
+                last_logged = time.monotonic()
+        except Exception as e:
+            print(f"[Press] worker slot error: {e!r}", flush=True)
+        await asyncio.sleep(WORKER_POLL_SECONDS)
+
+
+async def run_worker() -> None:
+    async with httpx.AsyncClient(base_url=COORDINATOR_URL, timeout=10) as client:
+        await asyncio.gather(*(_worker_slot(client) for _ in range(MAX_WORKERS)))
 
 
 def _sha256_file(path: str) -> str:
@@ -774,9 +1144,7 @@ def _validate_transcode_request(req: TranscodeRequest) -> tuple[Path, dict]:
     return source, PRESETS[req.preset]
 
 
-async def _create_job(
-    req: TranscodeRequest, background_tasks: BackgroundTasks, source: Path, preset: dict
-) -> JobStatus:
+async def _create_job(req: TranscodeRequest, source: Path) -> JobStatus:
     job_id = str(uuid.uuid4())
     # .name strips any directory components (and neutralizes an absolute override or ../
     # traversal), so a client-supplied output_filename can never write outside OUTPUT_ROOT.
@@ -813,7 +1181,7 @@ async def _create_job(
     }
     _save_jobs()
 
-    background_tasks.add_task(run_transcode, job_id, str(source), output, preset, duration_us)
+    _queue_event.set()  # wake an idle local slot; remote workers find it on their next poll
 
     return _to_job_status(jobs[job_id])
 
@@ -841,9 +1209,9 @@ def _failed_job_status(req: TranscodeRequest, detail: str) -> JobStatus:
 
 
 @app.post("/transcode", response_model=JobStatus)
-async def start_transcode(req: TranscodeRequest, background_tasks: BackgroundTasks):
-    source, preset = _validate_transcode_request(req)
-    return await _create_job(req, background_tasks, source, preset)
+async def start_transcode(req: TranscodeRequest):
+    source, _ = _validate_transcode_request(req)
+    return await _create_job(req, source)
 
 
 class BatchTranscodeRequest(BaseModel):
@@ -851,17 +1219,17 @@ class BatchTranscodeRequest(BaseModel):
 
 
 @app.post("/transcode/batch", response_model=list[JobStatus])
-async def start_batch_transcode(req: BatchTranscodeRequest, background_tasks: BackgroundTasks):
+async def start_batch_transcode(req: BatchTranscodeRequest):
     """Queue multiple transcodes (e.g. a whole season) in one call. Bad items are recorded as
     failed jobs rather than aborting the rest of the batch."""
     results = []
     for item in req.items:
         try:
-            source, preset = _validate_transcode_request(item)
+            source, _ = _validate_transcode_request(item)
         except HTTPException as e:
             results.append(_failed_job_status(item, str(e.detail)))
             continue
-        results.append(await _create_job(item, background_tasks, source, preset))
+        results.append(await _create_job(item, source))
     _save_jobs()
     return results
 
@@ -907,10 +1275,12 @@ async def queue_stats():
     )
     queued_work = sum(j.get("duration_seconds") or 0 for j in queued)
 
-    total_remaining = running_remaining + (queued_work / MAX_WORKERS)
+    remote_capacity = sum(w["max_workers"] for w in _live_workers())
+    capacity = MAX_WORKERS + remote_capacity
+    total_remaining = running_remaining + (queued_work / max(capacity, 1))
 
     return {
-        "max_workers": MAX_WORKERS,
+        "max_workers": capacity,
         "running_count": len(running),
         "queued_count": len(queued),
         "queue_remaining_seconds": round(total_remaining, 1) if (running or queued) else 0.0,
@@ -1048,6 +1418,133 @@ async def stream_job(job_id: str):
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
+# ─── Distributed transcoding: worker-facing API ──────────────────────────────────────────
+# Like the rest of Press this is unauthenticated and meant for a trusted LAN only.
+
+
+class WorkerInfo(BaseModel):
+    worker_id: str
+    name: str
+    encoder: str = "libx264"
+    max_workers: int = 1
+
+
+class ProgressReport(BaseModel):
+    worker_id: str
+    claim_id: str
+    progress: Optional[float] = None
+    fps: Optional[float] = None
+    speed: Optional[float] = None
+    eta_seconds: Optional[float] = None
+
+
+class ClaimReport(BaseModel):
+    claim_id: str
+    error: Optional[str] = None
+
+
+@app.post("/internal/claim", response_model=None)
+async def worker_claim(info: WorkerInfo):
+    """A worker with a free slot asks for the next queued job. 204 means nothing to do."""
+    _workers[info.worker_id] = {**info.model_dump(), "last_seen": time.monotonic()}
+    if time.monotonic() < _remote_claims_open_at:
+        return Response(status_code=204)
+    job = _claim_next_job(info.worker_id, info.name)
+    if job is None:
+        return Response(status_code=204)
+    duration = job.get("duration_seconds")
+    return {
+        "job_id": job["job_id"],
+        "claim_id": job["claim_id"],
+        "source_path": job["source_path"],
+        "output_path": job["output_path"],
+        "preset": PRESETS[job["preset"]],
+        "duration_seconds": duration,
+    }
+
+
+@app.post("/internal/jobs/{job_id}/progress")
+async def worker_progress(job_id: str, report: ProgressReport):
+    """Progress report and lease heartbeat in one. `cancel: true` tells the worker to kill its
+    ffmpeg: the job was deleted, or this claim is no longer the one that owns it."""
+    worker = _workers.get(report.worker_id)
+    if worker:
+        worker["last_seen"] = time.monotonic()
+    job = _claimed_job(job_id, report.claim_id)
+    if job is None:
+        return {"cancel": True}
+    _apply_progress(job, report.progress, report.fps, report.speed, report.eta_seconds)
+    return {"cancel": False}
+
+
+@app.post("/internal/jobs/{job_id}/complete")
+async def worker_complete(job_id: str, report: ClaimReport):
+    job = _claimed_job(job_id, report.claim_id)
+    if job is None or job.get("finalizing"):
+        return {"ok": False}
+    if not Path(job["output_path"]).exists():
+        _fail_job(job_id, "Worker reported success but the output file isn't visible to Press. "
+                          "The output volume must be a shared mount on every host.", job["output_path"])
+        job["updated_at"] = _now_iso()
+        _save_jobs()
+        _publish(job_id)
+        return {"ok": True}
+    # Hashing a large file over a network mount takes a while; do it off the worker's request.
+    job["finalizing"] = True
+    _spawn(_complete_job(job_id))
+    return {"ok": True}
+
+
+@app.post("/internal/jobs/{job_id}/fail")
+async def worker_fail(job_id: str, report: ClaimReport):
+    job = _claimed_job(job_id, report.claim_id)
+    if job is None:
+        return {"ok": False}
+    _fail_job(job_id, report.error or "Transcode failed", job["output_path"])
+    job["updated_at"] = _now_iso()
+    _save_jobs()
+    _publish(job_id)
+    return {"ok": True}
+
+
+@app.get("/api/workers")
+async def list_workers():
+    """Everything that can currently encode: this host's local slots plus live remote workers."""
+    running = [j for j in jobs.values() if j["status"] == "running"]
+    result = []
+    if MAX_WORKERS > 0:
+        result.append({
+            "worker_id": LOCAL_WORKER_ID,
+            "name": "local",
+            "encoder": _active_encoder,
+            "max_workers": MAX_WORKERS,
+            "active_jobs": sum(1 for j in running if j.get("worker_id") == LOCAL_WORKER_ID),
+            "local": True,
+        })
+    for w in _live_workers():
+        result.append({
+            "worker_id": w["worker_id"],
+            "name": w["name"],
+            "encoder": w["encoder"],
+            "max_workers": w["max_workers"],
+            "active_jobs": sum(1 for j in running if j.get("worker_id") == w["worker_id"]),
+            "local": False,
+        })
+    return result
+
+
+@app.middleware("http")
+async def _worker_role_guard(request: Request, call_next):
+    # A worker holds no job state, so anything sent to its API (a misdirected /transcode, say)
+    # would be accepted and then silently never run.
+    if ROLE == "worker" and request.url.path != "/health":
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"This is a Press worker. Use the coordinator at {COORDINATOR_URL}"},
+        )
+    return await call_next(request)
+
+
 @app.get("/health")
 async def health():
     return {
@@ -1056,6 +1553,7 @@ async def health():
         "media_root": MEDIA_ROOT,
         "output_root": OUTPUT_ROOT,
         "encoder": _active_encoder,
+        "role": ROLE,
     }
 
 

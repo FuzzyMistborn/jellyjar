@@ -119,7 +119,7 @@
   </div>
   <table id="running-table">
     <thead>
-      <tr><th>Title</th><th>ID</th><th>Progress</th><th>FPS</th><th>Speed</th><th>ETA</th><th></th></tr>
+      <tr><th>Title</th><th>ID</th><th>Worker</th><th>Progress</th><th>FPS</th><th>Speed</th><th>ETA</th><th></th></tr>
     </thead>
     <tbody id="running-body"></tbody>
   </table>
@@ -246,8 +246,15 @@ async function refreshDisk() {
 
 async function refreshQueueStats() {
   try {
-    const s = await (await fetch('/api/queue/stats')).json();
-    queueSummaryEl.innerHTML = `${s.running_count} running / ${s.queued_count} queued (max ${s.max_workers} worker${s.max_workers === 1 ? '' : 's'}) &nbsp;·&nbsp; queue remaining: <b class="mono">${formatDuration(s.queue_remaining_seconds)}</b>`;
+    const [s, workers] = await Promise.all([
+      fetch('/api/queue/stats').then(r => r.json()),
+      fetch('/api/workers').then(r => r.json()),
+    ]);
+    // Only worth listing once there's more than the local encoder to tell apart.
+    const workerList = workers.length > 1
+      ? ` &nbsp;·&nbsp; ${workers.map(w => `<b>${escapeHtml(w.name)}</b> (${escapeHtml(w.encoder)}, ${w.active_jobs}/${w.max_workers})`).join(', ')}`
+      : '';
+    queueSummaryEl.innerHTML = `${s.running_count} running / ${s.queued_count} queued (max ${s.max_workers} worker${s.max_workers === 1 ? '' : 's'}) &nbsp;·&nbsp; queue remaining: <b class="mono">${formatDuration(s.queue_remaining_seconds)}</b>${workerList}`;
   } catch (e) {
     queueSummaryEl.textContent = '';
   }
@@ -268,6 +275,7 @@ async function refreshJobs() {
       <tr>
         <td>${titleFor(job)}</td>
         <td title="${job.job_id}">${job.job_id.slice(0, 8)}</td>
+        <td>${job.worker ? escapeHtml(job.worker) : '—'}</td>
         <td>
           <span class="progress-bar"><span class="progress-fill" style="width:${progress}%"></span></span>
           ${progress.toFixed(0)}%

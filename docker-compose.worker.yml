@@ -1,0 +1,24 @@
+# Press worker — run on each extra transcode host. Same image as the coordinator.
+# Media and output must be mounted at the SAME container paths as on the coordinator, and the
+# output directory must be a shared (NFS/SMB) mount, not a local Docker volume.
+services:
+  jellyjar-press-worker:
+    image: ghcr.io/fuzzymistborn/jellyjar/press:latest   # or build: ./press
+    container_name: jellyjar-press-worker
+    restart: unless-stopped
+    environment:
+      PRESS_ROLE: worker
+      COORDINATOR_URL: http://192.168.50.24:8090
+      WORKER_NAME: gpu-box-2          # shown in the coordinator's dashboard; defaults to the hostname
+      MEDIA_ROOT: /mnt
+      OUTPUT_ROOT: /output
+      LIBVA_DRIVER_NAME: iHD
+      MAX_WORKERS: 1                  # concurrent encodes on this host
+      # ENCODER: h264_nvenc           # pin instead of probing at startup
+    volumes:
+      - /mnt/Media/Movies:/mnt/movies:ro
+      - /mnt/Media/TV Shows:/mnt/tv:ro
+      - /mnt/press-output:/output     # shared with the coordinator's /output
+    devices:
+      - /dev/dri:/dev/dri
+    # NVIDIA: replace `devices` with the deploy.resources.reservations block from docker-compose.yml

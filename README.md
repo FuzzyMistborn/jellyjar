@@ -142,6 +142,42 @@ resources.reservations.devices` block and install the NVIDIA Container Toolkit. 
 for a working hardware encoder at startup and falls back to `libx264` if none is found; set
 `ENCODER` explicitly to skip the probe. `/health` reports which encoder is actually in use.
 
+**Distributed transcoding**: to spread jobs across several machines, run the same Press image
+on each extra host in worker mode. One instance stays the *coordinator* (the only one the app
+talks to); workers poll it for jobs, encode on their own GPU, and report back.
+
+```yaml
+# coordinator (your existing Press) — add:
+environment:
+  PRESS_ROLE: coordinator
+  MAX_WORKERS: 1        # local slots; 0 = dispatch only, let the workers do all the encoding
+
+# each worker host — see docker-compose.worker.yml:
+environment:
+  PRESS_ROLE: worker
+  COORDINATOR_URL: http://<coordinator-host>:8090
+```
+
+Workers must see the **same media and output paths** as the coordinator (mount the media
+read-only and the output directory as a shared NFS/SMB volume, at identical container paths).
+If a worker can't see a file, the job fails with a message naming the missing path. A worker
+that stops responding for 30s (`WORKER_LEASE_SECONDS`) has its job re-queued for another one.
+As with Press itself, the worker API is unauthenticated — keep it on a trusted LAN.
+
+Worker settings (all optional except `COORDINATOR_URL`):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `COORDINATOR_URL` | — | Coordinator's base URL (required for `PRESS_ROLE=worker`) |
+| `WORKER_NAME` | hostname | Name shown in the coordinator's dashboard |
+| `MAX_WORKERS` | `1` | Concurrent encodes on this host |
+| `ENCODER` | auto-detect | Pin the encoder instead of probing at startup |
+| `WORKER_LEASE_SECONDS` | `30` | Set on the coordinator: how long a silent worker keeps its job |
+| `WORKER_HEARTBEAT_SECONDS` | `2` | How often a worker reports progress |
+| `WORKER_POLL_SECONDS` | `3` | How often an idle worker asks for a job |
+
+A coordinator restart re-queues jobs that were mid-encode on a worker; they start over.
+
 **Job persistence**: job state is written to `$CONFIG_ROOT/jobs.json` on every status change, so
 history survives container restarts. Any job still `queued`/`running` at startup is
 automatically re-queued and restarted; if its preset or source file no longer exists, it's
@@ -153,10 +189,10 @@ completed jobs and their output files after N days.
 Press serves a small built-in dashboard at `http://<press-host>:8090/` — no extra setup needed.
 It shows:
 
-- **Now Encoding** — jobs currently transcoding, with live progress, FPS, encode speed, and ETA
+- **Now Encoding** — jobs currently transcoding, with which worker is running each, live progress, FPS, encode speed, and ETA
 - **Queued** — jobs waiting for a free worker, with position and estimated duration
 - **History** — completed/failed jobs, with download and delete
-- A summary of running/queued counts and estimated total time remaining for the queue
+- A summary of running/queued counts and estimated total time remaining for the queue; with remote workers connected it also lists each one (encoder, busy/total slots)
 - **Presets** — view, edit, add, or delete transcode presets (scale, video/audio bitrate, CRF) at runtime
 
 Preset edits persist across container restarts — they're written to `presets.json` on the

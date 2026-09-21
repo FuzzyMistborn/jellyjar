@@ -29,14 +29,16 @@ Gear icon → PIN gate → Admin/Settings
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/health` | GET | Returns `{"status":"ok","media_root":...,"output_root":...}` |
+| `/health` | GET | Returns `{"status":"ok","version":...,"media_root":...,"output_root":...,"encoder":...,"role":"standalone\|coordinator\|worker"}`. The only endpoint a `worker` answers |
 | `/presets` | GET | Returns `["1080p","720p"]` |
 | `/transcode` | POST | Starts transcode job, returns `JobStatus` |
 | `/transcode/batch` | POST | Starts multiple transcode jobs in one call (e.g. a whole season); returns `list[JobStatus]`. Bad items are recorded as `failed` jobs rather than aborting the batch |
 | `/jobs` | GET | Lists all jobs |
 | `/jobs/{id}` | GET | Gets job status + progress |
 | `/download/{id}` | GET | Streams completed MP4 file |
-| `/jobs/{id}` | DELETE | Deletes job + output file; kills the ffmpeg process first if the job is still running |
+| `/jobs/{id}` | DELETE | Deletes job + output file; kills the ffmpeg process first if the job is still running (a remote worker's ffmpeg is killed on its next heartbeat) |
+| `/api/workers` | GET | Local slots plus live remote workers: `worker_id`, `name`, `encoder`, `max_workers`, `active_jobs`, `local` |
+| `/internal/claim`, `/internal/jobs/{id}/progress\|complete\|fail` | POST | Worker-facing only (see Press Distributed Transcoding); the app never calls these |
 
 **TranscodeRequest body:**
 ```json
@@ -49,8 +51,18 @@ Gear icon → PIN gate → Admin/Settings
 
 ## Press Job Persistence & Cleanup
 - Jobs are persisted to `$CONFIG_ROOT/jobs.json` on every status transition (not on every progress tick), so job history survives container restarts
-- Jobs persist `source_path` and `preset`, so any job still `queued`/`running` at startup (its ffmpeg process died with the container) is re-queued and its transcode restarted automatically (`resume_interrupted_jobs()` in lifespan). If the preset was deleted or the source file is gone, it's marked `failed` with a specific error instead. Legacy jobs saved before `source_path`/`preset` existed fail with `"Interrupted by service restart"`
+- Jobs persist `source_path` and `preset`, so any job still `queued`/`running` at startup (its ffmpeg process died with the container) is put back in the queue by `load_jobs()` and picked up again by a local slot or worker; `resume_interrupted_jobs()` (lifespan) only refreshes durations and fails jobs that can no longer run. If the preset was deleted or the source file is gone, it's marked `failed` with a specific error instead. Legacy jobs saved before `source_path`/`preset` existed fail with `"Interrupted by service restart"`
 - `CLEANUP_AFTER_DAYS` (env var, default `0` = disabled) automatically deletes completed jobs and their output files once older than N days; checked hourly
+
+## Press Distributed Transcoding
+- `PRESS_ROLE` = `standalone` (default) | `coordinator` | `worker`. Standalone and coordinator run identical code; a coordinator just also has remote workers claiming jobs. The Android app only ever talks to the coordinator — no app changes.
+- **Every job goes through one queue**: `queued` → `_claim_next_job()` → `running` → `complete`/`failed`. Local slots (`local_slot()`, `MAX_WORKERS` of them; `0` is allowed on a coordinator = dispatch only) and remote workers use the same claim function. It is deliberately synchronous — no `await` between picking and marking a job running is what makes double-claims impossible. `background_tasks`/the old semaphore are gone
+- **Pull model**: workers `POST /internal/claim` (body doubles as registration; 204 = nothing to do), heartbeat via `POST /internal/jobs/{id}/progress` (also renews the lease; `{"cancel": true}` in the reply means kill ffmpeg — job deleted or claim stale), then `/complete` or `/fail`. Coordinator never dials out. `GET /api/workers` lists local slots + live workers
+- Each claim gets a `claim_id`; endpoints reject a stale one. `lease_loop()` re-queues a remote job whose lease (`WORKER_LEASE_SECONDS`, 30) lapsed, deleting its `.part`; after `MAX_JOB_ATTEMPTS` (3) losses it fails instead. After a coordinator restart `load_jobs()` re-queues running jobs and strips their claim, so a surviving worker gets `cancel` on its next heartbeat; remote claims are held off for ~15s at startup so it can die before the job is re-issued
+- `execute_ffmpeg()` is the single encode routine (probe → ffmpeg → hw→libx264 fallback → atomic `os.replace`), used by local slots and workers alike. The worker probes subtitles/audio itself (it has the mount), so the claim only carries source/output path, preset dict and duration
+- **Shared storage is a hard requirement**: media and `OUTPUT_ROOT` must be mounted at *identical* container paths on every host (output on NFS/SMB, not a local volume). Workers fail a job with an explicit message if they can't see the source or output dir; `/complete` fails it if the coordinator can't see the output. The coordinator hashes (`_complete_job`) after a worker reports success, off the request, and the job only flips to `complete` once `output_sha256` is set
+- Worker env: `COORDINATOR_URL` (required), `WORKER_NAME` (default hostname), `MAX_WORKERS`, `ENCODER`; `WORKER_HEARTBEAT_SECONDS` (2), `WORKER_POLL_SECONDS` (3). A worker answers only `/health` (404 elsewhere). `/internal/*` is unauthenticated, same LAN-only stance as the rest of Press
+- Verified only with stub ffmpeg/ffprobe scripts on a dev box (coordinator + 2 workers: job spread, worker killed mid-job → re-queued on the other, DELETE cancels a remote encode, standalone regression). **Not yet run against real GPUs / a real NFS mount**
 
 ## Press Docker Volumes
 Media mounts mirror Jellyfin's container paths exactly:
