@@ -6,6 +6,7 @@ import com.fuzzymistborn.jellyjar.BuildConfig
 import com.fuzzymistborn.jellyjar.api.JellyfinApiService
 import com.fuzzymistborn.jellyjar.api.ShimApiService
 import com.fuzzymistborn.jellyjar.data.local.JellyJarDatabase
+import com.fuzzymistborn.jellyjar.data.local.MIGRATION_9_10
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -30,6 +31,9 @@ object AppModule {
             // distributed, since downloads are just re-fetchable copies of server media. Once it
             // ships this must become a real addMigrations() chain; the exported schemas under
             // app/schemas (see room.schemaLocation in build.gradle.kts) exist to make that possible.
+            // Explicit migrations registered here take precedence over the fallback, so additive
+            // bumps like 9→10 no longer cost the user their downloads.
+            .addMigrations(MIGRATION_9_10)
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
 
@@ -37,6 +41,7 @@ object AppModule {
     @Provides fun provideCachedItemDao(db: JellyJarDatabase) = db.cachedItemDao()
     @Provides fun providePlaybackPositionDao(db: JellyJarDatabase) = db.playbackPositionDao()
     @Provides fun provideFavoriteDao(db: JellyJarDatabase) = db.favoriteDao()
+    @Provides fun providePendingPlaybackSyncDao(db: JellyJarDatabase) = db.pendingPlaybackSyncDao()
 
     @Provides
     @Singleton

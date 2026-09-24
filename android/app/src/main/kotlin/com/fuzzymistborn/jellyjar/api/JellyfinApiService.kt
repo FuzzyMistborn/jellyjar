@@ -61,6 +61,14 @@ data class PlaybackStopRequest(
     val MediaSourceId: String? = null,
 )
 
+// Sets an item's user data directly — used to replay offline viewing without faking a playback
+// session. LastPlayedDate is the time the viewing actually happened (ISO-8601 UTC).
+data class UpdateUserItemDataRequest(
+    val PlaybackPositionTicks: Long,
+    val Played: Boolean,
+    val LastPlayedDate: String,
+)
+
 // ─── Playback info / device profile negotiation ───────────────────────────────
 // Lets Jellyfin decide direct-play vs transcode per MediaSource instead of the client always
 // assuming direct-play. Needed because stock ExoPlayer has no DTS/DTS-HD MA or TrueHD decoder —
@@ -268,6 +276,23 @@ interface JellyfinApiService {
         @Path("userId") userId: String,
         @Path("itemId") itemId: String,
         @Header("Authorization") authHeader: String,
+    )
+
+    @POST("Users/{userId}/Items/{itemId}/UserData")
+    suspend fun updateUserDataLegacy(
+        @Path("userId") userId: String,
+        @Path("itemId") itemId: String,
+        @Header("Authorization") authHeader: String,
+        @Body body: UpdateUserItemDataRequest,
+    )
+
+    // Jellyfin 10.9+ route; the per-user one above was deprecated there and may be removed.
+    @POST("UserItems/{itemId}/UserData")
+    suspend fun updateUserData(
+        @Path("itemId") itemId: String,
+        @Query("userId") userId: String,
+        @Header("Authorization") authHeader: String,
+        @Body body: UpdateUserItemDataRequest,
     )
 
     @POST("Sessions/Playing")

@@ -21,6 +21,7 @@ import com.fuzzymistborn.jellyjar.api.PlaybackProgressRequest
 import com.fuzzymistborn.jellyjar.api.PlaybackStartRequest
 import com.fuzzymistborn.jellyjar.api.PlaybackStopRequest
 import com.fuzzymistborn.jellyjar.api.ShimApiService
+import com.fuzzymistborn.jellyjar.api.UpdateUserItemDataRequest
 import com.fuzzymistborn.jellyjar.data.local.CachedItemDao
 import com.fuzzymistborn.jellyjar.data.local.CachedItemEntity
 import com.fuzzymistborn.jellyjar.data.local.DownloadDao
@@ -29,6 +30,8 @@ import com.fuzzymistborn.jellyjar.data.local.FavoriteDao
 import com.fuzzymistborn.jellyjar.data.local.FavoriteEntity
 import com.fuzzymistborn.jellyjar.data.local.PlaybackPositionDao
 import com.fuzzymistborn.jellyjar.data.local.PlaybackPositionEntity
+import com.fuzzymistborn.jellyjar.data.local.PendingPlaybackSync
+import com.fuzzymistborn.jellyjar.data.local.PendingPlaybackSyncDao
 import com.fuzzymistborn.jellyjar.model.*
 import com.fuzzymistborn.jellyjar.worker.DownloadWorker
 import kotlinx.coroutines.Dispatchers
@@ -38,6 +41,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -334,6 +338,29 @@ class JellyfinRepository @Inject constructor(
                     authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
                     body = PlaybackStopRequest(ItemId = itemId, PositionTicks = positionMs * 10_000L, MediaSourceId = mediaSourceId),
                 )
+            }
+        }
+
+    // Writes position/played state directly, stamped with when the viewing actually happened —
+    // how PlaybackSyncRepository replays offline viewing. Tries the 10.9+ route first and falls
+    // back to the older per-user one on 404, the same newest-first approach as getSkipSegments().
+    suspend fun updateUserData(itemId: String, positionMs: Long, played: Boolean, playedAtMs: Long): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val s = settings.currentSnapshot()
+                val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
+                val auth = JellyfinImageHelper.authHeader(s.jellyfinToken)
+                val body = UpdateUserItemDataRequest(
+                    PlaybackPositionTicks = positionMs * 10_000L,
+                    Played = played,
+                    LastPlayedDate = java.time.Instant.ofEpochMilli(playedAtMs).toString(),
+                )
+                try {
+                    service.updateUserData(itemId, s.jellyfinUserId, auth, body)
+                } catch (e: retrofit2.HttpException) {
+                    if (e.code() != 404) throw e
+                    service.updateUserDataLegacy(s.jellyfinUserId, itemId, auth, body)
+                }
             }
         }
 
@@ -1179,4 +1206,100 @@ class FavoriteRepository @Inject constructor(
     }
 
     val favorites: kotlinx.coroutines.flow.Flow<List<FavoriteEntity>> = favoriteDao.observeAll()
+}
+
+// ─── Playback Sync Repository ─────────────────────────────────────────────────
+
+// Makes sure viewing that happens while Jellyfin is unreachable (offline downloads, LAN server
+// out of range) still reaches the server eventually. Every playback report used to be fire-and-
+// forget, so offline progress was simply lost — and MetadataRefreshWorker would later pull the
+// server's stale state and overwrite the correct local "played" flag with it.
+@Singleton
+class PlaybackSyncRepository @Inject constructor(
+    @param:ApplicationContext private val context: Context,
+    private val pendingDao: PendingPlaybackSyncDao,
+    private val jellyfinRepo: JellyfinRepository,
+    private val settings: SettingsRepository,
+) {
+    private val flushMutex = kotlinx.coroutines.sync.Mutex()
+
+    suspend fun recordStopped(itemId: String, positionMs: Long, mediaSourceId: String? = null) {
+        val at = System.currentTimeMillis()
+        val ok = jellyfinRepo.reportPlaybackStopped(itemId, positionMs, mediaSourceId).isSuccess
+        settle(itemId, ok, positionMs = positionMs, played = false, at = at)
+    }
+
+    suspend fun recordFinished(itemId: String, mediaSourceId: String? = null) {
+        val at = System.currentTimeMillis()
+        jellyfinRepo.reportPlaybackStopped(itemId, 0L, mediaSourceId)
+        val ok = jellyfinRepo.markPlayed(itemId).isSuccess
+        settle(itemId, ok, positionMs = 0L, played = true, at = at)
+    }
+
+    suspend fun pendingIds(): Set<String> = withContext(Dispatchers.IO) { pendingDao.pendingIds().toSet() }
+
+    private suspend fun settle(itemId: String, ok: Boolean, positionMs: Long, played: Boolean, at: Long) =
+        withContext(Dispatchers.IO) {
+            if (ok) {
+                // The server now holds state newer than anything still queued for this item.
+                pendingDao.delete(itemId)
+                return@withContext
+            }
+            // Not signed in: there's no server this could ever sync to.
+            if (settings.currentSnapshot().jellyfinUrl.isBlank()) return@withContext
+            pendingDao.upsert(PendingPlaybackSync(itemId, positionMs, played, at))
+            com.fuzzymistborn.jellyjar.worker.PlaybackSyncWorker.enqueue(WorkManager.getInstance(context))
+        }
+
+    /**
+     * Pushes every queued row to Jellyfin. Returns true once the table is empty, false if the
+     * server couldn't be reached (the caller should retry later). Loops until empty so rows
+     * written while a flush is already running aren't left behind.
+     */
+    suspend fun flush(): Boolean = flushMutex.withLock {
+        withContext(Dispatchers.IO) {
+            var rows = pendingDao.getAll()
+            while (rows.isNotEmpty()) {
+                for (row in rows) {
+                    if (!flushRow(row)) return@withContext false
+                }
+                rows = pendingDao.getAll()
+            }
+            true
+        }
+    }
+
+    // True if the row is settled (synced or deliberately dropped); false if the server is
+    // unreachable and the whole flush should stop and retry later.
+    private suspend fun flushRow(row: PendingPlaybackSync): Boolean {
+        val item = jellyfinRepo.getItem(row.jellyfinId).getOrElse { e ->
+            if (e.isPermanentHttpFailure()) {
+                // Item deleted server-side (or otherwise unsyncable) — nothing to sync to.
+                pendingDao.deleteIfUnchanged(row.jellyfinId, row.updatedAt)
+                return true
+            }
+            return false
+        }
+        val serverLastPlayedMs = item.userData?.lastPlayedDate?.let {
+            runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull()
+        }
+        if (serverLastPlayedMs != null && serverLastPlayedMs > row.updatedAt) {
+            // Played on another client after this offline viewing — the server's state wins.
+            pendingDao.deleteIfUnchanged(row.jellyfinId, row.updatedAt)
+            return true
+        }
+        // A partial offline rewatch of something already watched shouldn't un-mark it.
+        val played = row.played || item.userData?.played == true
+        val result = jellyfinRepo.updateUserData(row.jellyfinId, row.positionMs, played, row.updatedAt)
+        result.exceptionOrNull()?.let { e ->
+            if (!e.isPermanentHttpFailure()) return false
+        }
+        pendingDao.deleteIfUnchanged(row.jellyfinId, row.updatedAt)
+        return true
+    }
+
+    // 400/404 won't get better with retries; 401/403 might (re-login), and anything that isn't an
+    // HTTP response at all is a connectivity problem.
+    private fun Throwable.isPermanentHttpFailure(): Boolean =
+        this is retrofit2.HttpException && (code() == 400 || code() == 404)
 }
