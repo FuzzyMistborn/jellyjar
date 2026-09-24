@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+# Stub ffmpeg: "encodes" for STUB_SECONDS, emitting -progress lines and appending to the output.
+import os, sys, time
+args = sys.argv[1:]
+if "lavfi" in args:          # encoder probe
+    sys.exit(1)
+out = args[-1]
+secs = float(os.environ.get("STUB_SECONDS", "6"))
+steps = int(secs / 0.5)
+with open(out, "wb") as f:
+    for i in range(1, steps + 1):
+        time.sleep(0.5)
+        f.write(b"x" * 1024); f.flush()
+        us = int(10_000_000 * i / steps)
+        print(f"out_time_us={us}\nfps=100\nspeed=2.0x\nprogress=continue", flush=True)
+print("progress=end", flush=True)
