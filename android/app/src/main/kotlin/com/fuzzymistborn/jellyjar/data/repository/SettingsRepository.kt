@@ -4,9 +4,11 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.fuzzymistborn.jellyjar.model.AppSettings
+import com.fuzzymistborn.jellyjar.model.ScreenTimeUsage
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -45,6 +47,14 @@ class SettingsRepository @Inject constructor(
         val PLAYBACK_QUALITY = stringPreferencesKey("playback_quality")
         val FORCE_OFFLINE_MODE = booleanPreferencesKey("force_offline_mode")
         val KID_MODE_ENABLED = booleanPreferencesKey("kid_mode_enabled")
+        val EPISODE_STREAK_LIMIT = intPreferencesKey("episode_streak_limit")
+        val DAILY_LIMIT_MINUTES = intPreferencesKey("daily_limit_minutes")
+        // Today's screen-time usage. All four describe SCREEN_TIME_DATE only; the first write on
+        // a new day resets them (see editScreenTime).
+        val SCREEN_TIME_DATE = stringPreferencesKey("screen_time_date")
+        val SCREEN_TIME_USED_MS = longPreferencesKey("screen_time_used_ms")
+        val SCREEN_TIME_BONUS_MS = longPreferencesKey("screen_time_bonus_ms")
+        val SCREEN_TIME_UNLIMITED = booleanPreferencesKey("screen_time_unlimited")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { prefs ->
@@ -75,6 +85,18 @@ class SettingsRepository @Inject constructor(
             } ?: com.fuzzymistborn.jellyjar.model.PlaybackQuality.AUTO,
             forceOfflineMode = prefs[Keys.FORCE_OFFLINE_MODE] ?: false,
             kidModeEnabled = prefs[Keys.KID_MODE_ENABLED] ?: false,
+            episodeStreakLimit = prefs[Keys.EPISODE_STREAK_LIMIT] ?: 0,
+            dailyLimitMinutes = prefs[Keys.DAILY_LIMIT_MINUTES] ?: 0,
+        )
+    }
+
+    // Raw stored usage — may describe an earlier day; ScreenTimeUsage.forDate() normalises that.
+    val screenTimeUsage: Flow<ScreenTimeUsage> = context.dataStore.data.map { prefs ->
+        ScreenTimeUsage(
+            date = prefs[Keys.SCREEN_TIME_DATE] ?: "",
+            usedMs = prefs[Keys.SCREEN_TIME_USED_MS] ?: 0L,
+            bonusMs = prefs[Keys.SCREEN_TIME_BONUS_MS] ?: 0L,
+            unlimited = prefs[Keys.SCREEN_TIME_UNLIMITED] ?: false,
         )
     }
 
@@ -211,6 +233,49 @@ class SettingsRepository @Inject constructor(
             // Network: nothing expensive happens by accident.
             prefs[Keys.WIFI_ONLY] = true
             prefs[Keys.STREAM_OVER_CELLULAR] = false
+        }
+    }
+
+    suspend fun saveEpisodeStreakLimit(limit: Int) {
+        context.dataStore.edit { prefs -> prefs[Keys.EPISODE_STREAK_LIMIT] = limit.coerceAtLeast(0) }
+    }
+
+    suspend fun saveDailyLimitMinutes(minutes: Int) {
+        context.dataStore.edit { prefs -> prefs[Keys.DAILY_LIMIT_MINUTES] = minutes.coerceAtLeast(0) }
+    }
+
+    suspend fun addScreenTime(today: String, ms: Long) = editScreenTime(today) { prefs ->
+        prefs[Keys.SCREEN_TIME_USED_MS] = (prefs[Keys.SCREEN_TIME_USED_MS] ?: 0L) + ms
+    }
+
+    suspend fun grantScreenTimeBonus(today: String, ms: Long) = editScreenTime(today) { prefs ->
+        prefs[Keys.SCREEN_TIME_BONUS_MS] = (prefs[Keys.SCREEN_TIME_BONUS_MS] ?: 0L) + ms
+    }
+
+    suspend fun grantUnlimitedToday(today: String) = editScreenTime(today) { prefs ->
+        prefs[Keys.SCREEN_TIME_UNLIMITED] = true
+    }
+
+    suspend fun resetScreenTime(today: String) = editScreenTime(today) { prefs ->
+        prefs[Keys.SCREEN_TIME_USED_MS] = 0L
+        prefs[Keys.SCREEN_TIME_BONUS_MS] = 0L
+        prefs[Keys.SCREEN_TIME_UNLIMITED] = false
+    }
+
+    // Rolls the counters over to `today` (zeroing yesterday's usage and grants) in the same edit
+    // as the change itself, so a write can never land on a stale day's totals.
+    private suspend fun editScreenTime(
+        today: String,
+        block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit,
+    ) {
+        context.dataStore.edit { prefs ->
+            if (prefs[Keys.SCREEN_TIME_DATE] != today) {
+                prefs[Keys.SCREEN_TIME_DATE] = today
+                prefs[Keys.SCREEN_TIME_USED_MS] = 0L
+                prefs[Keys.SCREEN_TIME_BONUS_MS] = 0L
+                prefs[Keys.SCREEN_TIME_UNLIMITED] = false
+            }
+            block(prefs)
         }
     }
 

@@ -867,6 +867,9 @@ data class AdminState(
     val playbackQuality: com.fuzzymistborn.jellyjar.model.PlaybackQuality = com.fuzzymistborn.jellyjar.model.PlaybackQuality.AUTO,
     val forceOfflineMode: Boolean = false,
     val kidModeEnabled: Boolean = false,
+    val episodeStreakLimit: Int = 0,
+    val dailyLimitMinutes: Int = 0,
+    val screenTimeUsedTodayMs: Long = 0L,
     val isDiscovering: Boolean = false,
     val discoveredServers: List<com.fuzzymistborn.jellyjar.util.DiscoveredJellyfinServer> = emptyList(),
     val discoverError: String? = null,
@@ -883,6 +886,7 @@ class AdminViewModel @Inject constructor(
     private val shimApi: com.fuzzymistborn.jellyjar.api.ShimApiService,
     private val okHttpClient: okhttp3.OkHttpClient,
     private val discoveryService: com.fuzzymistborn.jellyjar.util.JellyfinDiscoveryService,
+    private val screenTime: com.fuzzymistborn.jellyjar.data.repository.ScreenTimeManager,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(AdminState())
@@ -921,10 +925,18 @@ class AdminViewModel @Inject constructor(
                         playbackQuality = s.playbackQuality,
                         forceOfflineMode = s.forceOfflineMode,
                         kidModeEnabled = s.kidModeEnabled,
+                        episodeStreakLimit = s.episodeStreakLimit,
+                        dailyLimitMinutes = s.dailyLimitMinutes,
                     )
                 }
                 refreshStorageInfo()
                 if (hasCredentials && urlChanged) checkJellyfinConnection()
+            }
+        }
+        viewModelScope.launch {
+            settings.screenTimeUsage.collect { usage ->
+                val usedToday = usage.forDate(java.time.LocalDate.now().toString()).usedMs
+                _state.update { it.copy(screenTimeUsedTodayMs = usedToday) }
             }
         }
         viewModelScope.launch {
@@ -1193,6 +1205,18 @@ class AdminViewModel @Inject constructor(
         _state.update { it.copy(kidModeEnabled = v) }
         viewModelScope.launch { settings.setKidMode(v) }
     }
+
+    fun setEpisodeStreakLimit(v: Int) {
+        _state.update { it.copy(episodeStreakLimit = v) }
+        viewModelScope.launch { settings.saveEpisodeStreakLimit(v) }
+    }
+
+    fun setDailyLimitMinutes(v: Int) {
+        _state.update { it.copy(dailyLimitMinutes = v) }
+        viewModelScope.launch { settings.saveDailyLimitMinutes(v) }
+    }
+
+    fun resetScreenTimeToday() = viewModelScope.launch { screenTime.resetToday() }
 
     fun setForceOfflineMode(v: Boolean) {
         _state.update { it.copy(forceOfflineMode = v) }
@@ -1698,6 +1722,8 @@ data class TrickplaySpec(
 class PlayerViewModel @Inject constructor(
     private val downloadRepo: DownloadRepository,
     private val jellyfinRepo: JellyfinRepository,
+    private val playbackSync: com.fuzzymistborn.jellyjar.data.repository.PlaybackSyncRepository,
+    private val screenTime: com.fuzzymistborn.jellyjar.data.repository.ScreenTimeManager,
     private val settings: SettingsRepository,
     private val okHttpClient: okhttp3.OkHttpClient,
 ) : ViewModel() {
@@ -1877,6 +1903,31 @@ class PlayerViewModel @Inject constructor(
 
     suspend fun gesturesEnabled(): Boolean = settings.currentSnapshot().playbackGesturesEnabled
 
+    // ── Kid Mode screen-time limits (all no-ops while Kid Mode is off) ─────────
+    fun onPlayerStart(autoAdvanced: Boolean) = screenTime.onPlayerStart(autoAdvanced)
+    suspend fun streakReached(): Boolean = screenTime.streakReached()
+    suspend fun dailyLimitReached(): Boolean = screenTime.dailyLimitReached()
+    suspend fun remainingScreenTimeMs(): Long? = screenTime.remainingMs()
+
+    // Detached like reportStopped(): the final partial interval is flushed from the player's
+    // onDispose, after this ViewModel may already be clearing.
+    fun addWatched(ms: Long) {
+        detachedScope.launch { screenTime.addWatched(ms) }
+    }
+
+    // A grown-up override needs a PIN; without one the limits have no way to be lifted in-player
+    // (the Admin card nags to set one).
+    suspend fun canOverrideLimits(): Boolean = settings.currentSnapshot().isPinEnabled
+
+    suspend fun verifyPin(pin: String): Boolean {
+        val s = settings.currentSnapshot()
+        return s.isPinEnabled && settings.verifyPin(pin, s.parentalPinHash)
+    }
+
+    suspend fun grantMinutes(minutes: Int) = screenTime.grantMinutes(minutes)
+    fun grantEpisode() = screenTime.grantEpisode()
+    suspend fun grantUnlimitedToday() = screenTime.grantUnlimitedToday()
+
     fun savePosition(jellyfinId: String, positionMs: Long) = viewModelScope.launch {
         downloadRepo.updatePlaybackPosition(jellyfinId, positionMs)
     }
@@ -1889,9 +1940,12 @@ class PlayerViewModel @Inject constructor(
         jellyfinRepo.reportPlaybackProgress(jellyfinId, positionMs, isPaused, mediaSourceId)
     }
 
+    // Goes through PlaybackSyncRepository rather than straight to Jellyfin, so a stop that can't
+    // reach the server (offline download, LAN out of range) is queued and synced later instead of
+    // silently dropped.
     fun reportStopped(jellyfinId: String, positionMs: Long, mediaSourceId: String? = null) {
         detachedScope.launch {
-            jellyfinRepo.reportPlaybackStopped(jellyfinId, positionMs, mediaSourceId)
+            playbackSync.recordStopped(jellyfinId, positionMs, mediaSourceId)
         }
     }
 
@@ -1904,8 +1958,7 @@ class PlayerViewModel @Inject constructor(
         detachedScope.launch {
             downloadRepo.updatePlaybackPosition(jellyfinId, 0L)
             downloadRepo.updatePlayed(jellyfinId, true)
-            jellyfinRepo.reportPlaybackStopped(jellyfinId, 0L, mediaSourceId)
-            jellyfinRepo.markPlayed(jellyfinId)
+            playbackSync.recordFinished(jellyfinId, mediaSourceId)
         }
     }
 }

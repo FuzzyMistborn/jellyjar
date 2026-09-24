@@ -11,6 +11,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.fuzzymistborn.jellyjar.data.repository.DownloadRepository
 import com.fuzzymistborn.jellyjar.data.repository.JellyfinRepository
+import com.fuzzymistborn.jellyjar.data.repository.PlaybackSyncRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.concurrent.TimeUnit
@@ -25,6 +26,7 @@ class MetadataRefreshWorker @AssistedInject constructor(
     @Assisted workerParams: WorkerParameters,
     private val jellyfinRepo: JellyfinRepository,
     private val downloadRepo: DownloadRepository,
+    private val playbackSync: PlaybackSyncRepository,
 ) : CoroutineWorker(context, workerParams) {
 
     companion object {
@@ -50,6 +52,11 @@ class MetadataRefreshWorker @AssistedInject constructor(
         // before any of their upserts land, so this local dedupe avoids redundant network calls
         // within a single run too.
         val seenSeriesIds = mutableSetOf<String>()
+        // Push offline viewing up *before* pulling server state down. Anything still pending
+        // afterwards (flush failed) keeps its local played flag — the server's copy is stale for
+        // those, and overwriting with it is exactly how offline watches used to get un-watched.
+        playbackSync.flush()
+        val pendingIds = playbackSync.pendingIds()
         for (jellyfinId in downloadRepo.getCompletedJellyfinIds()) {
             if (isStopped) break
             // Also re-caches the parent series (if any) — self-heals the offline "TV Shows"
@@ -61,7 +68,9 @@ class MetadataRefreshWorker @AssistedInject constructor(
                         jellyfinRepo.cacheParentSeriesIfMissing(seriesId)
                     }
                 }
-                downloadRepo.updatePlayed(jellyfinId, item.userData?.played ?: false)
+                if (jellyfinId !in pendingIds) {
+                    downloadRepo.updatePlayed(jellyfinId, item.userData?.played ?: false)
+                }
             }
             downloadRepo.refreshThumbnail(jellyfinId)
         }

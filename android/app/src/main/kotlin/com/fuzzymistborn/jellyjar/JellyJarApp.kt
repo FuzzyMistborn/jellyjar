@@ -6,6 +6,7 @@ import androidx.work.Configuration
 import androidx.work.WorkManager
 import com.fuzzymistborn.jellyjar.data.repository.DownloadQueueManager
 import com.fuzzymistborn.jellyjar.worker.MetadataRefreshWorker
+import com.fuzzymistborn.jellyjar.worker.PlaybackSyncWorker
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -19,6 +20,8 @@ class JellyJarApp : Application(), Configuration.Provider {
         super.onCreate()
         downloadQueueManager.start()
         MetadataRefreshWorker.schedule(WorkManager.getInstance(this))
+        // Picks up anything left pending by a previous process (a no-op when nothing is queued).
+        PlaybackSyncWorker.enqueue(WorkManager.getInstance(this))
     }
 
     override val workManagerConfiguration: Configuration

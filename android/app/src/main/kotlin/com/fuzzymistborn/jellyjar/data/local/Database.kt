@@ -1,6 +1,8 @@
 package com.fuzzymistborn.jellyjar.data.local
 
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 // ─── Entities ─────────────────────────────────────────────────────────────────
@@ -79,6 +81,18 @@ data class FavoriteEntity(
     val addedAt: Long = System.currentTimeMillis(),
 )
 
+// Playback state that couldn't reach Jellyfin when it happened (offline viewing, LAN server
+// unreachable). One row per item — only the latest state matters — flushed by PlaybackSyncWorker
+// once the server is reachable again. updatedAt is when the viewing actually happened, so the
+// flush can tell whether the server has seen a *newer* play on another client since.
+@Entity(tableName = "pending_playback_sync")
+data class PendingPlaybackSync(
+    @PrimaryKey val jellyfinId: String,
+    val positionMs: Long,
+    val played: Boolean,
+    val updatedAt: Long,
+)
+
 // ─── DAOs ─────────────────────────────────────────────────────────────────────
 
 @Dao
@@ -153,6 +167,27 @@ interface PlaybackPositionDao {
 
     @Query("DELETE FROM playback_positions WHERE jellyfinId = :id")
     suspend fun delete(id: String)
+}
+
+@Dao
+interface PendingPlaybackSyncDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entity: PendingPlaybackSync)
+
+    @Query("DELETE FROM pending_playback_sync WHERE jellyfinId = :id")
+    suspend fun delete(id: String)
+
+    // Only removes the row if it hasn't been rewritten since it was read — a flush racing a new
+    // offline stop for the same item mustn't delete the newer state it never synced.
+    @Query("DELETE FROM pending_playback_sync WHERE jellyfinId = :id AND updatedAt = :updatedAt")
+    suspend fun deleteIfUnchanged(id: String, updatedAt: Long)
+
+    @Query("SELECT * FROM pending_playback_sync ORDER BY updatedAt ASC")
+    suspend fun getAll(): List<PendingPlaybackSync>
+
+    @Query("SELECT jellyfinId FROM pending_playback_sync")
+    suspend fun pendingIds(): List<String>
 }
 
 @Dao
@@ -236,8 +271,11 @@ interface CachedItemDao {
 // ─── Database ─────────────────────────────────────────────────────────────────
 
 @Database(
-    entities = [DownloadEntity::class, CachedItemEntity::class, PlaybackPositionEntity::class, FavoriteEntity::class],
-    version = 9,
+    entities = [
+        DownloadEntity::class, CachedItemEntity::class, PlaybackPositionEntity::class,
+        FavoriteEntity::class, PendingPlaybackSync::class,
+    ],
+    version = 10,
     // Exported to app/schemas (see room.schemaLocation in build.gradle.kts) so a real migration
     // can be written and reviewed once the app is distributed — see the destructive-migration
     // note in AppModule.
@@ -248,4 +286,20 @@ abstract class JellyJarDatabase : RoomDatabase() {
     abstract fun cachedItemDao(): CachedItemDao
     abstract fun playbackPositionDao(): PlaybackPositionDao
     abstract fun favoriteDao(): FavoriteDao
+    abstract fun pendingPlaybackSyncDao(): PendingPlaybackSyncDao
+}
+
+// The first real migration: adding a table is purely additive, so there's no reason to take the
+// destructive fallback (and wipe every download record) for it. The SQL must match what Room
+// generates for PendingPlaybackSync exactly, or Room's post-migration validation throws — compare
+// against app/schemas/.../10.json if the entity ever changes.
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `pending_playback_sync` (" +
+                "`jellyfinId` TEXT NOT NULL, `positionMs` INTEGER NOT NULL, " +
+                "`played` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`jellyfinId`))"
+        )
+    }
 }

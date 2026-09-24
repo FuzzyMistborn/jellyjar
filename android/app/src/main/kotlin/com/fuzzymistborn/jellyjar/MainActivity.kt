@@ -26,13 +26,14 @@ sealed class Screen(val route: String) {
     object Detail : Screen("detail/{itemId}") {
         fun go(itemId: String) = "detail/${itemId.encode()}"
     }
-    object Player : Screen("player/{localPath}/{jellyfinId}?startMs={startMs}") {
-        fun go(localPath: String, jellyfinId: String = "", startMs: Long = 0L) =
-            "player/${localPath.encode()}/${jellyfinId.encode()}?startMs=$startMs"
+    // `auto` = opened by auto-play/Up Next rather than a tap (extends the Kid Mode episode streak).
+    object Player : Screen("player/{localPath}/{jellyfinId}?startMs={startMs}&auto={auto}") {
+        fun go(localPath: String, jellyfinId: String = "", startMs: Long = 0L, auto: Boolean = false) =
+            "player/${localPath.encode()}/${jellyfinId.encode()}?startMs=$startMs&auto=$auto"
     }
-    object StreamPlayer : Screen("stream/{streamUrl}/{jellyfinId}?startMs={startMs}") {
-        fun go(streamUrl: String, jellyfinId: String = "", startMs: Long = 0L) =
-            "stream/${streamUrl.encode()}/${jellyfinId.encode()}?startMs=$startMs"
+    object StreamPlayer : Screen("stream/{streamUrl}/{jellyfinId}?startMs={startMs}&auto={auto}") {
+        fun go(streamUrl: String, jellyfinId: String = "", startMs: Long = 0L, auto: Boolean = false) =
+            "stream/${streamUrl.encode()}/${jellyfinId.encode()}?startMs=$startMs&auto=$auto"
     }
     object Season : Screen("season/{seasonId}/{seriesId}") {
         fun go(seasonId: String, seriesId: String) = "season/${seasonId.encode()}/${seriesId.encode()}"
@@ -54,9 +55,9 @@ private fun navigateToNextEpisode(
 ) {
     val route = when (target) {
         is com.fuzzymistborn.jellyjar.ui.viewmodel.NextEpisodeTarget.Local ->
-            Screen.Player.go(target.localPath, target.jellyfinId)
+            Screen.Player.go(target.localPath, target.jellyfinId, auto = true)
         is com.fuzzymistborn.jellyjar.ui.viewmodel.NextEpisodeTarget.Stream ->
-            Screen.StreamPlayer.go(target.streamUrl, target.jellyfinId)
+            Screen.StreamPlayer.go(target.streamUrl, target.jellyfinId, auto = true)
     }
     val currentRoute = navController.currentBackStackEntry?.destination?.route
     navController.navigate(route) {
@@ -219,15 +220,18 @@ fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableSta
                 navArgument("streamUrl") { type = NavType.StringType },
                 navArgument("jellyfinId") { type = NavType.StringType },
                 navArgument("startMs") { type = NavType.LongType; defaultValue = 0L },
+                navArgument("auto") { type = NavType.BoolType; defaultValue = false },
             ),
         ) { backStack ->
             val streamUrl = backStack.arguments?.getString("streamUrl")?.decode() ?: return@composable
             val jellyfinId = backStack.arguments?.getString("jellyfinId")?.decode()?.takeIf { it.isNotBlank() }
             val startMs = backStack.arguments?.getLong("startMs") ?: 0L
+            val auto = backStack.arguments?.getBoolean("auto") ?: false
             PlayerScreen(
                 localPath = streamUrl,
                 jellyfinId = jellyfinId,
                 startPositionMs = startMs,
+                autoAdvanced = auto,
                 onBack = { navController.popBackStack() },
                 onPlayNext = { target -> navigateToNextEpisode(navController, target) },
             )
@@ -239,15 +243,18 @@ fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableSta
                 navArgument("localPath") { type = NavType.StringType },
                 navArgument("jellyfinId") { type = NavType.StringType },
                 navArgument("startMs") { type = NavType.LongType; defaultValue = 0L },
+                navArgument("auto") { type = NavType.BoolType; defaultValue = false },
             ),
         ) { backStack ->
             val localPath = backStack.arguments?.getString("localPath")?.decode() ?: return@composable
             val jellyfinId = backStack.arguments?.getString("jellyfinId")?.decode()?.takeIf { it.isNotBlank() }
             val startMs = backStack.arguments?.getLong("startMs") ?: 0L
+            val auto = backStack.arguments?.getBoolean("auto") ?: false
             PlayerScreen(
                 localPath = localPath,
                 jellyfinId = jellyfinId,
                 startPositionMs = startMs,
+                autoAdvanced = auto,
                 onBack = { navController.popBackStack() },
                 onPlayNext = { target -> navigateToNextEpisode(navController, target) },
             )

@@ -114,6 +114,9 @@ data class UserData(
     @SerializedName("PlaybackPositionTicks") val playbackPositionTicks: Long?,
     @SerializedName("Played") val played: Boolean,
     @SerializedName("PlayCount") val playCount: Int,
+    // ISO-8601 UTC; used by offline playback sync to tell whether another client played the item
+    // more recently than the offline viewing being synced.
+    @SerializedName("LastPlayedDate") val lastPlayedDate: String? = null,
 )
 
 data class JellyfinLibrary(
@@ -204,7 +207,22 @@ data class AppSettings(
     // the tech-spec chips. It does NOT filter content — that comes from the Jellyfin account the
     // app is signed in as (library access + MaxParentalRating are enforced server-side).
     val kidModeEnabled: Boolean = false,
+    // Kid Mode screen-time limits; 0 = off, and both are ignored while Kid Mode is off.
+    // Most episodes that may auto-play back-to-back before the player stops for a break.
+    val episodeStreakLimit: Int = 0,
+    val dailyLimitMinutes: Int = 0,
 )
+
+// Today's Kid Mode screen-time usage as stored. `date` is the ISO day these numbers belong to;
+// anything recorded for an earlier day counts as zero.
+data class ScreenTimeUsage(
+    val date: String = "",
+    val usedMs: Long = 0L,
+    val bonusMs: Long = 0L,
+    val unlimited: Boolean = false,
+) {
+    fun forDate(today: String): ScreenTimeUsage = if (date == today) this else ScreenTimeUsage(date = today)
+}
 
 // Caps the negotiated streaming bitrate (server transcodes down when the source exceeds it);
 // AUTO leaves the device's max bitrate ceiling in place so Jellyfin prefers direct play.

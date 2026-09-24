@@ -2,6 +2,7 @@ package com.fuzzymistborn.jellyjar.ui.screens
 
 import android.app.Activity
 import android.content.Context
+import android.os.SystemClock
 import android.view.ViewGroup
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
@@ -13,8 +14,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -40,6 +43,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.TimeBar
 import com.fuzzymistborn.jellyjar.R
+import com.fuzzymistborn.jellyjar.data.repository.TimesUpReason
 import com.fuzzymistborn.jellyjar.model.SkipSegment
 import com.fuzzymistborn.jellyjar.ui.theme.OnPrimary
 import com.fuzzymistborn.jellyjar.ui.theme.OnSurface
@@ -70,6 +74,9 @@ private const val EXTERNAL_SUBTITLE_ID_PREFIX = "jf-sub-"
 // Countdown used only when the duration is unknown, so no real remaining time can be shown.
 private const val AUTO_PLAY_FALLBACK_SECONDS = 10
 
+// Kid Mode daily budget: warn once when this much screen time is left.
+private const val LIMIT_WARNING_MS = 5 * 60_000L
+
 // Stopping at or past this fraction of the runtime counts as "finished" for resume-position
 // purposes, matching Jellyfin server's own default MaxResumePct (90%).
 private const val PLAYED_THRESHOLD = 0.90
@@ -80,6 +87,9 @@ fun PlayerScreen(
     jellyfinId: String? = null,
     mediaSourceId: String? = null,
     startPositionMs: Long = 0L,
+    // True when this screen was opened by auto-play/Up Next rather than a tap on a title — it
+    // extends the Kid Mode episode streak instead of starting a new one.
+    autoAdvanced: Boolean = false,
     onBack: () -> Unit,
     onPlayNext: (NextEpisodeTarget) -> Unit = {},
     viewModel: PlayerViewModel = hiltViewModel(),
@@ -122,13 +132,69 @@ fun PlayerScreen(
             setMediaItem(MediaItem.fromUri(localPath))
             prepare()
             if (startPositionMs > 0L) seekTo(startPositionMs)
-            playWhenReady = true
+            // Started by the screen-time check below, once it's confirmed today's budget isn't
+            // already spent — otherwise a kid would get a second of audio before the times-up card.
+            playWhenReady = false
+        }
+    }
+
+    // ── Kid Mode screen-time limits ───────────────────────────────────────────
+    // All of these checks are no-ops (never block, never count) while Kid Mode is off.
+    var timesUp by remember { mutableStateOf<TimesUpReason?>(null) }
+    // Set once the screen-time check lets playback begin. Jellyfin reporting waits on it, so a
+    // title blocked at the door never opens (or closes) a playback session on the server.
+    var playbackAllowed by remember { mutableStateOf(false) }
+    // The next episode a limit held back, so a grown-up override can still hand off to it.
+    var blockedNext by remember { mutableStateOf<NextEpisodeTarget?>(null) }
+    var limitWarning by remember { mutableStateOf<String?>(null) }
+    // Saveable so a configuration change doesn't count this episode toward the streak twice.
+    var streakRecorded by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!streakRecorded) {
+            viewModel.onPlayerStart(autoAdvanced)
+            streakRecorded = true
+        }
+        if (viewModel.dailyLimitReached()) {
+            timesUp = TimesUpReason.DAILY_LIMIT
+        } else {
+            playbackAllowed = true
+            player.playWhenReady = true
+        }
+    }
+    // Time actually spent playing (not paused or buffering) counts toward the daily budget. It's
+    // flushed every 10s, and the remainder once more when the player is disposed.
+    val unflushedWatchMs = remember { longArrayOf(0L) }
+    LaunchedEffect(player) {
+        var last = SystemClock.elapsedRealtime()
+        var warned = false
+        while (true) {
+            delay(1_000)
+            val now = SystemClock.elapsedRealtime()
+            if (player.isPlaying) unflushedWatchMs[0] += now - last
+            last = now
+            if (unflushedWatchMs[0] >= 10_000L) {
+                viewModel.addWatched(unflushedWatchMs[0])
+                unflushedWatchMs[0] = 0L
+                val remaining = viewModel.remainingScreenTimeMs()
+                if (!warned && remaining != null && remaining in 1..LIMIT_WARNING_MS) {
+                    warned = true
+                    val minutes = (remaining + 59_999) / 60_000
+                    limitWarning = if (minutes == 1L) "1 minute left today" else "$minutes minutes left today"
+                }
+            }
+        }
+    }
+    LaunchedEffect(limitWarning) {
+        if (limitWarning != null) {
+            delay(5_000)
+            limitWarning = null
         }
     }
 
     // Report playback start to Jellyfin
     LaunchedEffect(jellyfinId) {
         if (jellyfinId != null) {
+            snapshotFlow { playbackAllowed }.first { it }
             viewModel.reportStart(jellyfinId, player.currentPosition, mediaSourceId)
         }
     }
@@ -136,6 +202,7 @@ fun PlayerScreen(
     // Report progress every 10 seconds
     LaunchedEffect(jellyfinId) {
         if (jellyfinId != null) {
+            snapshotFlow { playbackAllowed }.first { it }
             while (true) {
                 delay(10_000)
                 viewModel.reportProgress(
@@ -150,7 +217,7 @@ fun PlayerScreen(
 
     DisposableEffect(Unit) {
         onDispose {
-            if (jellyfinId != null) {
+            if (jellyfinId != null && playbackAllowed) {
                 // Playback ran to the end, or stopped close enough to it: don't persist a resume
                 // position sitting at (or near) the full duration, which would otherwise leave the
                 // Resume button showing at ~90-100% instead of disappearing once the item is
@@ -167,6 +234,7 @@ fun PlayerScreen(
                     viewModel.reportStopped(jellyfinId, player.currentPosition, mediaSourceId)
                 }
             }
+            viewModel.addWatched(unflushedWatchMs[0])
             player.release()
         }
     }
@@ -255,12 +323,30 @@ fun PlayerScreen(
                 (durationMs > 0 && positionMs > 0 && durationMs - positionMs <= UP_NEXT_LEAD_MS)
         }.first { it }
         val target = viewModel.resolveNextEpisode(jellyfinId)
-        if (target != null) {
+        // Kid Mode limits hold the resolved episode back rather than skipping the lookup, so a
+        // grown-up override on the times-up card can still hand off to it. Only checked when
+        // there *is* a next episode — "enough episodes in a row" makes no sense after a movie.
+        val limitReason = when {
+            target == null -> null
+            viewModel.streakReached() -> TimesUpReason.EPISODE_STREAK
+            viewModel.dailyLimitReached() -> TimesUpReason.DAILY_LIMIT
+            else -> null
+        }
+        if (target != null && limitReason == null) {
             pendingNext = target
         } else {
-            // Auto-play off, series finale, or a movie: leave once playback is actually over.
+            // Auto-play off, series finale, a movie, or a limit reached: act once playback is
+            // actually over. The current title always gets to finish — cutting a show off
+            // mid-scene is how a screen-time rule turns into an argument.
             snapshotFlow { playbackEnded }.first { it }
-            onBack()
+            val reason = limitReason
+                ?: if (viewModel.dailyLimitReached()) TimesUpReason.DAILY_LIMIT else null
+            if (reason != null) {
+                blockedNext = target
+                timesUp = reason
+            } else {
+                onBack()
+            }
         }
     }
 
@@ -627,6 +713,50 @@ fun PlayerScreen(
                     }
                 }
             }
+        }
+
+        limitWarning?.let { warning ->
+            androidx.compose.material3.Surface(
+                color = ScrimStrong,
+                shape = RoundedCornerShape(Radius.sm),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = Spacing.xl),
+            ) {
+                Text(
+                    text = warning,
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+                )
+            }
+        }
+
+        // Drawn last so it covers the video and swallows every tap meant for the controls.
+        timesUp?.let { reason ->
+            TimesUpOverlay(
+                reason = reason,
+                viewModel = viewModel,
+                onDone = onBack,
+                onGranted = {
+                    timesUp = null
+                    val next = blockedNext
+                    when {
+                        next != null -> {
+                            blockedNext = null
+                            onPlayNext(next)
+                        }
+                        // Granted after the title had already finished (e.g. a movie) — nothing
+                        // queued to continue into, so leave for the kid to pick something.
+                        playbackEnded -> onBack()
+                        // Blocked before playback started: start it now.
+                        else -> {
+                            playbackAllowed = true
+                            player.playWhenReady = true
+                        }
+                    }
+                },
+            )
         }
     }
 
@@ -1027,6 +1157,133 @@ private fun UpNextCard(
                 }
                 TextButton(onClick = onCancel) {
                     Text("Cancel", color = OnSurfaceMuted)
+                }
+            }
+        }
+    }
+}
+
+// Full-screen stop card for the Kid Mode screen-time limits. Written for the kid first ("Done" is
+// the big obvious action); the grown-up override sits behind a small link and the admin PIN.
+@Composable
+private fun TimesUpOverlay(
+    reason: TimesUpReason,
+    viewModel: PlayerViewModel,
+    onDone: () -> Unit,
+    onGranted: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var canOverride by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { canOverride = viewModel.canOverrideLimits() }
+    var pinEntryOpen by remember { mutableStateOf(false) }
+    var unlocked by remember { mutableStateOf(false) }
+    var pin by remember { mutableStateOf("") }
+    var pinError by remember { mutableStateOf(false) }
+
+    val (title, message) = when (reason) {
+        TimesUpReason.EPISODE_STREAK -> "Time for a break!" to "That's enough episodes in a row for now."
+        TimesUpReason.DAILY_LIMIT -> "All done for today!" to "That's all the screen time for today. See you tomorrow!"
+    }
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.92f))
+            // Swallow taps so nothing reaches the player controls underneath.
+            .pointerInput(Unit) { detectTapGestures { } },
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+            modifier = Modifier
+                .widthIn(max = 420.dp)
+                .padding(Spacing.xl),
+        ) {
+            Icon(
+                Icons.Default.Bedtime,
+                contentDescription = null,
+                tint = Primary,
+                modifier = Modifier.size(72.dp),
+            )
+            Text(title, style = MaterialTheme.typography.headlineMedium, color = Color.White)
+            Text(
+                message,
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color.White.copy(alpha = 0.8f),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+            Button(
+                onClick = onDone,
+                colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+            ) {
+                Text("Done")
+            }
+
+            when {
+                !canOverride -> Unit
+                unlocked -> {
+                    Text("Grown-up override", style = MaterialTheme.typography.labelMedium, color = OnSurfaceMuted)
+                    val grants: List<Pair<String, suspend () -> Unit>> = when (reason) {
+                        TimesUpReason.EPISODE_STREAK -> listOf(
+                            "One more episode" to suspend { viewModel.grantEpisode() },
+                            "No limit today" to suspend { viewModel.grantUnlimitedToday() },
+                        )
+                        TimesUpReason.DAILY_LIMIT -> listOf(
+                            "+30 minutes" to suspend { viewModel.grantMinutes(30) },
+                            "+1 hour" to suspend { viewModel.grantMinutes(60) },
+                            "No limit today" to suspend { viewModel.grantUnlimitedToday() },
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                        grants.forEach { (label, grant) ->
+                            OutlinedButton(onClick = {
+                                scope.launch {
+                                    grant()
+                                    onGranted()
+                                }
+                            }) {
+                                Text(label, color = Color.White)
+                            }
+                        }
+                    }
+                }
+                pinEntryOpen -> {
+                    OutlinedTextField(
+                        value = pin,
+                        onValueChange = {
+                            if (it.length <= 8) {
+                                pin = it
+                                pinError = false
+                            }
+                        },
+                        label = { Text("Admin PIN") },
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword,
+                        ),
+                        isError = pinError,
+                        supportingText = if (pinError) { { Text("Incorrect PIN") } } else null,
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = themedTextFieldColors(),
+                    )
+                    TextButton(onClick = {
+                        scope.launch {
+                            if (viewModel.verifyPin(pin)) {
+                                unlocked = true
+                            } else {
+                                pinError = true
+                                pin = ""
+                            }
+                        }
+                    }) {
+                        Text("Unlock", color = Primary)
+                    }
+                }
+                else -> TextButton(onClick = { pinEntryOpen = true }) {
+                    Text("Grown-ups: more time", color = OnSurfaceMuted)
                 }
             }
         }

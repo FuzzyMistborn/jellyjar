@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -599,6 +600,54 @@ fun AdminScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = OnSurfaceMuted,
                 )
+
+                // Screen-time limits: only enforced while Kid Mode is on, so only shown then.
+                HorizontalDivider(color = Background, modifier = Modifier.padding(vertical = Spacing.xs))
+                LimitChoiceRow(
+                    title = "Episodes in a Row",
+                    subtitle = "Stop auto-play for a break after this many",
+                    options = listOf(0, 1, 2, 3, 5),
+                    selected = state.episodeStreakLimit,
+                    label = { if (it == 0) "Off" else "$it" },
+                    onSelect = { viewModel.setEpisodeStreakLimit(it) },
+                )
+                LimitChoiceRow(
+                    title = "Daily Screen Time",
+                    subtitle = "The current show always gets to finish",
+                    options = listOf(0, 30, 60, 90, 120, 180),
+                    selected = state.dailyLimitMinutes,
+                    label = { minutes ->
+                        when {
+                            minutes == 0 -> "Off"
+                            minutes % 60 == 0 -> "${minutes / 60} h"
+                            minutes > 60 -> "${minutes / 60} h ${minutes % 60} m"
+                            else -> "$minutes m"
+                        }
+                    },
+                    onSelect = { viewModel.setDailyLimitMinutes(it) },
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Watched today: ${state.screenTimeUsedTodayMs / 60_000} min",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = OnSurfaceMuted,
+                    )
+                    TextButton(onClick = { viewModel.resetScreenTimeToday() }) {
+                        Text("Reset", color = Primary)
+                    }
+                }
+                if ((state.episodeStreakLimit > 0 || state.dailyLimitMinutes > 0) && !state.isPinEnabled) {
+                    Text(
+                        "Set an Admin PIN to allow \"more time\" overrides from the player — without " +
+                            "one, a limit can only be lifted here.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Warning,
+                    )
+                }
             }
         }
 
@@ -796,6 +845,38 @@ private fun StatusChip(label: String, color: Color) {
  * whose title already says everything ("Continue Watching" under a "Home Screen" card) takes one
  * line instead of two.
  */
+// A titled row of single-choice chips for the Kid Mode limits. Scrolls horizontally rather than
+// wrapping so a phone-width card keeps every option on one line.
+@Composable
+private fun LimitChoiceRow(
+    title: String,
+    subtitle: String,
+    options: List<Int>,
+    selected: Int,
+    label: (Int) -> String,
+    onSelect: (Int) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.xs)) {
+        Text(title, style = MaterialTheme.typography.bodyMedium, color = OnSurface)
+        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            modifier = Modifier
+                .padding(top = Spacing.xs)
+                .horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+        ) {
+            options.forEach { option ->
+                FilterChip(
+                    selected = selected == option,
+                    onClick = { onSelect(option) },
+                    label = { Text(label(option), style = MaterialTheme.typography.labelMedium) },
+                    colors = themedChipColors(),
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun SettingsToggleRow(
     title: String,
