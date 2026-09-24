@@ -136,11 +136,20 @@ environment:
   MAX_WORKERS: 1   # concurrent transcode jobs
 ```
 
-**Hardware encoding**: the container exposes `/dev/dri` for Intel/AMD VAAPI or QSV encoding
-(`LIBVA_DRIVER_NAME: iHD` is set for Intel gen8+ iGPUs). For NVIDIA, uncomment the `deploy.
-resources.reservations.devices` block and install the NVIDIA Container Toolkit. Press probes
-for a working hardware encoder at startup and falls back to `libx264` if none is found; set
-`ENCODER` explicitly to skip the probe. `/health` reports which encoder is actually in use.
+**Hardware encoding**: the image uses [jellyfin-ffmpeg](https://github.com/jellyfin/jellyfin-ffmpeg),
+which bundles the Intel (iHD/i965) and AMD (radeonsi) VA-API drivers. The container exposes
+`/dev/dri` for Intel/AMD VAAPI or QSV encoding (`LIBVA_DRIVER_NAME: iHD` is set for Intel gen8+
+iGPUs — remove it on AMD). For NVIDIA, uncomment the `deploy.resources.reservations.devices`
+block and install the NVIDIA Container Toolkit. Press probes for a working hardware encoder at
+startup and falls back to `libx264` if none is found; set `ENCODER` explicitly to skip the
+probe. `/health` reports which encoder is actually in use.
+
+With NVENC or VAAPI, decoding and scaling run on the GPU as well (`-hwaccel cuda` + `scale_cuda`/
+`pad_cuda`, or `-hwaccel vaapi` + `scale_vaapi`/`pad_vaapi`), so the CPU only handles audio and
+subtitles. If that fails — typically a source the GPU can't decode, like 10-bit H.264 or AV1 on
+an older card — the job retries automatically with CPU decode + GPU encode, then with `libx264`.
+Set `HW_DECODE: 0` to skip the GPU-decode attempt entirely. QSV still decodes and scales on the
+CPU. HDR sources are not tone-mapped on any path.
 
 **Distributed transcoding**: to spread jobs across several machines, run the same Press image
 on each extra host in worker mode. One instance stays the *coordinator* (the only one the app
@@ -172,6 +181,7 @@ Worker settings (all optional except `COORDINATOR_URL`):
 | `WORKER_NAME` | hostname | Name shown in the coordinator's dashboard |
 | `MAX_WORKERS` | `1` | Concurrent encodes on this host |
 | `ENCODER` | auto-detect | Pin the encoder instead of probing at startup |
+| `HW_DECODE` | `1` | Decode + scale on the GPU with NVENC/VAAPI; `0` for CPU decode |
 | `WORKER_LEASE_SECONDS` | `30` | Set on the coordinator: how long a silent worker keeps its job |
 | `WORKER_HEARTBEAT_SECONDS` | `2` | How often a worker reports progress |
 | `WORKER_POLL_SECONDS` | `3` | How often an idle worker asks for a job |
