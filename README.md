@@ -261,7 +261,7 @@ Or copy the APK to the tablet and open it in a file manager.
 | POST | `/transcode` | Start a transcode job |
 | POST | `/transcode/batch` | Start multiple transcode jobs in one call (e.g. a whole season); bad items are recorded as failed jobs instead of aborting the batch |
 | GET | `/jobs` | List all jobs (queued/running/complete/failed) |
-| GET | `/jobs/{id}` | Poll job status, progress, fps, speed, ETA |
+| GET | `/jobs/{id}` | Poll job status, progress, fps, speed, ETA; completed jobs include `tracks` (the output's audio/subtitle tracks with language/default/forced) |
 | GET | `/jobs/{id}/stream` | Server-Sent Events stream of job status, pushed on change instead of polled |
 | GET | `/download/{id}` | Download completed file |
 | DELETE | `/jobs/{id}` | Cancel job (kills the ffmpeg process if running) + delete output |

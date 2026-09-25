@@ -143,6 +143,24 @@ data class TranscodeJob(
     val error: String?,
     val created_at: String,
     val updated_at: String,
+    // What's in the finished file (Press probes it on completion). Null from older Press
+    // versions, and until the job is complete.
+    val tracks: OutputTracks? = null,
+)
+
+// Audio and subtitle tracks of a Press output, in file order — so entry N is the Nth track of
+// that type ExoPlayer reports for the downloaded file. Stored on the download (tracksJson)
+// because Media3's MP4 extractor ignores the default/forced flags in the file itself.
+// Everything is nullable: Gson fills these reflectively and ignores Kotlin null-safety.
+data class OutputTracks(
+    val audio: List<OutputTrack>?,
+    val subtitles: List<OutputTrack>?,
+)
+
+data class OutputTrack(
+    val language: String?,          // ISO 639-2/T ("eng"), null when untagged
+    val default: Boolean,
+    val forced: Boolean,            // subtitles only
 )
 
 data class PresetConfigDto(

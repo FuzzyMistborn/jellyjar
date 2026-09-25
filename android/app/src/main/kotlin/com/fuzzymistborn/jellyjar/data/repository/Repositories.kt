@@ -876,6 +876,7 @@ class DownloadRepository @Inject constructor(
         // bare filename for callers that don't need nesting.
         relativePath: String,
         expectedSha256: String? = null,
+        tracksJson: String? = null,
     ): Result<String> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -984,6 +985,7 @@ class DownloadRepository @Inject constructor(
                         progress = 100f,
                         sizeBytes = downloadedBytes,
                         thumbnailPath = thumbnailPath,
+                        tracksJson = tracksJson,
                     )
                 )
                 savedPath

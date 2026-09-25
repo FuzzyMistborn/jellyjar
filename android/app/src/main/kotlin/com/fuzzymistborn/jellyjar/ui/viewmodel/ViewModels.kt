@@ -1801,6 +1801,15 @@ class PlayerViewModel @Inject constructor(
         return runCatching { jellyfinRepo.getSkipSegments(jellyfinId) }.getOrDefault(emptyList())
     }
 
+    // Track flags Press recorded for a downloaded file (see OutputTracks). Null for streams,
+    // downloads made before Press reported them, or unparseable JSON.
+    suspend fun loadOfflineTracks(jellyfinId: String): com.fuzzymistborn.jellyjar.model.OutputTracks? =
+        downloadRepo.findById(jellyfinId)?.tracksJson?.let { json ->
+            runCatching {
+                com.google.gson.Gson().fromJson(json, com.fuzzymistborn.jellyjar.model.OutputTracks::class.java)
+            }.getOrNull()
+        }
+
     // Trickplay tile metadata for scrub previews. Server-generated tiles only, so this is
     // stream-playback + online only; returns null when disabled or unavailable.
     suspend fun loadTrickplay(jellyfinId: String): TrickplaySpec? {
