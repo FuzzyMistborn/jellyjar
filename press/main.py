@@ -67,6 +67,13 @@ logging.getLogger("uvicorn.access").addFilter(_QuietPollingFilter())
 
 _active_encoder: str = "libx264"
 
+VAAPI_DEVICE = "/dev/dri/renderD128"
+# Decode + scale on the GPU too for h264_nvenc / h264_vaapi, not just encode (see
+# build_ffmpeg_command). On by default; HW_DECODE=0 goes straight to the CPU-decode pipeline,
+# e.g. if a driver produces bad output rather than failing outright.
+HW_DECODE = os.environ.get("HW_DECODE", "1").strip().lower() not in ("0", "false", "no", "off")
+_HW_DECODE_ENCODERS = ("h264_nvenc", "h264_vaapi")
+
 
 async def detect_encoder() -> str:
     """Probe hardware encoders in priority order; fall back to libx264."""
@@ -77,7 +84,7 @@ async def detect_encoder() -> str:
         ]),
         ("h264_vaapi", [
             "ffmpeg", "-y",
-            "-vaapi_device", "/dev/dri/renderD128",
+            "-vaapi_device", VAAPI_DEVICE,
             "-f", "lavfi", "-i", "color=black:s=128x128:d=0.1",
             "-vf", "format=nv12,hwupload",
             "-c:v", "h264_vaapi", "-f", "null", "-",
@@ -573,13 +580,28 @@ def build_ffmpeg_command(
     subtitle_count: int = 0,
     forced_subtitle_indices: list[int] | None = None,
     default_audio_index: int | None = None,
+    hw_decode: bool = False,
 ) -> list[str]:
+    """Build the ffmpeg argv for one encode attempt.
+
+    `hw_decode` (h264_nvenc / h264_vaapi only) keeps the whole video pipeline on the GPU:
+    decode into GPU memory, then scale + pad with the GPU filters, so frames never round-trip
+    through system RAM. It fails outright — rather than silently running slower — when the GPU
+    can't decode the source (ffmpeg falls back to software decode and the GPU filters then
+    reject the CPU frames), which is what lets execute_ffmpeg retry with CPU decoding.
+    """
     enc = encoder if encoder is not None else _active_encoder
     scale = preset["scale"]
     sw_vf = (
         f"scale={scale}:force_original_aspect_ratio=decrease,"
         f"pad={scale}:(ow-iw)/2:(oh-ih)/2"
     )
+    width, height = scale.split(":")
+    # Same letterbox as sw_vf. 10-bit sources decode to p010, which h264_nvenc/h264_vaapi can't
+    # take, hence format=nv12. Dimensions and offsets are kept even for the 4:2:0 chroma planes
+    # (the software pad filter rounds these itself; the GPU ones aren't documented to).
+    hw_fit = f"w={width}:h={height}:force_original_aspect_ratio=decrease:force_divisible_by=2:format=nv12"
+    hw_pad = f"w={width}:h={height}:x=trunc((ow-iw)/4)*2:y=trunc((oh-ih)/4)*2"
     # Without explicit maps, ffmpeg's default stream selection keeps exactly one video and one
     # audio stream and drops every subtitle — so downloads lost alternate audio tracks and all
     # subtitles, and the player's track picker had nothing to offer offline.
@@ -613,10 +635,23 @@ def build_ffmpeg_command(
     # format selection no longer depends on what the temp filename happens to end in.
     common_audio += ["-f", "mp4", "-movflags", "+faststart", "-progress", "pipe:1"]
 
+    if enc == "h264_vaapi" and hw_decode:
+        return [
+            "ffmpeg", "-y",
+            "-init_hw_device", f"vaapi=va:{VAAPI_DEVICE}",
+            "-hwaccel", "vaapi", "-hwaccel_device", "va", "-hwaccel_output_format", "vaapi",
+            "-filter_hw_device", "va",
+            "-i", source,
+            *stream_map,
+            "-vf", f"scale_vaapi={hw_fit},pad_vaapi={hw_pad}",
+            "-c:v", "h264_vaapi",
+            "-b:v", preset["video_bitrate"],
+            *common_audio, output,
+        ]
     if enc == "h264_vaapi":
         return [
             "ffmpeg", "-y",
-            "-vaapi_device", "/dev/dri/renderD128",
+            "-vaapi_device", VAAPI_DEVICE,
             "-i", source,
             *stream_map,
             "-vf", f"{sw_vf},format=nv12,hwupload",
@@ -632,6 +667,19 @@ def build_ffmpeg_command(
             "-vf", sw_vf,
             "-c:v", "h264_qsv",
             "-global_quality", preset["crf"],
+            "-b:v", preset["video_bitrate"],
+            *common_audio, output,
+        ]
+    if enc == "h264_nvenc" and hw_decode:
+        return [
+            "ffmpeg", "-y",
+            "-hwaccel", "cuda", "-hwaccel_output_format", "cuda",
+            "-i", source,
+            *stream_map,
+            "-vf", f"scale_cuda={hw_fit},pad_cuda={hw_pad}",
+            "-c:v", "h264_nvenc",
+            "-cq", preset["crf"],
+            "-preset", "p4",
             "-b:v", preset["video_bitrate"],
             *common_audio, output,
         ]
@@ -755,6 +803,12 @@ async def _run_ffmpeg_once(
     return process.returncode, stderr_bytes.decode(errors="replace")[-1000:]
 
 
+def _describe_attempt(encoder: str, hw_decode: bool) -> str:
+    if encoder == "libx264":
+        return encoder
+    return f"{encoder} ({'GPU' if hw_decode else 'CPU'} decode)"
+
+
 async def execute_ffmpeg(
     label: str,
     source: str,
@@ -767,7 +821,7 @@ async def execute_ffmpeg(
     on_process: Any,
     publish: bool = True,
 ) -> tuple[str, Optional[str]]:
-    """Probe, encode (with the hardware->libx264 fallback) and, if `publish`, move the result into place.
+    """Probe, encode (with the GPU -> CPU-decode -> libx264 fallback chain) and, if `publish`, move the result into place.
 
     Shared by the local slots and by remote workers, so an encode behaves identically wherever
     it runs. Returns ("ok" | "failed" | "cancelled", error). On "ok" the finished file is at
@@ -786,28 +840,34 @@ async def execute_ffmpeg(
     # ffmpeg writes to a claim-specific temp file and only the final os.replace() makes a
     # fully-encoded file appear at `output` — a killed/failed encode never leaves a partial or
     # invalid file at the path other code treats as "this job's output".
-    cmd = build_ffmpeg_command(
-        source, tmp_output, preset,
-        subtitle_count=subtitle_count, forced_subtitle_indices=forced_subtitle_indices,
-        default_audio_index=default_audio_index,
-    )
+    #
+    # Each attempt is (encoder, hw_decode), tried in order until one succeeds: the full GPU
+    # pipeline, then the same hardware encoder fed by CPU decode + scale (covers sources the
+    # GPU's decoder doesn't support, e.g. 10-bit H.264 or AV1 on older cards), then libx264.
+    attempts: list[tuple[str, bool]] = []
+    if _active_encoder in _HW_DECODE_ENCODERS and HW_DECODE:
+        attempts.append((_active_encoder, True))
+    if _active_encoder != "libx264":
+        attempts.append((_active_encoder, False))
+    attempts.append(("libx264", False))
 
     try:
-        returncode, error_text = await _run_ffmpeg_once(cmd, duration_us, on_progress, is_cancelled, on_process)
-
-        if not is_cancelled() and returncode != 0 and _active_encoder != "libx264":
-            # Hardware encoder failed at runtime — fall back to libx264
-            print(f"[Press] {_active_encoder} failed (rc={returncode}), retrying with libx264", flush=True)
-            Path(tmp_output).unlink(missing_ok=True)
-            sw_cmd = build_ffmpeg_command(
-                source, tmp_output, preset, encoder="libx264",
+        for attempt, (encoder, hw_decode) in enumerate(attempts):
+            if attempt:
+                print(f"[Press] {_describe_attempt(*attempts[attempt - 1])} failed (job {label}, "
+                      f"rc={returncode}), retrying with {_describe_attempt(encoder, hw_decode)}:\n"
+                      f"{error_text}", flush=True)
+                Path(tmp_output).unlink(missing_ok=True)
+            cmd = build_ffmpeg_command(
+                source, tmp_output, preset, encoder=encoder, hw_decode=hw_decode,
                 subtitle_count=subtitle_count, forced_subtitle_indices=forced_subtitle_indices,
                 default_audio_index=default_audio_index,
             )
-            returncode, error_text = await _run_ffmpeg_once(sw_cmd, duration_us, on_progress, is_cancelled, on_process)
-            if returncode != 0:
-                print(f"[Press] libx264 fallback also failed:\n{error_text}", flush=True)
-        elif returncode != 0 and not is_cancelled():
+            returncode, error_text = await _run_ffmpeg_once(cmd, duration_us, on_progress, is_cancelled, on_process)
+            if returncode == 0 or is_cancelled():
+                break
+
+        if returncode != 0 and not is_cancelled():
             print(f"[Press] transcode FAILED (job {label}, rc={returncode}):\n{error_text}", flush=True)
 
         if is_cancelled():
