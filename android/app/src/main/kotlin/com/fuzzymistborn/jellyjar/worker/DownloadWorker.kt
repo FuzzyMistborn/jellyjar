@@ -144,7 +144,8 @@ class DownloadWorker @AssistedInject constructor(
         }
 
         setForeground(createForegroundInfo(notificationId, itemTitle, "Downloading…", 0))
-        downloadRepo.downloadFile(jobId, downloadPath, filename, job!!.output_sha256).onFailure {
+        val tracksJson = job!!.tracks?.let { com.google.gson.Gson().toJson(it) }
+        downloadRepo.downloadFile(jobId, downloadPath, filename, job!!.output_sha256, tracksJson).onFailure {
             android.util.Log.e("DownloadWorker", "Download failed: ${it.message}", it)
             return if (runAttemptCount < MAX_RETRY_ATTEMPTS) {
                 Result.retry()

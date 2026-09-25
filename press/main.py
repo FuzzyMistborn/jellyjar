@@ -459,6 +459,9 @@ class JobStatus(BaseModel):
     eta_seconds: Optional[float] = None        # estimated time remaining for this job
     queue_position: Optional[int] = None       # 1-based position among queued (waiting) jobs
     worker: Optional[str] = None               # which host is (or last was) encoding this job
+    # What's actually in the finished file, in file order (see probe_output_tracks). Set once the
+    # job is complete; None for jobs completed before this existed or if the probe failed.
+    tracks: Optional[dict] = None
 
 
 PROBE_TIMEOUT_SECONDS = 30
@@ -579,6 +582,48 @@ async def probe_subtitle_plan(source: str) -> tuple[int, list[str]]:
         return len(dispositions), dispositions
     except Exception:
         return 0, []
+
+
+async def probe_output_tracks(path: str) -> Optional[dict]:
+    """The audio and subtitle tracks of a finished output, in file order, with their flags.
+
+    {"audio": [{"language", "default"}], "subtitles": [{"language", "default", "forced"}]}, where
+    language is a 639-2/T code or None when untagged. The app stores this with the download and
+    picks tracks from it at playback, because Media3's MP4 extractor never reads the default/
+    forced flags ffmpeg writes — without it, forced subtitles never come on offline. Probing the
+    output rather than reusing the encode plan means it describes exactly what's in the file,
+    and it works the same for jobs encoded by remote workers.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "-show_entries", "stream=codec_type:stream_tags=language:stream_disposition=default,forced",
+            path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=PROBE_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return None
+        streams = json.loads(stdout).get("streams", [])
+    except Exception:
+        return None
+    tracks: dict[str, list] = {"audio": [], "subtitles": []}
+    for st in streams:
+        language = _normalize_language(st.get("tags", {}).get("language", ""))
+        flags = st.get("disposition", {})
+        entry = {
+            "language": language if language not in ("", "und") else None,
+            "default": flags.get("default") == 1,
+        }
+        if st.get("codec_type") == "audio":
+            tracks["audio"].append(entry)
+        elif st.get("codec_type") == "subtitle":
+            tracks["subtitles"].append({**entry, "forced": flags.get("forced") == 1})
+    return tracks
 
 
 async def probe_audio_plan(source: str, languages: list[str]) -> Optional[dict]:
@@ -1072,10 +1117,12 @@ async def _complete_job(job_id: str) -> None:
             _save_jobs()
             _publish(job_id)
         return
+    tracks = await probe_output_tracks(job["output_path"])
     if job_id not in jobs:
         return
     job["status"] = "complete"
     job["output_sha256"] = sha256
+    job["tracks"] = tracks
     job["progress"] = 100.0
     job["eta_seconds"] = 0.0
     job["lease_expires_at"] = None

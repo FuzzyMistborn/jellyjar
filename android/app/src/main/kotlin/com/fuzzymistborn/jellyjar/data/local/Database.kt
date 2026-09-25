@@ -41,6 +41,9 @@ data class DownloadEntity(
     // Deletion used to re-find the file by name under the tree, which silently no-ops if the file
     // was renamed or the folder re-picked — leaving an orphan the Storage screen can't see.
     val localUri: String? = null,
+    // OutputTracks JSON from the finished Press job — which tracks are forced/default, since
+    // the player can't read that from the MP4. Null for downloads made before this existed.
+    val tracksJson: String? = null,
 ) {
     // thumbnailPath is a bare filesystem path (see DownloadRepository.saveThumbnailLocally); Coil
     // only resolves recognized URI schemes, so callers need the `file://` form to load it locally.
@@ -275,7 +278,7 @@ interface CachedItemDao {
         DownloadEntity::class, CachedItemEntity::class, PlaybackPositionEntity::class,
         FavoriteEntity::class, PendingPlaybackSync::class,
     ],
-    version = 10,
+    version = 11,
     // Exported to app/schemas (see room.schemaLocation in build.gradle.kts) so a real migration
     // can be written and reviewed once the app is distributed — see the destructive-migration
     // note in AppModule.
@@ -301,5 +304,13 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
                 "`played` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, " +
                 "PRIMARY KEY(`jellyfinId`))"
         )
+    }
+}
+
+// Adds DownloadEntity.tracksJson. A nullable TEXT column with no default is exactly what Room
+// generates for a `String? = null` property, so validation passes and existing rows get NULL.
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `downloads` ADD COLUMN `tracksJson` TEXT")
     }
 }
