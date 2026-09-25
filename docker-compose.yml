@@ -16,6 +16,7 @@ services:
       LIBVA_DRIVER_NAME: iHD     # use Intel iHD driver for QSV/VAAPI on gen8+ iGPUs; remove on AMD
       # ENCODER: h264_vaapi     # pin encoder; skips startup probe (h264_nvenc | h264_qsv | h264_vaapi | libx264)
       # HW_DECODE: 0            # NVENC/VAAPI: decode + scale on the CPU instead of the GPU (default 1)
+      # AUDIO_LANGUAGES: en      # audio tracks to keep besides the default one (e.g. en,ja — 2- or 3-letter codes); unset keeps all
       MAX_WORKERS: 1             # concurrent transcode jobs; most HW encoders only support one session at a time
       # PRESS_ROLE: coordinator  # for a multi-host setup (see docker-compose.worker.yml); also lets MAX_WORKERS be 0. Default: standalone
       CLEANUP_AFTER_DAYS: 0      # auto-delete completed jobs + their output after N days; 0 disables cleanup

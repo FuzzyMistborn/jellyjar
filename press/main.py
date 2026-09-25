@@ -486,6 +486,43 @@ async def get_duration_us(source: str) -> Optional[float]:
 # mov_text is the only subtitle codec an MP4 container can carry, and it is text-only. Image
 # subtitles (PGS/VobSub, i.e. most Blu-ray and DVD rips) cannot be converted to it — asking
 # ffmpeg to try fails the whole encode, so those streams are deliberately left out.
+# ISO 639-1 (two-letter) and 639-2/B ("bibliographic") codes -> 639-2/T, which is what MKV/MP4
+# track tags mostly use. Lets AUDIO_LANGUAGES say "en" or "eng", and matches a file tagged "fre"
+# against one tagged "fra". Codes not listed pass through unchanged, so any 639-2 code still works.
+_LANGUAGE_ALIASES = {
+    "ar": "ara", "bg": "bul", "bn": "ben", "ca": "cat", "cs": "ces", "cze": "ces", "cy": "cym",
+    "wel": "cym", "da": "dan", "de": "deu", "ger": "deu", "el": "ell", "gre": "ell", "en": "eng",
+    "es": "spa", "et": "est", "eu": "eus", "baq": "eus", "fa": "fas", "per": "fas", "fi": "fin",
+    "fr": "fra", "fre": "fra", "ga": "gle", "gl": "glg", "he": "heb", "hi": "hin",
+    "hr": "hrv", "hu": "hun", "hy": "hye", "arm": "hye", "id": "ind", "is": "isl", "ice": "isl",
+    "it": "ita", "ja": "jpn", "ka": "kat", "geo": "kat", "ko": "kor", "lt": "lit", "lv": "lav",
+    "mk": "mkd", "mac": "mkd", "ms": "msa", "may": "msa", "nb": "nob", "nl": "nld", "dut": "nld",
+    "nn": "nno", "no": "nor", "pl": "pol", "pt": "por", "ro": "ron", "rum": "ron", "ru": "rus",
+    "sk": "slk", "slo": "slk", "sl": "slv", "sq": "sqi", "alb": "sqi", "sr": "srp", "sv": "swe",
+    "ta": "tam", "te": "tel", "th": "tha", "tl": "tgl", "tr": "tur", "uk": "ukr", "ur": "urd",
+    "vi": "vie", "zh": "zho", "chi": "zho",
+}
+
+
+def _normalize_language(tag: str) -> str:
+    """"en", "eng", "EN-us" -> "eng". Region/script subtags (BCP 47) are dropped."""
+    base = tag.strip().lower().replace("_", "-").split("-")[0]
+    return _LANGUAGE_ALIASES.get(base, base)
+
+
+# Audio tracks to keep in downloads, as language codes — two-letter ("en") or three-letter
+# ("eng") both work, e.g. "en,ja". The source's default track is always kept on top of these.
+# Empty keeps every track. Each kept track costs a decode + AAC encode on the CPU — the GPU
+# pipeline doesn't touch audio — so on a Blu-ray remux with a lossless 7.1 main track and
+# several dubs, audio is most of the CPU load.
+AUDIO_LANGUAGES = [
+    _normalize_language(lang) for lang in os.environ.get("AUDIO_LANGUAGES", "").split(",") if lang.strip()
+]
+# Commentary is never kept (unless it's somehow the default track): it's rarely wanted on a tablet
+# and it's a whole extra audio encode. Matched by disposition or, since many files don't set that,
+# by track title.
+_COMMENTARY_RE = re.compile(r"commentary", re.IGNORECASE)
+
 TEXT_SUBTITLE_CODECS = {"subrip", "srt", "ass", "ssa", "mov_text", "text", "webvtt", "subviewer"}
 
 
@@ -500,20 +537,26 @@ async def probe_text_subtitle_count(source: str) -> int:
     return count
 
 
-async def probe_subtitle_plan(source: str) -> tuple[int, list[int]]:
-    """Leading text-subtitle count plus which of those (by output index) are forced.
+async def probe_subtitle_plan(source: str) -> tuple[int, list[str]]:
+    """Leading text-subtitle count plus each of those tracks' disposition, by output index.
 
-    Re-encoding SRT -> mov_text doesn't reliably carry the source's `forced`/`default`
-    disposition through to the output track on its own — without it, nothing tells the player
-    to auto-select a forced track (e.g. the "translate the aliens" captions), so it silently
-    plays with no subtitles even though the track exists in the file. The forced index is
-    re-applied explicitly via `-disposition:s:N forced` in build_ffmpeg_command.
+    The dispositions are applied explicitly via `-disposition:s:N` in build_ffmpeg_command, as
+    "default", "forced", "default+forced" or "0", because re-encoding SRT -> mov_text doesn't
+    reliably carry the source's flags through on its own. Writing "0" for an unflagged track
+    stops ffmpeg from inventing a `default` on it — except that the MP4 muxer always enables at
+    least one track per type, so a file whose only subtitle track is unflagged still reads back
+    as default=1.
+
+    Note that the app's player doesn't act on any of this: Media3's MP4 extractor never reads
+    track selection flags, so offline playback picks audio by device language and leaves
+    subtitles off unless they match the system captioning language. The flags are kept
+    accurate for other players, and in case the app ever reads them itself.
     """
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffprobe", "-v", "quiet", "-print_format", "json",
             "-select_streams", "s",
-            "-show_entries", "stream=codec_name:stream_disposition=forced",
+            "-show_entries", "stream=codec_name:stream_disposition=default,forced",
             source,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
@@ -525,32 +568,38 @@ async def probe_subtitle_plan(source: str) -> tuple[int, list[int]]:
             await proc.wait()
             return 0, []
         streams = json.loads(stdout).get("streams", [])
-        count = 0
-        forced_indices: list[int] = []
+        dispositions: list[str] = []
         for stream in streams:
             if stream.get("codec_name") not in TEXT_SUBTITLE_CODECS:
                 break
-            if stream.get("disposition", {}).get("forced") == 1:
-                forced_indices.append(count)
-            count += 1
-        return count, forced_indices
+            flags = stream.get("disposition", {})
+            dispositions.append(
+                "+".join(f for f in ("default", "forced") if flags.get(f) == 1) or "0"
+            )
+        return len(dispositions), dispositions
     except Exception:
         return 0, []
 
 
-async def probe_default_audio_index(source: str) -> int | None:
-    """Which audio stream (0-based, among audio streams only) is flagged `default` in the source.
+async def probe_audio_plan(source: str, languages: list[str]) -> Optional[dict]:
+    """Which audio streams to keep, and how to handle each.
 
-    `-map 0:a?` keeps every audio stream in source order, so this index lines up directly with
-    the output stream's `-disposition:a:N`. Returns None if nothing is flagged (nothing to
-    override — ffmpeg/the player's own fallback applies) or the source has only one audio
-    stream (nothing to distinguish).
+    Returns {"tracks": [{"index", "language", "copy", "downmix"}, ...], "default": output index | None}, where
+    `index` is the stream's position among the source's audio streams (for `-map 0:a:N`) and the
+    tracks are in source order, so a track's position in the list is its output audio index.
+    Returns None when the probe fails, and build_ffmpeg_command then keeps every track.
+
+    Kept: the default track (the first track when none is flagged — that's what players pick)
+    plus any track whose language is in `languages` or is untagged, minus commentary. Empty `languages` keeps
+    everything but commentary. Every track is downmixed to stereo — downloads are for tablets
+    and phones — and a track that's already stereo-or-less AAC is stream-copied, not re-encoded.
     """
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffprobe", "-v", "quiet", "-print_format", "json",
             "-select_streams", "a",
-            "-show_entries", "stream_disposition=default",
+            "-show_entries", "stream=codec_name,channels:stream_tags=language,title"
+                             ":stream_disposition=default,comment",
             source,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
@@ -562,14 +611,40 @@ async def probe_default_audio_index(source: str) -> int | None:
             await proc.wait()
             return None
         streams = json.loads(stdout).get("streams", [])
-        if len(streams) <= 1:
-            return None
-        for index, stream in enumerate(streams):
-            if stream.get("disposition", {}).get("default") == 1:
-                return index
-        return None
     except Exception:
         return None
+    if not streams:
+        return None
+
+    default_index = next(
+        (i for i, st in enumerate(streams) if st.get("disposition", {}).get("default") == 1), 0,
+    )
+
+    def is_commentary(st: dict) -> bool:
+        return (st.get("disposition", {}).get("comment") == 1
+                or bool(_COMMENTARY_RE.search(st.get("tags", {}).get("title", ""))))
+
+    tracks = []
+    default_out = None
+    for i, st in enumerate(streams):
+        language = _normalize_language(st.get("tags", {}).get("language", ""))
+        # Untagged ("" / "und") tracks are kept: there's no telling they aren't a wanted language.
+        unwanted_language = languages and language not in ("", "und") and language not in languages
+        if i != default_index and (is_commentary(st) or unwanted_language):
+            continue
+        if i == default_index:
+            default_out = len(tracks)
+        channels = st.get("channels") or 0
+        tracks.append({
+            "index": i,
+            # Written back as metadata: MP4 only stores three-letter codes, so a track tagged
+            # "fr" in the source would otherwise lose its language entirely.
+            "language": language if len(language) == 3 else None,
+            "copy": st.get("codec_name") == "aac" and 0 < channels <= 2,
+            # Unknown channel count: downmix anyway; -ac 2 on a mono track is harmless.
+            "downmix": channels != 1 and channels != 2,
+        })
+    return {"tracks": tracks, "default": default_out}
 
 
 def build_ffmpeg_command(
@@ -578,8 +653,8 @@ def build_ffmpeg_command(
     preset: dict,
     encoder: str | None = None,
     subtitle_count: int = 0,
-    forced_subtitle_indices: list[int] | None = None,
-    default_audio_index: int | None = None,
+    subtitle_dispositions: list[str] | None = None,
+    audio_plan: Optional[dict] = None,
     hw_decode: bool = False,
 ) -> list[str]:
     """Build the ffmpeg argv for one encode attempt.
@@ -605,30 +680,43 @@ def build_ffmpeg_command(
     # Without explicit maps, ffmpeg's default stream selection keeps exactly one video and one
     # audio stream and drops every subtitle — so downloads lost alternate audio tracks and all
     # subtitles, and the player's track picker had nothing to offer offline.
-    stream_map = ["-map", "0:v:0", "-map", "0:a?"]
+    stream_map = ["-map", "0:v:0"]
+    if audio_plan is None:
+        # Probe failed: keep every track, re-encoded and downmixed, rather than guess.
+        stream_map += ["-map", "0:a?"]
+        common_audio = ["-c:a", "aac", "-b:a", preset["audio_bitrate"], "-ac", "2"]
+    else:
+        common_audio = []
+        for out, track in enumerate(audio_plan["tracks"]):
+            stream_map += ["-map", f"0:a:{track['index']}"]
+            if track["copy"]:
+                common_audio += [f"-c:a:{out}", "copy"]
+            else:
+                common_audio += [f"-c:a:{out}", "aac", f"-b:a:{out}", preset["audio_bitrate"]]
+                if track["downmix"]:
+                    common_audio += [f"-ac:a:{out}", "2"]
+            if track["language"]:
+                common_audio += [f"-metadata:s:a:{out}", f"language={track['language']}"]
+            # Re-encoding (not stream-copying) audio doesn't reliably carry the source's `default`
+            # disposition through to the output track. The player has no configured preferred-
+            # audio-language, so with nothing marked default it just falls back to output track
+            # 0 — if the source's default track (e.g. English, dubbed after the original-language
+            # track) isn't first, downloaded playback silently starts on the wrong language. Set
+            # every output track's disposition explicitly, so exactly the source default is
+            # flagged, mirroring the same fix for forced subtitles below.
+            if len(audio_plan["tracks"]) > 1:
+                flag = "default" if out == audio_plan["default"] else "0"
+                common_audio += [f"-disposition:a:{out}", flag]
     for index in range(subtitle_count):
         stream_map += ["-map", f"0:s:{index}"]
 
-    common_audio = ["-c:a", "aac", "-b:a", preset["audio_bitrate"]]
-    # Re-encoding (not stream-copying) audio doesn't reliably carry the source's `default`
-    # disposition through to the output track. The player has no configured preferred-audio-
-    # language, so with nothing marked default it just falls back to output track 0 — if the
-    # source's default/preferred track (e.g. English, dubbed after the original-language track)
-    # isn't first in file order, downloaded playback silently starts on the wrong language even
-    # though every track made it into the file. `-map 0:a?` preserves source order, so output
-    # audio index N is source audio stream N — stamp the disposition back explicitly rather than
-    # relying on ffmpeg to infer it, mirroring the same fix for forced subtitles below.
-    if default_audio_index is not None:
-        common_audio += [f"-disposition:a:{default_audio_index}", "default"]
     if subtitle_count:
         common_audio += ["-c:s", "mov_text"]
-        # Re-encoding SRT -> mov_text doesn't reliably preserve the source's `forced`
-        # disposition on its own, so a forced track (e.g. "aliens speaking" captions) can end
-        # up in the file but never auto-selected by the player. Stamp it back on explicitly,
-        # per output subtitle index (matches the -map order above, so index N here is the same
-        # stream as -map 0:s:N).
-        for index in forced_subtitle_indices or []:
-            common_audio += [f"-disposition:s:{index}", "forced"]
+        # Stamp each track's source flags back on explicitly (see probe_subtitle_plan), per
+        # output subtitle index — matches the -map order above, so index N here is the same
+        # stream as -map 0:s:N.
+        for index, disposition in enumerate(subtitle_dispositions or []):
+            common_audio += [f"-disposition:s:{index}", disposition]
     # The temp file is always "<...>.mp4.<claim_id>.part" (see _tmp_path) so the finished encode can be
     # atomically renamed into place — but ffmpeg picks a muxer from the filename's last
     # extension, and ".part" isn't one it knows. Forcing the container explicitly means output
@@ -820,6 +908,7 @@ async def execute_ffmpeg(
     is_cancelled: Any,
     on_process: Any,
     publish: bool = True,
+    audio_languages: Optional[list[str]] = None,
 ) -> tuple[str, Optional[str]]:
     """Probe, encode (with the GPU -> CPU-decode -> libx264 fallback chain) and, if `publish`, move the result into place.
 
@@ -829,8 +918,11 @@ async def execute_ffmpeg(
     only the coordinator may move into place. In every other case nothing is left behind at
     `tmp_output`, and `output` is untouched.
     """
-    subtitle_count, forced_subtitle_indices = await probe_subtitle_plan(source)
-    default_audio_index = await probe_default_audio_index(source)
+    subtitle_count, subtitle_dispositions = await probe_subtitle_plan(source)
+    audio_plan = await probe_audio_plan(
+        source,
+        AUDIO_LANGUAGES if audio_languages is None else [_normalize_language(l) for l in audio_languages],
+    )
 
     # The job can be deleted while probing (a blocking ffprobe call), and without this check
     # ffmpeg would still start and produce an untracked file.
@@ -860,8 +952,8 @@ async def execute_ffmpeg(
                 Path(tmp_output).unlink(missing_ok=True)
             cmd = build_ffmpeg_command(
                 source, tmp_output, preset, encoder=encoder, hw_decode=hw_decode,
-                subtitle_count=subtitle_count, forced_subtitle_indices=forced_subtitle_indices,
-                default_audio_index=default_audio_index,
+                subtitle_count=subtitle_count, subtitle_dispositions=subtitle_dispositions,
+                audio_plan=audio_plan,
             )
             returncode, error_text = await _run_ffmpeg_once(cmd, duration_us, on_progress, is_cancelled, on_process)
             if returncode == 0 or is_cancelled():
@@ -1216,6 +1308,7 @@ async def _run_remote_job(client: httpx.AsyncClient, spec: dict) -> None:
         result, error = await execute_ffmpeg(
             job_id, source, output, tmp_output, spec["preset"], duration_us,
             on_progress, lambda: state["cancelled"], on_process, publish=False,
+            audio_languages=spec.get("audio_languages"),
         )
         if result == "ok":
             accepted = await _report_to_coordinator(
@@ -1601,6 +1694,8 @@ async def worker_claim(info: WorkerInfo):
         "source_path": job["source_path"],
         "output_path": job["output_path"],
         "preset": PRESETS[job["preset"]],
+        # The coordinator's setting, so a job gets the same tracks whichever host encodes it.
+        "audio_languages": AUDIO_LANGUAGES,
         "duration_seconds": duration,
         # The worker stops on its own once it's gone this long without a heartbeat getting
         # through — by then this claim has lapsed and the job may be running elsewhere.
