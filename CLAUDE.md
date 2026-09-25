@@ -159,3 +159,4 @@ Implemented, based on a design review pass (see "Good to Do" below for the rest 
 - KSP warnings about `No dependencies reported for generated source` are harmless (Hilt codegen bug, filed upstream)
 - Configuration cache is enabled (`org.gradle.configuration-cache=true`)
 - Run on device: `ujust` or standard Android Studio deploy
+- Do not add "not build-verified" / "no Android build tooling in this environment" disclaimers to commit messages. Caveat like this in your conversation reply to the user if relevant, never in the commit itself.
