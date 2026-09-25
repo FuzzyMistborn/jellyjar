@@ -57,7 +57,9 @@ import com.fuzzymistborn.jellyjar.ui.theme.Surface
 import com.fuzzymistborn.jellyjar.ui.viewmodel.NextEpisodeTarget
 import com.fuzzymistborn.jellyjar.ui.viewmodel.PlayerViewModel
 import com.fuzzymistborn.jellyjar.ui.viewmodel.TrickplaySpec
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -424,6 +426,31 @@ fun PlayerScreen(
         player.prepare()
         if (resumeMs > 0) player.seekTo(resumeMs)
         player.playWhenReady = wasPlaying
+    }
+
+    // ── Forced subtitles for downloads ────────────────────────────────────────
+    // Media3's MP4 extractor ignores the default/forced flags Press writes, so a downloaded file
+    // never turns on its forced track (the "translated alien dialogue" kind) by itself. Press
+    // reports the flags separately and they're stored with the download; apply them once, when
+    // the file's tracks first load. Anything picked in the track menu afterwards wins.
+    LaunchedEffect(jellyfinId) {
+        if (jellyfinId == null || isStreamed) return@LaunchedEffect
+        val info = viewModel.loadOfflineTracks(jellyfinId) ?: return@LaunchedEffect
+        val tracks = player.currentTracks.takeUnless { it.isEmpty }
+            ?: callbackFlow {
+                val listener = object : Player.Listener {
+                    override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                        trySend(tracks)
+                    }
+                }
+                player.addListener(listener)
+                awaitClose { player.removeListener(listener) }
+            }.first { !it.isEmpty }
+        val override = offlineForcedSubtitleOverride(tracks, info) ?: return@LaunchedEffect
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            .setOverrideForType(override)
+            .build()
     }
 
     // ── In-player streaming quality switcher ──────────────────────────────────
@@ -1045,6 +1072,42 @@ private fun PlayerSettingsSheet(
         }
     }
 }
+
+// The forced subtitle track to turn on for a downloaded file, or null to leave subtitles as they
+// are. Picks the forced track in the language of the audio that's playing — forced tracks carry
+// just the lines spoken in some *other* language, so one meant for the English audio is useless
+// over the Japanese dub — falling back to an untagged forced track. `info` lists tracks in file
+// order, which is also ExoPlayer's order, so the Nth text group is info.subtitles[N]; if the
+// counts or a tagged language disagree, the file isn't what Press described and nothing is
+// touched rather than risk switching on the wrong track.
+private fun offlineForcedSubtitleOverride(
+    tracks: androidx.media3.common.Tracks,
+    info: com.fuzzymistborn.jellyjar.model.OutputTracks,
+): TrackSelectionOverride? {
+    val subtitles = info.subtitles.orEmpty()
+    val textGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+    if (subtitles.none { it.forced } || textGroups.size != subtitles.size) return null
+    val audioLanguage = tracks.groups
+        .firstOrNull { it.type == C.TRACK_TYPE_AUDIO && it.isSelected }
+        ?.let { group -> (0 until group.length).firstOrNull { group.isTrackSelected(it) }?.let(group::getTrackFormat) }
+        ?.language?.let(::iso3Language)
+    val index = subtitles.indexOfFirst { it.forced && audioLanguage != null && it.language == audioLanguage }
+        .takeIf { it >= 0 }
+        ?: subtitles.indexOfFirst { it.forced && it.language == null }.takeIf { it >= 0 }
+        ?: return null
+    val group = textGroups[index]
+    val playerLanguage = group.getTrackFormat(0).language?.let(::iso3Language)
+    val expected = subtitles[index].language
+    if (playerLanguage != null && expected != null && playerLanguage != expected) return null
+    return TrackSelectionOverride(group.mediaTrackGroup, 0)
+}
+
+// ExoPlayer normalizes track languages to BCP 47 ("en"); Press reports ISO 639-2/T ("eng").
+// Locale maps between them, including the three-letter forms ExoPlayer keeps when there's no
+// two-letter code. Null for "und" or anything Locale doesn't know.
+private fun iso3Language(tag: String): String? =
+    runCatching { java.util.Locale.forLanguageTag(tag).isO3Language }.getOrNull()
+        ?.takeIf { it.isNotEmpty() && it != "und" }
 
 // Shows the thumbnail nearest to `positionMs` while the user drags the seek bar. Trickplay
 // tiles are sprite sheets (tileWidth × tileHeight thumbnails per JPEG); we fetch the tile
