@@ -151,6 +151,13 @@ an older card — the job retries automatically with CPU decode + GPU encode, th
 Set `HW_DECODE: 0` to skip the GPU-decode attempt entirely. QSV still decodes and scales on the
 CPU. HDR sources are not tone-mapped on any path.
 
+**Audio**: downloads are for tablets and phones, so every audio track is downmixed to stereo AAC
+(a track that's already stereo AAC is copied as-is). Commentary tracks are dropped. Set
+`AUDIO_LANGUAGES` (two- or three-letter codes, e.g. `en,ja` or `eng,jpn`) to keep only those
+languages plus the source's default track and any untagged tracks; unset keeps every language. Audio is always
+decoded and encoded on the CPU, so on remuxes with several lossless tracks this is the main
+CPU cost left once video runs on the GPU.
+
 **Distributed transcoding**: to spread jobs across several machines, run the same Press image
 on each extra host in worker mode. One instance stays the *coordinator* (the only one the app
 talks to); workers poll it for jobs, encode on their own GPU, and report back.
