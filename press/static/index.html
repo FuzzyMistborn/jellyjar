@@ -192,7 +192,8 @@ function formatBytes(bytes) {
 }
 
 function timeAgo(iso) {
-  const d = new Date(iso + 'Z');
+  const hasOffset = /[+-]\d{2}:\d{2}$|Z$/.test(iso);
+  const d = new Date(hasOffset ? iso : iso + 'Z');
   const secs = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
   if (secs < 60) return `${secs}s ago`;
   if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
