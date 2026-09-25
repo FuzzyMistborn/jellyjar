@@ -255,20 +255,27 @@ private fun DetailStackedContent(
                 BoxWithConstraints(modifier = Modifier.padding(horizontal = 32.dp)) {
                     val isWide = maxWidth >= 600.dp
                     val posterWidth = if (isWide) 150.dp else 130.dp
+                    val isEpisode = item.type == "Episode"
+                    // A 16:9 episode thumbnail at double poster width can eat almost the whole
+                    // row on a narrow phone, leaving the title column too thin to word-wrap —
+                    // stack the thumbnail above the text instead once it would exceed roughly
+                    // half the available width.
+                    val stackEpisodeThumbnail = isEpisode && (posterWidth * 2) > maxWidth / 2
 
-                    Row {
+                    val poster = @Composable {
                         PosterImage(
                             imageUrl = state.download?.thumbnailUri ?: viewModel.posterUrl(item.id),
                             contentDescription = item.name,
-                            aspectRatio = if (item.type == "Episode") 16f / 9f else 2f / 3f,
+                            aspectRatio = if (isEpisode) 16f / 9f else 2f / 3f,
                             modifier = detailPosterModifier(
-                                (if (item.type == "Episode") Modifier.width(posterWidth * 2) else Modifier.width(posterWidth)),
+                                (if (isEpisode) Modifier.width(posterWidth * 2) else Modifier.width(posterWidth))
+                                    .let { if (stackEpisodeThumbnail) Modifier.fillMaxWidth() else it },
                                 item.id, sharedTransitionScope, animatedVisibilityScope,
                             ),
                         )
-                        Spacer(Modifier.width(if (isWide) Spacing.lg else Spacing.lg))
-
-                        Column(modifier = Modifier.weight(1f)) {
+                    }
+                    val textColumn = @Composable {
+                        Column(modifier = Modifier.fillMaxWidth()) {
                             TitleAndMetaRow(item, accentColor)
                             if (!item.mediaSources.isNullOrEmpty() && !state.kidModeEnabled) {
                                 Spacer(Modifier.height(Spacing.sm))
@@ -283,6 +290,20 @@ private fun DetailStackedContent(
                             }
                             Spacer(Modifier.height(Spacing.md))
                             OverviewBlock(item, isWide = isWide, accentColor = accentColor)
+                        }
+                    }
+
+                    if (stackEpisodeThumbnail) {
+                        Column {
+                            poster()
+                            Spacer(Modifier.height(Spacing.lg))
+                            textColumn()
+                        }
+                    } else {
+                        Row {
+                            poster()
+                            Spacer(Modifier.width(if (isWide) Spacing.lg else Spacing.lg))
+                            Box(modifier = Modifier.weight(1f)) { textColumn() }
                         }
                     }
                 }
