@@ -3,6 +3,9 @@ name: Build APK (CI)
 on:
   push:
     branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/build-apk-ci.yml'
 
 jobs:
   build:
