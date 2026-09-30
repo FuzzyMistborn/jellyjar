@@ -5,7 +5,7 @@ ksp = "2.3.12"
 hilt = "2.60.1"
 hiltNavigationCompose = "1.4.0"
 compose-bom = "2026.09.00"
-navigation = "2.10.1"
+navigation = "2.10.2"
 room = "2.8.5"
 media3 = "1.11.1"
 retrofit = "3.0.0"
@@ -13,14 +13,14 @@ okhttp = "5.5.0"
 coil = "2.7.0"
 jellyfin = "1.9.1"
 datastore = "1.2.1"
-work = "2.11.2"
+work = "2.12.0"
 coreSplashscreen = "1.2.0"
 securityCrypto = "1.1.0"
 palette = "1.0.0"
 
 [libraries]
 # AndroidX Core
-androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version = "1.19.0" }
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version = "1.19.1" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version = "1.13.0" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version = "2.11.0" }
 androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version = "2.11.0" }
