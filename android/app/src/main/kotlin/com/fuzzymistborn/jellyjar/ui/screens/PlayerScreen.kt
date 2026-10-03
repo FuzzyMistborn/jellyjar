@@ -489,6 +489,17 @@ fun PlayerScreen(
     var controlBarTopPx by remember { mutableStateOf<Int?>(null) }
     val density = LocalDensity.current
 
+    // Shared by the hidden-controls gesture surface and the PlayerView's own tap handling below.
+    val seekBy: (Boolean) -> Unit = { forward ->
+        val target = player.currentPosition + if (forward) SEEK_STEP_MS else -SEEK_STEP_MS
+        val duration = player.duration
+        player.seekTo(
+            if (duration > 0) target.coerceIn(0L, duration)
+            else target.coerceAtLeast(0L)
+        )
+        gestureFeedback = if (forward) "+10s" else "−10s"
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -510,6 +521,33 @@ fun PlayerScreen(
                     setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
                         controlsVisible = visibility == android.view.View.VISIBLE
                     })
+                    // Double-tap seek while the controls are showing. The Compose gesture surface
+                    // isn't composed then (it would cover the buttons), so without this the first
+                    // tap of a double-tap just hid the controls. Buttons and the seek bar consume
+                    // their own touches, so this only ever sees taps on empty areas. It replaces
+                    // PlayerView's tap-to-toggle while gestures are on; with them off it stays out
+                    // of the way and PlayerView behaves as before.
+                    val tapDetector = android.view.GestureDetector(context,
+                        object : android.view.GestureDetector.SimpleOnGestureListener() {
+                            override fun onDown(e: android.view.MotionEvent) = true
+                            override fun onSingleTapConfirmed(e: android.view.MotionEvent): Boolean {
+                                if (isControllerFullyVisible) hideController() else showController()
+                                return true
+                            }
+                            override fun onDoubleTap(e: android.view.MotionEvent): Boolean {
+                                seekBy(e.x > width / 2f)
+                                // Re-arms the auto-hide timeout so the controls stay up.
+                                showController()
+                                return true
+                            }
+                        })
+                    // No performClick(): PlayerView's override toggles the controller itself,
+                    // which would undo the toggle/seek handled above.
+                    setOnTouchListener { _, event ->
+                        if (!gesturesEnabled) return@setOnTouchListener false
+                        tapDetector.onTouchEvent(event)
+                        true
+                    }
                     findViewById<android.widget.ImageButton>(R.id.exo_track_select)
                         ?.setOnClickListener { showTrackSheet = true }
                     // Media3 swaps exo_progress_placeholder for a DefaultTimeBar at inflation
@@ -550,17 +588,7 @@ fun PlayerScreen(
                     .pointerInput(Unit) {
                         detectTapGestures(
                             onTap = { playerViewRef?.showController() },
-                            onDoubleTap = { offset ->
-                                val forward = offset.x > size.width / 2f
-                                val target = player.currentPosition +
-                                    if (forward) SEEK_STEP_MS else -SEEK_STEP_MS
-                                val duration = player.duration
-                                player.seekTo(
-                                    if (duration > 0) target.coerceIn(0L, duration)
-                                    else target.coerceAtLeast(0L)
-                                )
-                                gestureFeedback = if (forward) "+10s" else "−10s"
-                            },
+                            onDoubleTap = { offset -> seekBy(offset.x > size.width / 2f) },
                         )
                     }
                     .pointerInput(Unit) {
@@ -662,8 +690,10 @@ fun PlayerScreen(
             )
         }
 
-        // Skip intro / credits button
-        if (activeSegment != null) {
+        // Skip intro / credits button. Hidden while the Up Next card is up during the credits —
+        // the card is raised at the credits marker, so the two would always overlap, and "Play
+        // now" is the better version of the same action. Cancelling the card brings it back.
+        if (activeSegment != null && !(activeSegment.type == "Outro" && pendingNext != null)) {
             Button(
                 onClick = { player.seekTo(activeSegment.endMs) },
                 colors = ButtonDefaults.buttonColors(

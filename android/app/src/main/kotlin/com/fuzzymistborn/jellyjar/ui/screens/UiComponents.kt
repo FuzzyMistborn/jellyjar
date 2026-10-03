@@ -231,3 +231,21 @@ fun EmptyState(
         }
     }
 }
+
+// Unwatched-episode count for Series/Season posters, drawn in the same scrim pill as the other
+// poster badges. Callers only show it for count > 0.
+@Composable
+fun UnwatchedCountBadge(count: Int, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        color = ScrimStrong,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(Radius.pill),
+    ) {
+        Text(
+            text = if (count > 99) "99+" else count.toString(),
+            style = MaterialTheme.typography.labelSmall,
+            color = Primary,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+        )
+    }
+}
