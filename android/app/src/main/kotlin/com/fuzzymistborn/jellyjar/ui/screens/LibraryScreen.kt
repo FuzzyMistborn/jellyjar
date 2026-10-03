@@ -799,6 +799,16 @@ private fun MediaCard(
                         modifier = Modifier.padding(3.dp).size(IconSize.sm),
                     )
                 }
+            } else {
+                // Series only — movies carry no count. Shares the corner with the watched check,
+                // which it can never coincide with (a fully watched series has nothing unplayed).
+                val unwatched = item.userData?.unplayedItemCount ?: 0
+                if (unwatched > 0) {
+                    UnwatchedCountBadge(
+                        count = unwatched,
+                        modifier = Modifier.align(Alignment.TopStart).padding(Spacing.sm),
+                    )
+                }
             }
             // Download status badge — icon-only once complete/failed, otherwise a
             // percentage so the grid can be scanned without opening each item.

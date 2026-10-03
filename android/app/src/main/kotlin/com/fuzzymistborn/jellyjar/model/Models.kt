@@ -117,6 +117,8 @@ data class UserData(
     // ISO-8601 UTC; used by offline playback sync to tell whether another client played the item
     // more recently than the offline viewing being synced.
     @SerializedName("LastPlayedDate") val lastPlayedDate: String? = null,
+    // Only populated on folders (Series/Season): episodes the user hasn't watched yet.
+    @SerializedName("UnplayedItemCount") val unplayedItemCount: Int? = null,
 )
 
 data class JellyfinLibrary(

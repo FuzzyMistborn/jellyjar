@@ -668,6 +668,13 @@ private fun SeasonsSection(
                             episodeDownloads = state.episodeDownloads,
                             modifier = Modifier.align(Alignment.BottomCenter),
                         )
+                        val unwatched = season.userData?.unplayedItemCount ?: 0
+                        if (unwatched > 0) {
+                            UnwatchedCountBadge(
+                                count = unwatched,
+                                modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.sm),
+                            )
+                        }
                     }
                     Spacer(Modifier.height(4.dp))
                     Text(
