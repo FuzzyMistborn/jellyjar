@@ -21,6 +21,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToDown
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -35,6 +37,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.MediaSession
 import androidx.media3.ui.PlayerView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -65,6 +68,9 @@ import kotlinx.coroutines.launch
 
 // Seek step for a double-tap on the left/right half of the video.
 private const val SEEK_STEP_MS = 10_000L
+private const val IDLE_DIM_MS = 30_000L
+private const val IDLE_RELEASE_MS = 45_000L
+private const val IDLE_DIM_BRIGHTNESS = 0.05f
 
 // How early the "Up next" card appears when the episode has no credits marker: enough warning
 // to cancel, without covering the picture for long.
@@ -111,7 +117,8 @@ fun PlayerScreen(
         val controller = WindowInsetsControllerCompat(window, window.decorView)
         controller.hide(WindowInsetsCompat.Type.systemBars())
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // FLAG_KEEP_SCREEN_ON is set and cleared by the idle dim timer further down; it's only
+        // cleaned up here.
         onDispose {
             controller.show(WindowInsetsCompat.Type.systemBars())
             // WindowInsetsControllerCompat.show() doesn't always trigger an immediate
@@ -130,14 +137,18 @@ fun PlayerScreen(
     }
 
     val player = remember {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(localPath))
-            prepare()
-            if (startPositionMs > 0L) seekTo(startPositionMs)
-            // Started by the screen-time check below, once it's confirmed today's budget isn't
-            // already spent — otherwise a kid would get a second of audio before the times-up card.
-            playWhenReady = false
-        }
+        ExoPlayer.Builder(context)
+            // Headphones disconnecting or switching off pauses instead of carrying on through
+            // the tablet speaker.
+            .setHandleAudioBecomingNoisy(true)
+            .build().apply {
+                setMediaItem(MediaItem.fromUri(localPath))
+                prepare()
+                if (startPositionMs > 0L) seekTo(startPositionMs)
+                // Started by the screen-time check below, once it's confirmed today's budget isn't
+                // already spent — otherwise a kid would get a second of audio before the times-up card.
+                playWhenReady = false
+            }
     }
 
     // ── Kid Mode screen-time limits ───────────────────────────────────────────
@@ -239,6 +250,58 @@ fun PlayerScreen(
             viewModel.addWatched(unflushedWatchMs[0])
             player.release()
         }
+    }
+
+    // ── Headset / Bluetooth media buttons ─────────────────────────────────────
+    // Media buttons are delivered to the active MediaSession, which forwards play/pause to the
+    // player. Only alive while screen time allows playback: otherwise a headset "play" could
+    // start a title blocked at the door, or restart a finished episode behind the times-up card
+    // (Media3 seeks to the start when play is pressed on an ended player). The id must be unique —
+    // during the Up Next handoff the next PlayerScreen can compose before this one disposes, and
+    // two sessions with the default "" id throw. Declared after the player's dispose effect, so
+    // it's released first.
+    val sessionActive = playbackAllowed && timesUp == null
+    DisposableEffect(player, sessionActive) {
+        if (!sessionActive) return@DisposableEffect onDispose {}
+        val session = MediaSession.Builder(context, player)
+            .setId("jellyjar-player-${java.util.UUID.randomUUID()}")
+            .build()
+        onDispose { session.release() }
+    }
+
+    // ── Screen dim / off while idle ───────────────────────────────────────────
+    // The screen stays on while playing (or buffering). Once paused, ended or blocked, it dims
+    // after IDLE_DIM_MS and stops being held on after IDLE_RELEASE_MS. An app can't force the
+    // screen off, so from there the tablet's own Screen timeout (counted from the last touch)
+    // decides; at 30s or less it goes off right away. Any touch restarts the countdown.
+    var wantsToPlay by remember { mutableStateOf(false) }
+    var lastInteractionMs by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    DisposableEffect(player) {
+        val update = { wantsToPlay = player.playWhenReady && player.playbackState != Player.STATE_ENDED }
+        val listener = object : Player.Listener {
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) = update()
+            override fun onPlaybackStateChanged(playbackState: Int) = update()
+        }
+        update()
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+    // Brightness from before dimming (a swipe override, or BRIGHTNESS_OVERRIDE_NONE), so
+    // waking the screen puts back exactly what was there. Null when not dimmed.
+    val preDimBrightness = remember { arrayOf<Float?>(null) }
+    LaunchedEffect(wantsToPlay, lastInteractionMs) {
+        val window = activity?.window ?: return@LaunchedEffect
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        preDimBrightness[0]?.let { saved ->
+            window.attributes = window.attributes.apply { screenBrightness = saved }
+            preDimBrightness[0] = null
+        }
+        if (wantsToPlay) return@LaunchedEffect
+        delay(IDLE_DIM_MS)
+        preDimBrightness[0] = window.attributes.screenBrightness
+        window.attributes = window.attributes.apply { screenBrightness = IDLE_DIM_BRIGHTNESS }
+        delay(IDLE_RELEASE_MS - IDLE_DIM_MS)
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     // Auto-play: when the current episode finishes, look up what comes next and offer it behind a
@@ -504,7 +567,20 @@ fun PlayerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .onGloballyPositioned { rootHeightPx = it.size.height },
+            .onGloballyPositioned { rootHeightPx = it.size.height }
+            // Watches every touch (including ones the PlayerView's own controls handle) on the
+            // Initial pass without consuming it, to restart the idle dim countdown. Presses only,
+            // so a brightness swipe doesn't restart it every frame.
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (event.changes.any { it.changedToDown() }) {
+                            lastInteractionMs = SystemClock.elapsedRealtime()
+                        }
+                    }
+                }
+            },
     ) {
         AndroidView(
             factory = {

@@ -759,10 +759,10 @@ private fun MediaCard(
         } else base
     }
 
+    // No clip here: the poster clips itself, and a rounded clip on the whole column shaved the
+    // bottom-left corner off the last text line (the year, or the title when there's no year).
     Column(
-        modifier = Modifier
-            .clip(RoundedCornerShape(Radius.md))
-            .clickable { onFocus(); onClick() }
+        modifier = Modifier.clickable { onFocus(); onClick() }
     ) {
         PosterImage(
             imageUrl = imageUrl,
