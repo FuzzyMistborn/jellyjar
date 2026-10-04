@@ -249,7 +249,7 @@ Or copy the APK to the tablet and open it in a file manager.
 
 - **Browse**: Tap any poster to open the detail screen; genre chips filter server-side within a library. Series and season posters show a count of unwatched episodes
 - **Download**: Tap **Download** on a movie, an individual episode, or a whole season at once; pick a preset (Auto/1080p/720p). Downloads queue client-side and promote to Press as concurrency allows (1–2, configurable in Admin)
-- **Play**: Once downloaded, tap **Play** — plays locally via ExoPlayer, with skip-intro/credits and scrub-preview thumbnails where available
+- **Play**: Once downloaded, tap **Play** — plays locally via ExoPlayer, with skip-intro/credits and scrub-preview thumbnails where available. Headset/Bluetooth play/pause buttons work, and when paused the screen dims after 30s and is released to the tablet's screen timeout after 45s
 - **Offline**: When not connected to your network, only downloaded files are shown
 - **Manage downloads**: The Downloads screen tracks active/completed/failed items, supports reorder/pause/resume/prioritize/retry, and links to a Storage screen for usage breakdown and bulk delete
 - **Admin**: Gear icon → optional PIN gate → Jellyfin/Press connection settings, download path, concurrency, Wi-Fi-only, playback toggles
