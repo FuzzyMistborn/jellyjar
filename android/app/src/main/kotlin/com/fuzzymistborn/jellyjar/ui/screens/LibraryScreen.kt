@@ -35,6 +35,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -57,6 +59,9 @@ fun LibraryScreen(
     animatedVisibilityScope: androidx.compose.animation.AnimatedContentScope? = null,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+
+    // Also fires when returning from Settings, so signing in again is picked up immediately.
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.onForeground() }
 
     BackHandler(enabled = state.globalSearchActive) {
         viewModel.closeGlobalSearch()
@@ -281,6 +286,10 @@ fun LibraryScreen(
                         libraries = state.libraries,
                         isOnline = state.isOnline,
                         jellyfinAvailable = state.jellyfinAvailable,
+                        authExpired = state.authExpired,
+                        isReconnecting = state.isReconnecting,
+                        onRetry = viewModel::retryConnection,
+                        onSignIn = onAdminClick,
                         resumeItems = state.resumeItems,
                         recentlyAdded = state.recentlyAdded,
                         favoriteIds = state.favoriteIds,
@@ -337,6 +346,9 @@ fun LibraryScreen(
                         subtitle = if (!state.isOnline || !state.jellyfinAvailable) {
                             "Only downloaded items are available while offline."
                         } else null,
+                        // Online but the server didn't answer: let the user try again from here.
+                        actionLabel = if (state.isOnline && !state.jellyfinAvailable && state.searchQuery.isBlank()) "Retry" else null,
+                        onAction = viewModel::retryConnection,
                     )
                 }
                 else -> {
@@ -365,6 +377,10 @@ private fun HomeScreen(
     libraries: List<JellyfinLibrary>,
     isOnline: Boolean,
     jellyfinAvailable: Boolean,
+    authExpired: Boolean,
+    isReconnecting: Boolean,
+    onRetry: () -> Unit,
+    onSignIn: () -> Unit,
     resumeItems: List<JellyfinItem>,
     recentlyAdded: List<JellyfinItem>,
     favoriteIds: Set<String>,
@@ -412,14 +428,33 @@ private fun HomeScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                        modifier = Modifier.padding(start = Spacing.lg, end = Spacing.sm, top = Spacing.xs, bottom = Spacing.xs),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.Default.CloudOff, contentDescription = null,
-                            tint = Warning, modifier = Modifier.size(IconSize.sm))
-                        Text("Jellyfin server unreachable — retrying…",
-                            style = MaterialTheme.typography.bodySmall, color = Warning)
+                        Icon(
+                            if (authExpired) Icons.Default.Lock else Icons.Default.CloudOff,
+                            contentDescription = null,
+                            tint = Warning, modifier = Modifier.size(IconSize.sm),
+                        )
+                        Text(
+                            if (authExpired) "Jellyfin sign-in expired — sign in again in Settings"
+                            else "Jellyfin server unreachable — retrying…",
+                            style = MaterialTheme.typography.bodySmall, color = Warning,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (isReconnecting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.padding(horizontal = Spacing.md).size(IconSize.sm),
+                                color = Warning, strokeWidth = 2.dp,
+                            )
+                        } else {
+                            TextButton(onClick = onRetry) { Text("Retry", color = Warning) }
+                        }
+                        // Goes through the PIN gate like the gear icon, so it's safe in Kid Mode.
+                        if (authExpired) {
+                            TextButton(onClick = onSignIn) { Text("Sign In", color = Warning) }
+                        }
                     }
                 }
             }

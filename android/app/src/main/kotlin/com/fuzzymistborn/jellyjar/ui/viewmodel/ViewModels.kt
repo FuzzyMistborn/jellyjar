@@ -31,6 +31,10 @@ data class LibraryState(
     val totalCount: Int = 0,
     val isOnline: Boolean = true,
     val jellyfinAvailable: Boolean = true,
+    // Jellyfin rejected the saved token (see NetworkMonitor.authExpired).
+    val authExpired: Boolean = false,
+    // A retry the user can see is in flight (Retry button, reconnect, app returning to front).
+    val isReconnecting: Boolean = false,
     val showingDownloads: Boolean = false,
     val featuredItem: JellyfinItem? = null,
     val jellyfinUrl: String = "",
@@ -79,6 +83,9 @@ data class LibraryState(
     }
 }
 
+// Backoff while the server is unreachable; the last entry repeats.
+private val RETRY_DELAYS_MS = listOf(2_000L, 4_000L, 8_000L, 15_000L, 30_000L, 60_000L)
+
 @HiltViewModel
 class LibraryViewModel @Inject constructor(
     private val jellyfinRepo: JellyfinRepository,
@@ -95,6 +102,15 @@ class LibraryViewModel @Inject constructor(
     // refresh, selectLibrary, setSortOrder). Two overlapping loads race to write `items`, and the
     // slower one wins — leaving the grid showing the library you just switched away from.
     private var libraryJob: Job? = null
+
+    // Whether `libraries` currently holds the server's list rather than the offline stand-ins.
+    // serverReachable can flip back to true from another screen (Detail loading an item), which
+    // stops the retry loop — without this the home screen stayed on the downloads-only tiles,
+    // with no banner, until the next reconnect.
+    private var librariesLoadedOnline = false
+
+    // Bumped by retryConnection() so the backoff loop restarts from its shortest delay.
+    private val retryGeneration = MutableStateFlow(0)
 
     init {
         // Handles the very first time we observe `online == true` (app start); every later
@@ -129,6 +145,11 @@ class LibraryViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            networkMonitor.authExpired.collect { expired ->
+                _state.update { it.copy(authExpired = expired) }
+            }
+        }
+        viewModelScope.launch {
             combine(
                 networkMonitor.isOnline,
                 _state.map { it.jellyfinAvailable }.distinctUntilChanged(),
@@ -136,6 +157,7 @@ class LibraryViewModel @Inject constructor(
             ) { online, jellyfinAvailable, downloads -> Triple(online, jellyfinAvailable, downloads) }
                 .collect { (online, jellyfinAvailable, downloads) ->
                     if (!online || !jellyfinAvailable) {
+                        librariesLoadedOnline = false
                         _state.update { s ->
                             s.copy(
                                 libraries = syntheticLibrariesFor(downloads),
@@ -146,19 +168,39 @@ class LibraryViewModel @Inject constructor(
                     }
                 }
         }
-        // Retry Jellyfin with backoff when online but server is unreachable; stops once available
+        // Retry Jellyfin with backoff when online but the server is unreachable; stops once
+        // available. Starts short: right after Wi-Fi rejoins, the first attempt often fails while
+        // DHCP/routing settle, and a 15s first retry left the home screen offline long after the
+        // server was back. Not run for a rejected token — retrying the same token can't fix it.
+        var wasAvailable = true
         viewModelScope.launch {
-            _state.map { it.jellyfinAvailable }.distinctUntilChanged().collectLatest { available ->
-                if (available) return@collectLatest
-                var delayMs = 15_000L
-                while (true) {
-                    kotlinx.coroutines.delay(delayMs)
-                    if (_state.value.isOnline && !_state.value.showingDownloads) {
-                        loadLibrary()
-                        delayMs = (delayMs * 2).coerceAtMost(60_000L)
+            combine(
+                _state.map { it.jellyfinAvailable }.distinctUntilChanged(),
+                _state.map { it.authExpired }.distinctUntilChanged(),
+                retryGeneration,
+            ) { available, expired, _ -> available to expired }
+                .collectLatest { (available, expired) ->
+                    val becameAvailable = available && !wasAvailable
+                    wasAvailable = available
+                    if (available) {
+                        // Reachable again, but found by another screen: our libraries are still
+                        // the offline stand-ins, so fetch the real ones. Only on the edge — the
+                        // cold-start load belongs to the isOnline collector above.
+                        if (becameAvailable && !librariesLoadedOnline &&
+                            networkMonitor.isOnline.value && !_state.value.showingDownloads
+                        ) {
+                            loadLibrary(isRefresh = true)
+                        }
+                        return@collectLatest
+                    }
+                    if (expired) return@collectLatest
+                    for (delayMs in RETRY_DELAYS_MS.asSequence() + generateSequence { RETRY_DELAYS_MS.last() }) {
+                        kotlinx.coroutines.delay(delayMs)
+                        if (_state.value.isOnline && !_state.value.showingDownloads) {
+                            loadLibrary(isRefresh = true)
+                        }
                     }
                 }
-            }
         }
         // Device connectivity dropped and came back (Wi-Fi toggle, network switch, etc.) —
         // re-check Jellyfin immediately instead of waiting on the backoff loop above, mirroring
@@ -173,7 +215,7 @@ class LibraryViewModel @Inject constructor(
                     firstReconnect = false
                     return@collect
                 }
-                if (!_state.value.showingDownloads) loadLibrary()
+                retryConnection()
             }
         }
         viewModelScope.launch {
@@ -181,9 +223,11 @@ class LibraryViewModel @Inject constructor(
                 val prevToken = _state.value.jellyfinToken
                 val prevUrl = _state.value.jellyfinUrl
                 _state.update { it.copy(jellyfinUrl = s.jellyfinUrl, jellyfinToken = s.jellyfinToken, showContinueWatching = s.showContinueWatching, showRecentlyAdded = s.showRecentlyAdded, showMyList = s.showMyList, genreFilterEnabled = s.genreFilterEnabled, kidModeEnabled = s.kidModeEnabled) }
-                val tokenBecameAvailable = prevToken.isBlank() && s.jellyfinToken.isNotBlank()
+                // Any new token, not just the first: signing in again after a rejected token must
+                // reload rather than wait for the next retry.
+                val tokenChanged = prevToken != s.jellyfinToken && s.jellyfinToken.isNotBlank()
                 val urlChanged = prevUrl != s.jellyfinUrl && s.jellyfinToken.isNotBlank()
-                if ((tokenBecameAvailable || urlChanged) && _state.value.isOnline && !_state.value.showingDownloads) {
+                if ((tokenChanged || urlChanged) && _state.value.isOnline && !_state.value.showingDownloads) {
                     loadLibrary()
                 }
             }
@@ -236,7 +280,7 @@ class LibraryViewModel @Inject constructor(
                 // on identity so a cancelled predecessor can't clear flags its replacement — e.g.
                 // the isRefreshing that refresh() sets just before cancelling — has already set.
                 if (libraryJob === self) {
-                    _state.update { s -> s.copy(isLoading = false, isRefreshing = false) }
+                    _state.update { s -> s.copy(isLoading = false, isRefreshing = false, isReconnecting = false) }
                 }
             }
         }
@@ -248,18 +292,19 @@ class LibraryViewModel @Inject constructor(
         }
         jellyfinRepo.getLibraries()
             .onSuccess { libs ->
-                networkMonitor.reportServerReachable(true)
+                librariesLoadedOnline = true
                 _state.update { s -> s.copy(libraries = libs) }
+                networkMonitor.reportServerReachable(true)
                 // Launched as a child of this scope, not viewModelScope, so cancelling a stale
                 // load also stops it writing stale resumeItems/recentlyAdded.
                 launch { loadHomeRows() }
             }
-            .onFailure {
+            .onFailure { e ->
                 // Reported through NetworkMonitor rather than set on local state directly: the
                 // serverReachable mirror collector in init{} updates jellyfinAvailable, which the
                 // reactive offline-libraries collector then picks up to rebuild `libraries` from
                 // what's actually downloaded.
-                networkMonitor.reportServerReachable(false)
+                networkMonitor.reportServerFailure(e)
                 _state.update { s -> s.copy(isLoading = false, isRefreshing = false, resumeItems = emptyList(), recentlyAdded = emptyList()) }
                 return@coroutineScope
             }
@@ -290,8 +335,8 @@ class LibraryViewModel @Inject constructor(
                     )
                 }
             }
-            .onFailure {
-                networkMonitor.reportServerReachable(false)
+            .onFailure { e ->
+                networkMonitor.reportServerFailure(e)
                 _state.update { s -> s.copy(isLoading = false, isRefreshing = false) }
             }
         genresDeferred?.await()?.onSuccess { genres ->
@@ -306,6 +351,22 @@ class LibraryViewModel @Inject constructor(
         jellyfinRepo.getRecentlyAdded().onSuccess { items ->
             _state.update { it.copy(recentlyAdded = items) }
         }
+    }
+
+    // Re-checks the server now (Retry button, reconnect, app back in front) and restarts the
+    // backoff from its shortest delay. Keeps what's on screen until the answer arrives.
+    fun retryConnection() {
+        if (_state.value.showingDownloads) return
+        _state.update { it.copy(isReconnecting = true) }
+        retryGeneration.update { it + 1 }
+        loadLibrary(isRefresh = true)
+    }
+
+    // Screen came back to the front — after the app was backgrounded, or returning from Settings
+    // after signing in again. The backoff timer doesn't advance while the device sleeps, so it
+    // could still be most of a minute from its next attempt.
+    fun onForeground() {
+        if (networkMonitor.isOnline.value && !_state.value.jellyfinAvailable) retryConnection()
     }
 
     fun refresh() {
@@ -598,11 +659,11 @@ class DetailViewModel @Inject constructor(
                         _state.update { it.copy(item = item, isLoading = false, isFavorite = isFav, isPlayed = item.userData?.played == true) }
                         if (item.type == "Series") loadSeasons(itemId)
                     }
-                    .onFailure {
+                    .onFailure { e ->
                         // Reports through NetworkMonitor so the Library screen (and any other
                         // screen) reflects "server unreachable" immediately, instead of only this
                         // screen falling back to its offline cache.
-                        networkMonitor.reportServerReachable(false)
+                        networkMonitor.reportServerFailure(e)
                         loadOfflineItem(itemId)
                     }
             }
@@ -846,6 +907,8 @@ data class AdminState(
     val isAuthenticated: Boolean = false,
     val isAuthenticating: Boolean = false,
     val isCheckingConnection: Boolean = false,
+    // Last check reached Jellyfin but it rejected the saved token.
+    val authExpired: Boolean = false,
     val authError: String? = null,
     val isTestingShim: Boolean = false,
     val shimOk: Boolean? = null,
@@ -887,6 +950,7 @@ class AdminViewModel @Inject constructor(
     private val okHttpClient: okhttp3.OkHttpClient,
     private val discoveryService: com.fuzzymistborn.jellyjar.util.JellyfinDiscoveryService,
     private val screenTime: com.fuzzymistborn.jellyjar.data.repository.ScreenTimeManager,
+    private val networkMonitor: NetworkMonitor,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(AdminState())
@@ -991,10 +1055,12 @@ class AdminViewModel @Inject constructor(
             url = ensureScheme(_state.value.jellyfinUrl),
             username = _state.value.username,
             password = _state.value.password,
+            deviceId = settings.deviceIdForSignIn(),
         ).onSuccess { result ->
-            settings.saveJellyfinAuth(ensureScheme(_state.value.jellyfinUrl), result.userId, result.token)
+            settings.saveJellyfinAuth(ensureScheme(_state.value.jellyfinUrl), result.userId, result.token, result.deviceId)
             jellyfinUrlDirty = false
-            _state.update { it.copy(isAuthenticating = false, hasCredentials = true, isAuthenticated = true) }
+            networkMonitor.reportServerReachable(true)
+            _state.update { it.copy(isAuthenticating = false, hasCredentials = true, isAuthenticated = true, authExpired = false) }
         }.onFailure { e ->
             _state.update { it.copy(isAuthenticating = false, isAuthenticated = false, authError = e.message) }
         }
@@ -1014,7 +1080,8 @@ class AdminViewModel @Inject constructor(
         }
         _state.update { it.copy(isQuickConnecting = true, quickConnectCode = null, quickConnectError = null) }
         quickConnectJob = viewModelScope.launch {
-            val initResult = jellyfinRepo.initiateQuickConnect(url)
+            val deviceId = settings.deviceIdForSignIn()
+            val initResult = jellyfinRepo.initiateQuickConnect(url, deviceId)
             val session = initResult.getOrElse { e ->
                 _state.update { it.copy(isQuickConnecting = false, quickConnectError = e.message ?: "Quick Connect is not available on this server") }
                 return@launch
@@ -1023,21 +1090,23 @@ class AdminViewModel @Inject constructor(
             val deadline = System.currentTimeMillis() + 5 * 60 * 1000
             while (System.currentTimeMillis() < deadline) {
                 delay(2000)
-                val poll = jellyfinRepo.pollQuickConnect(url, session.Secret).getOrElse { e ->
+                val poll = jellyfinRepo.pollQuickConnect(url, session.Secret, deviceId).getOrElse { e ->
                     _state.update { it.copy(isQuickConnecting = false, quickConnectCode = null, quickConnectError = e.message) }
                     return@launch
                 }
                 if (poll.Authenticated) {
-                    jellyfinRepo.authenticateWithQuickConnect(url, session.Secret)
+                    jellyfinRepo.authenticateWithQuickConnect(url, session.Secret, deviceId)
                         .onSuccess { result ->
-                            settings.saveJellyfinAuth(url, result.userId, result.token)
+                            settings.saveJellyfinAuth(url, result.userId, result.token, result.deviceId)
                             jellyfinUrlDirty = false
+                            networkMonitor.reportServerReachable(true)
                             _state.update {
                                 it.copy(
                                     isQuickConnecting = false,
                                     quickConnectCode = null,
                                     hasCredentials = true,
                                     isAuthenticated = true,
+                                    authExpired = false,
                                 )
                             }
                         }
@@ -1065,9 +1134,25 @@ class AdminViewModel @Inject constructor(
             return@launch
         }
         _state.update { it.copy(isCheckingConnection = true) }
+        // Shared with NetworkMonitor so the home screen picks up the answer too, instead of
+        // staying on "unreachable" until its own next retry.
         jellyfinRepo.getLibraries()
-            .onSuccess { _state.update { it.copy(isCheckingConnection = false, isAuthenticated = true) } }
-            .onFailure { e -> _state.update { it.copy(isCheckingConnection = false, isAuthenticated = false, authError = e.message) } }
+            .onSuccess {
+                networkMonitor.reportServerReachable(true)
+                _state.update { it.copy(isCheckingConnection = false, isAuthenticated = true, authExpired = false, authError = null) }
+            }
+            .onFailure { e ->
+                networkMonitor.reportServerFailure(e)
+                val expired = e is retrofit2.HttpException && e.code() == 401
+                _state.update {
+                    it.copy(
+                        isCheckingConnection = false,
+                        isAuthenticated = false,
+                        authExpired = expired,
+                        authError = if (expired) "The server rejected the saved sign-in. Sign in again." else e.message,
+                    )
+                }
+            }
     }
 
     fun testShim() = viewModelScope.launch {
@@ -1716,6 +1801,7 @@ data class TrickplaySpec(
     val info: TrickplayInfo,
     val baseUrl: String,
     val token: String,
+    val deviceId: String,
 )
 
 @HiltViewModel
@@ -1827,6 +1913,7 @@ class PlayerViewModel @Inject constructor(
             info = entry.value,
             baseUrl = s.jellyfinUrl,
             token = s.jellyfinToken,
+            deviceId = s.jellyfinDeviceId,
         )
     }
 
@@ -1840,7 +1927,7 @@ class PlayerViewModel @Inject constructor(
             runCatching {
                 val request = okhttp3.Request.Builder()
                     .url(url)
-                    .header("Authorization", JellyfinImageHelper.authHeader(spec.token))
+                    .header("Authorization", JellyfinImageHelper.authHeader(spec.token, spec.deviceId))
                     .build()
                 val response = okHttpClient.newCall(request).execute()
                 response.use {

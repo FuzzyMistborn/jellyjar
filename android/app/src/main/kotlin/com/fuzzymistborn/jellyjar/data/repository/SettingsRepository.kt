@@ -11,6 +11,7 @@ import com.fuzzymistborn.jellyjar.model.AppSettings
 import com.fuzzymistborn.jellyjar.model.ScreenTimeUsage
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.security.MessageDigest
 import javax.inject.Inject
@@ -26,6 +27,8 @@ class SettingsRepository @Inject constructor(
         val JELLYFIN_URL = stringPreferencesKey("jellyfin_url")
         val JELLYFIN_USER_ID = stringPreferencesKey("jellyfin_user_id")
         val JELLYFIN_TOKEN = stringPreferencesKey("jellyfin_token")
+        // DeviceId the stored token was issued to. Absent for tokens from before per-install ids.
+        val JELLYFIN_DEVICE_ID = stringPreferencesKey("jellyfin_device_id")
         val SHIM_URL = stringPreferencesKey("shim_url")
         val DOWNLOAD_PATH = stringPreferencesKey("download_path")
         val PARENTAL_PIN_HASH = stringPreferencesKey("parental_pin_hash")
@@ -62,6 +65,7 @@ class SettingsRepository @Inject constructor(
             jellyfinUrl = prefs[Keys.JELLYFIN_URL] ?: "",
             jellyfinUserId = prefs[Keys.JELLYFIN_USER_ID] ?: "",
             jellyfinToken = prefs[Keys.JELLYFIN_TOKEN] ?: "",
+            jellyfinDeviceId = prefs[Keys.JELLYFIN_DEVICE_ID] ?: "",
             shimUrl = prefs[Keys.SHIM_URL] ?: "",
             downloadPath = prefs[Keys.DOWNLOAD_PATH] ?: "",
             parentalPinHash = prefs[Keys.PARENTAL_PIN_HASH] ?: "",
@@ -100,11 +104,18 @@ class SettingsRepository @Inject constructor(
         )
     }
 
-    suspend fun saveJellyfinAuth(url: String, userId: String, token: String) {
+    // The id to sign in with: this install's own id once it has one, else a fresh UUID. Not saved
+    // here — it's only persisted by saveJellyfinAuth() together with the token it was issued
+    // with, so a failed sign-in can't leave the existing (legacy-id) token paired with a new id.
+    suspend fun deviceIdForSignIn(): String =
+        settings.first().jellyfinDeviceId.ifBlank { java.util.UUID.randomUUID().toString() }
+
+    suspend fun saveJellyfinAuth(url: String, userId: String, token: String, deviceId: String) {
         context.dataStore.edit { prefs ->
             prefs[Keys.JELLYFIN_URL] = url
             prefs[Keys.JELLYFIN_USER_ID] = userId
             prefs[Keys.JELLYFIN_TOKEN] = token
+            prefs[Keys.JELLYFIN_DEVICE_ID] = deviceId
         }
     }
 

@@ -1,6 +1,7 @@
 package com.fuzzymistborn.jellyjar.api
 
 import com.fuzzymistborn.jellyjar.BuildConfig
+import com.fuzzymistborn.jellyjar.model.AppSettings
 import com.fuzzymistborn.jellyjar.model.IntroSkipperSegment
 import com.fuzzymistborn.jellyjar.model.JellyfinItem
 import com.fuzzymistborn.jellyjar.model.JellyfinLibrary
@@ -345,11 +346,27 @@ object JellyfinImageHelper {
 
     private val version get() = BuildConfig.VERSION_NAME
 
-    fun authHeader(token: String): String =
-        """MediaBrowser Client="JellyJar", Device="Android", DeviceId="jellyjar-android", Version="$version", Token="$token""""
+    // Every install used to send this same DeviceId. Jellyfin revokes a user's existing tokens for
+    // a DeviceId whenever that DeviceId logs in again, so two installs signed in as one user kept
+    // logging each other out. New sign-ins get a per-install UUID (AppSettings.jellyfinDeviceId);
+    // a blank id means a token issued before that, which keeps the legacy id so it still matches.
+    const val LEGACY_DEVICE_ID = "jellyjar-android"
 
-    fun unauthHeader(): String =
-        """MediaBrowser Client="JellyJar", Device="Android", DeviceId="jellyjar-android", Version="$version""""
+    // Header values must be ASCII, and a quote would end the field early.
+    private val deviceName: String =
+        android.os.Build.MODEL.orEmpty().filter { it in ' '..'~' && it != '"' }.trim().ifEmpty { "Android" }
+
+    private fun header(deviceId: String, token: String?): String {
+        val id = deviceId.ifBlank { LEGACY_DEVICE_ID }
+        val tokenPart = token?.let { """, Token="$it"""" } ?: ""
+        return """MediaBrowser Client="JellyJar", Device="$deviceName", DeviceId="$id", Version="$version"$tokenPart"""
+    }
+
+    fun authHeader(token: String, deviceId: String): String = header(deviceId, token)
+
+    fun authHeader(s: AppSettings): String = header(s.jellyfinDeviceId, s.jellyfinToken)
+
+    fun unauthHeader(deviceId: String): String = header(deviceId, null)
 
     // Without a container extension in the path, Jellyfin can't guarantee a byte-range-capable,
     // Content-Length response for /stream — it may fall back to chunked transfer, which

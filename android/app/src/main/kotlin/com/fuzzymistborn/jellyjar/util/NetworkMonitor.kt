@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
+import okhttp3.OkHttpClient
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -35,6 +36,7 @@ import javax.inject.Singleton
 class NetworkMonitor @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
+    private val okHttpClient: OkHttpClient,
 ) {
     private val connectivityManager =
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -84,9 +86,27 @@ class NetworkMonitor @Inject constructor(
     private val _serverReachable = MutableStateFlow(true)
     val serverReachable: StateFlow<Boolean> = _serverReachable.asStateFlow()
 
+    // Set when Jellyfin answered but rejected the token (401) — a reachable server, so retrying
+    // won't help; the user has to sign in again. Kept separate from serverReachable so the UI can
+    // say so instead of "unreachable — retrying…" forever.
+    private val _authExpired = MutableStateFlow(false)
+    val authExpired: StateFlow<Boolean> = _authExpired.asStateFlow()
+
     fun reportServerReachable(reachable: Boolean) {
         _serverReachable.value = reachable
+        if (reachable) _authExpired.value = false
     }
+
+    // A failed live Jellyfin call. Still marks the server unreachable either way, so screens fall
+    // back to downloaded content, but flags a rejected token for the UI.
+    fun reportServerFailure(error: Throwable) {
+        if (error is kotlinx.coroutines.CancellationException) return
+        _authExpired.value = error is retrofit2.HttpException && error.code() == 401
+        _serverReachable.value = false
+    }
+
+    // Tracks the default network's blocked state (see onBlockedStatusChanged below).
+    private var defaultNetworkBlocked = false
 
     init {
         // registerDefaultNetworkCallback (not a capability-filtered NetworkRequest) tracks
@@ -94,8 +114,26 @@ class NetworkMonitor @Inject constructor(
         // NetworkRequest.Builder() implicitly adds NET_CAPABILITY_NOT_VPN, so it would never fire
         // for a VPN/Tailscale/WireGuard connection and isOnline could get stuck stale.
         connectivityManager.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) { _rawOnline.value = true }
-            override fun onLost(network: Network) { _rawOnline.value = isCurrentlyConnected() }
+            // Pooled connections belong to the network they were opened on. Reused after Wi-Fi
+            // drops and rejoins, one can sit on a dead socket until the read timeout instead of
+            // failing fast, so the first calls after a reconnect hang and the server looks down.
+            override fun onAvailable(network: Network) {
+                okHttpClient.connectionPool.evictAll()
+                _rawOnline.value = true
+            }
+            override fun onLost(network: Network) {
+                okHttpClient.connectionPool.evictAll()
+                _rawOnline.value = isCurrentlyConnected()
+            }
+            // Doze/app-standby blocks this app's network access while it's in the background
+            // even though the network itself stays up, so every call fails and the server gets
+            // marked unreachable. Nothing else changes when the block lifts (isOnline never
+            // moved), so treat the unblock as a reconnect and let screens re-check right away.
+            override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
+                val wasBlocked = defaultNetworkBlocked
+                defaultNetworkBlocked = blocked
+                if (wasBlocked && !blocked && _isOnline.value) _reconnected.tryEmit(Unit)
+            }
             override fun onUnavailable() { _rawOnline.value = false }
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
                 _rawOnline.value = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)

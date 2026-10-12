@@ -144,6 +144,7 @@ fun AdminScreen(
                 when {
                     state.isCheckingConnection -> StatusChip(label = "Checking…", color = OnSurfaceMuted)
                     state.isAuthenticated -> StatusChip(label = "Connected", color = Success)
+                    state.authExpired -> StatusChip(label = "Sign-in expired", color = Warning)
                     state.hasCredentials -> StatusChip(label = "Unreachable", color = Warning)
                     else -> StatusChip(label = "Not connected", color = OnSurfaceMuted)
                 }
@@ -326,6 +327,20 @@ fun AdminScreen(
                             Text(err, style = MaterialTheme.typography.bodySmall, color = Error)
                         }
                     }
+                }
+            }
+            // Saved sign-in but the server didn't answer: offer a re-check rather than making
+            // re-authenticating the only button that does anything. Hidden for a rejected token,
+            // where signing in again is the actual fix.
+            if (state.hasCredentials && !state.isAuthenticated && !state.authExpired) {
+                OutlinedButton(
+                    onClick = viewModel::checkJellyfinConnection,
+                    enabled = !state.isCheckingConnection,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(IconSize.md))
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text(if (state.isCheckingConnection) "Checking…" else "Check Connection")
                 }
             }
         }

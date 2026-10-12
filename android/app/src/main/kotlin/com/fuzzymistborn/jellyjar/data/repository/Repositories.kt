@@ -101,19 +101,20 @@ class JellyfinRepository @Inject constructor(
     // and drained by takeCached*() on whatever thread the player happens to be on.
     private val lastDiagnostics = java.util.concurrent.ConcurrentHashMap<String, PlaybackDiagnostics>()
     private val lastResolution = java.util.concurrent.ConcurrentHashMap<String, StreamResolution>()
-    suspend fun authenticate(url: String, username: String, password: String): Result<AuthResult> =
+    suspend fun authenticate(url: String, username: String, password: String, deviceId: String): Result<AuthResult> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val retrofit = buildJellyfinRetrofit(url)
                 val service = retrofit.create(JellyfinApiService::class.java)
                 val response = service.authenticate(
-                    authHeader = JellyfinImageHelper.unauthHeader(),
+                    authHeader = JellyfinImageHelper.unauthHeader(deviceId),
                     body = AuthRequest(Username = username, Pw = password),
                 )
                 AuthResult(
                     userId = response.User.Id,
                     token = response.AccessToken,
                     username = response.User.Name,
+                    deviceId = deviceId,
                 )
             }
         }
@@ -122,36 +123,38 @@ class JellyfinRepository @Inject constructor(
     // human-readable Code (shown to the user to enter at jellyfin.org/quickconnect or the
     // server's own UI). poll() is called on a timer against the same Secret until Authenticated
     // flips true, then authenticateWithQuickConnect() exchanges the Secret for a real token —
-    // same AuthResult shape as password auth, so callers can reuse saveJellyfinAuth().
-    suspend fun initiateQuickConnect(url: String): Result<com.fuzzymistborn.jellyjar.api.QuickConnectState> =
+    // same AuthResult shape as password auth, so callers can reuse saveJellyfinAuth(). All three
+    // calls must send the same deviceId: the token is issued to the device that initiated.
+    suspend fun initiateQuickConnect(url: String, deviceId: String): Result<com.fuzzymistborn.jellyjar.api.QuickConnectState> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val service = buildJellyfinRetrofit(url).create(JellyfinApiService::class.java)
-                service.initiateQuickConnect(authHeader = JellyfinImageHelper.unauthHeader())
+                service.initiateQuickConnect(authHeader = JellyfinImageHelper.unauthHeader(deviceId))
             }
         }
 
-    suspend fun pollQuickConnect(url: String, secret: String): Result<com.fuzzymistborn.jellyjar.api.QuickConnectState> =
+    suspend fun pollQuickConnect(url: String, secret: String, deviceId: String): Result<com.fuzzymistborn.jellyjar.api.QuickConnectState> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val service = buildJellyfinRetrofit(url).create(JellyfinApiService::class.java)
-                service.getQuickConnectState(authHeader = JellyfinImageHelper.unauthHeader(), secret = secret)
+                service.getQuickConnectState(authHeader = JellyfinImageHelper.unauthHeader(deviceId), secret = secret)
             }
         }
 
-    suspend fun authenticateWithQuickConnect(url: String, secret: String): Result<AuthResult> =
+    suspend fun authenticateWithQuickConnect(url: String, secret: String, deviceId: String): Result<AuthResult> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val retrofit = buildJellyfinRetrofit(url)
                 val service = retrofit.create(JellyfinApiService::class.java)
                 val response = service.authenticateWithQuickConnect(
-                    authHeader = JellyfinImageHelper.unauthHeader(),
+                    authHeader = JellyfinImageHelper.unauthHeader(deviceId),
                     body = com.fuzzymistborn.jellyjar.api.QuickConnectAuthRequest(Secret = secret),
                 )
                 AuthResult(
                     userId = response.User.Id,
                     token = response.AccessToken,
                     username = response.User.Name,
+                    deviceId = deviceId,
                 )
             }
         }
@@ -162,7 +165,7 @@ class JellyfinRepository @Inject constructor(
             val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
             service.getLibraries(
                 userId = s.jellyfinUserId,
-                authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
+                authHeader = JellyfinImageHelper.authHeader(s),
             ).Items
         }
     }
@@ -181,7 +184,7 @@ class JellyfinRepository @Inject constructor(
             val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
             val response = service.getItems(
                 userId = s.jellyfinUserId,
-                authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
+                authHeader = JellyfinImageHelper.authHeader(s),
                 parentId = parentId,
                 types = types,
                 startIndex = startIndex,
@@ -203,7 +206,7 @@ class JellyfinRepository @Inject constructor(
             val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
             service.getItems(
                 userId = s.jellyfinUserId,
-                authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
+                authHeader = JellyfinImageHelper.authHeader(s),
                 types = "Movie,Series",
                 sortBy = "DateCreated",
                 sortOrder = "Descending",
@@ -218,7 +221,7 @@ class JellyfinRepository @Inject constructor(
             val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
             service.getItems(
                 userId = s.jellyfinUserId,
-                authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
+                authHeader = JellyfinImageHelper.authHeader(s),
                 types = "Movie,Episode",
                 sortBy = "DatePlayed",
                 sortOrder = "Descending",
@@ -233,7 +236,7 @@ class JellyfinRepository @Inject constructor(
             val s = settings.currentSnapshot()
             val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
             service.getGenres(
-                authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
+                authHeader = JellyfinImageHelper.authHeader(s),
                 parentId = parentId,
                 userId = s.jellyfinUserId,
             ).Items.map { it.name }
@@ -246,7 +249,7 @@ class JellyfinRepository @Inject constructor(
         val s = settings.currentSnapshot()
         if (s.jellyfinUrl.isBlank()) return@withContext emptyList()
         val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
-        val auth = JellyfinImageHelper.authHeader(s.jellyfinToken)
+        val auth = JellyfinImageHelper.authHeader(s)
 
         val native = runCatching {
             service.getMediaSegments(itemId, auth).items.orEmpty().mapNotNull { seg ->
@@ -282,7 +285,7 @@ class JellyfinRepository @Inject constructor(
             val item = service.getItem(
                 userId = s.jellyfinUserId,
                 itemId = itemId,
-                authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
+                authHeader = JellyfinImageHelper.authHeader(s),
             )
             cachedItemDao.upsertAll(listOf(item.toEntity()))
             item
@@ -293,7 +296,7 @@ class JellyfinRepository @Inject constructor(
         runCatching {
             val s = settings.currentSnapshot()
             val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
-            service.markPlayed(s.jellyfinUserId, itemId, JellyfinImageHelper.authHeader(s.jellyfinToken))
+            service.markPlayed(s.jellyfinUserId, itemId, JellyfinImageHelper.authHeader(s))
         }
     }
 
@@ -301,7 +304,7 @@ class JellyfinRepository @Inject constructor(
         runCatching {
             val s = settings.currentSnapshot()
             val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
-            service.markUnplayed(s.jellyfinUserId, itemId, JellyfinImageHelper.authHeader(s.jellyfinToken))
+            service.markUnplayed(s.jellyfinUserId, itemId, JellyfinImageHelper.authHeader(s))
         }
     }
 
@@ -311,7 +314,7 @@ class JellyfinRepository @Inject constructor(
                 val s = settings.currentSnapshot()
                 val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
                 service.reportPlaybackStart(
-                    authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
+                    authHeader = JellyfinImageHelper.authHeader(s),
                     body = PlaybackStartRequest(ItemId = itemId, PositionTicks = positionMs * 10_000L, MediaSourceId = mediaSourceId),
                 )
             }
@@ -323,7 +326,7 @@ class JellyfinRepository @Inject constructor(
                 val s = settings.currentSnapshot()
                 val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
                 service.reportPlaybackProgress(
-                    authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
+                    authHeader = JellyfinImageHelper.authHeader(s),
                     body = PlaybackProgressRequest(ItemId = itemId, PositionTicks = positionMs * 10_000L, IsPaused = isPaused, MediaSourceId = mediaSourceId),
                 )
             }
@@ -335,7 +338,7 @@ class JellyfinRepository @Inject constructor(
                 val s = settings.currentSnapshot()
                 val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
                 service.reportPlaybackStopped(
-                    authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
+                    authHeader = JellyfinImageHelper.authHeader(s),
                     body = PlaybackStopRequest(ItemId = itemId, PositionTicks = positionMs * 10_000L, MediaSourceId = mediaSourceId),
                 )
             }
@@ -349,7 +352,7 @@ class JellyfinRepository @Inject constructor(
             runCatching {
                 val s = settings.currentSnapshot()
                 val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
-                val auth = JellyfinImageHelper.authHeader(s.jellyfinToken)
+                val auth = JellyfinImageHelper.authHeader(s)
                 val body = UpdateUserItemDataRequest(
                     PlaybackPositionTicks = positionMs * 10_000L,
                     Played = played,
@@ -449,7 +452,7 @@ class JellyfinRepository @Inject constructor(
                 } else emptyList()
                 val response = service.getPlaybackInfo(
                     itemId = itemId,
-                    authHeader = JellyfinImageHelper.authHeader(s.jellyfinToken),
+                    authHeader = JellyfinImageHelper.authHeader(s),
                     userId = s.jellyfinUserId,
                     audioStreamIndex = audioStreamIndex,
                     subtitleStreamIndex = subtitleStreamIndex,
@@ -612,7 +615,7 @@ class JellyfinRepository @Inject constructor(
     )
 }
 
-data class AuthResult(val userId: String, val token: String, val username: String)
+data class AuthResult(val userId: String, val token: String, val username: String, val deviceId: String)
 
 private fun documentUriToFilePath(uri: Uri): String? = runCatching {
     val docId = DocumentsContract.getDocumentId(uri)
