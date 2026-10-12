@@ -48,7 +48,10 @@ object AppModule {
     @Singleton
     fun provideOkHttpClient(): OkHttpClient =
         OkHttpClient.Builder()
-            .connectTimeout(30, TimeUnit.SECONDS)
+            // Jellyfin and Press are LAN servers that accept a connection in milliseconds when
+            // they're there. 30s meant a call made while Wi-Fi was still settling held the
+            // "unreachable" banner (and the next retry) for half a minute.
+            .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(HttpLoggingInterceptor().apply {
