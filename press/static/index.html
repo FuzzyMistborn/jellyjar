@@ -343,17 +343,31 @@ async function refreshPresets() {
 
   for (const [name, cfg] of Object.entries(presets)) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td class="preset-name">${name}</td>
-      <td><input value="${cfg.scale}" data-field="scale"></td>
-      <td><input value="${cfg.video_bitrate}" data-field="video_bitrate"></td>
-      <td><input value="${cfg.audio_bitrate}" data-field="audio_bitrate"></td>
-      <td><input value="${cfg.crf}" data-field="crf" style="width:50px"></td>
-      <td>
-        <button onclick="savePreset('${name}', this)">Save</button>
-        <button class="danger" onclick="deletePreset('${name}')">Delete</button>
-      </td>
-    `;
+    const nameTd = document.createElement('td');
+    nameTd.className = 'preset-name';
+    nameTd.textContent = name;
+    tr.appendChild(nameTd);
+
+    for (const field of ['scale', 'video_bitrate', 'audio_bitrate', 'crf']) {
+      const input = document.createElement('input');
+      input.value = cfg[field];
+      input.dataset.field = field;
+      if (field === 'crf') input.style.width = '50px';
+      const td = document.createElement('td');
+      td.appendChild(input);
+      tr.appendChild(td);
+    }
+
+    const saveBtn = document.createElement('button');
+    saveBtn.textContent = 'Save';
+    saveBtn.addEventListener('click', () => savePreset(name, saveBtn));
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'danger';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.addEventListener('click', () => deletePreset(name));
+    const actionsTd = document.createElement('td');
+    actionsTd.append(saveBtn, ' ', deleteBtn);
+    tr.appendChild(actionsTd);
     presetsBody.appendChild(tr);
   }
 }
@@ -394,7 +408,10 @@ async function addPreset() {
     body: JSON.stringify(body),
   });
   if (res.ok) { form.querySelector('[name="name"]').value = ''; refreshPresets(); }
-  else alert('Failed to add preset');
+  else {
+    const err = await res.json().catch(() => ({}));
+    alert(typeof err.detail === 'string' ? err.detail : 'Failed to add preset');
+  }
 }
 
 refreshHealth();
