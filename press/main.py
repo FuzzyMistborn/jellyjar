@@ -19,7 +19,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.background import BackgroundTask
 
 
@@ -333,6 +333,7 @@ DEFAULT_PRESETS = {
 # breaks every subsequent encode with a filter-graph parse error, and persists to disk.
 _SCALE_RE = re.compile(r"^\d{1,5}:\d{1,5}$")
 _BITRATE_RE = re.compile(r"^\d{1,7}[kKmM]?$")
+_PRESET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$")
 
 
 class PresetConfig(BaseModel):
@@ -1499,7 +1500,7 @@ async def start_transcode(req: TranscodeRequest):
 
 
 class BatchTranscodeRequest(BaseModel):
-    items: list[TranscodeRequest]
+    items: list[TranscodeRequest] = Field(max_length=100)
 
 
 @app.post("/transcode/batch", response_model=list[JobStatus])
@@ -1925,6 +1926,11 @@ async def get_preset_details():
 
 @app.put("/api/presets/{name}", response_model=dict[str, PresetConfig])
 async def upsert_preset(name: str, config: PresetConfig):
+    if not _PRESET_NAME_RE.match(name):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid preset name: use 1-64 letters, digits, spaces, '.', '_' or '-', starting with a letter or digit",
+        )
     PRESETS[name] = config.model_dump()
     save_presets()
     return PRESETS
