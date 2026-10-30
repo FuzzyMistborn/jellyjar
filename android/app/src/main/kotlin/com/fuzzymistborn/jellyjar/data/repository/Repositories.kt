@@ -643,6 +643,8 @@ class DownloadRepository @Inject constructor(
         // Absolute floor used when we can't estimate the output size (e.g. Press unreachable or
         // the item has no known runtime) — still guards against starting a download onto a full disk.
         private const val MIN_FREE_SPACE_BYTES = 500L * 1024 * 1024
+
+        private const val COPY_BUFFER_BYTES = 256 * 1024
     }
 
     private suspend fun shimService(): ShimApiService {
@@ -925,12 +927,18 @@ class DownloadRepository @Inject constructor(
                     Triple(destFile.outputStream() as java.io.OutputStream, destFile.absolutePath, null)
                 }
 
-                outputStream.use { output ->
+                // Hashing as the bytes arrive replaces a second full read of the saved file, which
+                // on a content:// destination is slow enough to double the transfer time.
+                val digest = expectedSha256?.let { java.security.MessageDigest.getInstance("SHA-256") }
+                // 8 KB writes into a scoped-storage (FUSE) file are syscall-bound and cap well
+                // below what Wi-Fi delivers; large writes through a buffer don't.
+                java.io.BufferedOutputStream(outputStream, COPY_BUFFER_BYTES).use { output ->
                     responseBody.byteStream().use { input ->
-                        val buffer = ByteArray(8192)
+                        val buffer = ByteArray(COPY_BUFFER_BYTES)
                         var bytesRead: Int
                         while (input.read(buffer).also { bytesRead = it } != -1) {
                             output.write(buffer, 0, bytesRead)
+                            digest?.update(buffer, 0, bytesRead)
                             downloadedBytes += bytesRead
                             if (totalBytes > 0) {
                                 val progress = (downloadedBytes.toFloat() / totalBytes) * 100f
@@ -951,14 +959,8 @@ class DownloadRepository @Inject constructor(
                     error("Download incomplete: got $downloadedBytes of $totalBytes bytes")
                 }
 
-                if (expectedSha256 != null) {
-                    val actualSha256 = openSavedOutput(savedPath, savedUri).use { stream ->
-                        val digest = java.security.MessageDigest.getInstance("SHA-256")
-                        val buffer = ByteArray(8192)
-                        var read: Int
-                        while (stream.read(buffer).also { read = it } != -1) digest.update(buffer, 0, read)
-                        digest.digest().joinToString("") { "%02x".format(it) }
-                    }
+                if (digest != null) {
+                    val actualSha256 = digest.digest().joinToString("") { "%02x".format(it) }
                     if (!actualSha256.equals(expectedSha256, ignoreCase = true)) {
                         deleteSavedOutput(savedPath, savedUri)
                         error("Downloaded file hash mismatch (integrity check failed)")
@@ -994,15 +996,7 @@ class DownloadRepository @Inject constructor(
 
     // savedPath is a real filesystem path except on non-"primary" storage (SD cards, other
     // document providers), where documentUriToFilePath() can't resolve one and savedPath is the
-    // content:// URI itself. These read/delete through whichever one applies.
-    private fun openSavedOutput(savedPath: String, savedUri: String?): java.io.InputStream =
-        if (savedUri != null && savedPath == savedUri) {
-            context.contentResolver.openInputStream(Uri.parse(savedUri))
-                ?: error("Cannot open input stream for: $savedUri")
-        } else {
-            File(savedPath).inputStream()
-        }
-
+    // content:// URI itself. Deleting goes through whichever one applies.
     private fun deleteSavedOutput(savedPath: String, savedUri: String?) {
         if (savedUri != null && savedPath == savedUri) {
             DocumentFile.fromSingleUri(context, Uri.parse(savedUri))?.delete()
