@@ -146,7 +146,9 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads WHERE status = 'QUEUED' ORDER BY queuePosition ASC, addedAt ASC")
     suspend fun queuedInOrder(): List<DownloadEntity>
 
-    @Query("SELECT COUNT(*) FROM downloads WHERE status IN ('TRANSCODING', 'DOWNLOADING')")
+    // Only items Press is still encoding hold a queue slot. A finished one being copied to the
+    // device (DOWNLOADING) doesn't, so the next encode starts while the file transfers.
+    @Query("SELECT COUNT(*) FROM downloads WHERE status = 'TRANSCODING'")
     suspend fun countInFlight(): Int
 
     @Query("SELECT COALESCE(MAX(queuePosition), 0) FROM downloads WHERE status = 'QUEUED'")

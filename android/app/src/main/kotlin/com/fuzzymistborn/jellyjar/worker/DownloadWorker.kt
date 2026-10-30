@@ -19,6 +19,8 @@ import com.fuzzymistborn.jellyjar.model.TranscodeJob
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 @HiltWorker
 class DownloadWorker @AssistedInject constructor(
@@ -37,6 +39,11 @@ class DownloadWorker @AssistedInject constructor(
         const val NOTIFICATION_GROUP = "jellyjar_downloads_group"
 
         const val MAX_RETRY_ATTEMPTS = 5
+
+        // Encodes are limited by the queue manager, but copies to the device are not, and they
+        // now overlap the next encode. Workers share a process, so one permit serialises them:
+        // two simultaneous copies would just split the Wi-Fi bandwidth.
+        private val copyPermit = Semaphore(1)
 
         // ForegroundInfo rejects id 0, and the terminal "complete/failed" notification has to
         // survive WorkManager tearing the progress notification down when doWork() returns —
@@ -143,9 +150,13 @@ class DownloadWorker @AssistedInject constructor(
             return Result.failure(workDataOf("error" to (job!!.error ?: "Transcode failed")))
         }
 
-        setForeground(createForegroundInfo(notificationId, itemTitle, "Downloading…", 0))
         val tracksJson = job!!.tracks?.let { com.google.gson.Gson().toJson(it) }
-        downloadRepo.downloadFile(jobId, downloadPath, filename, job!!.output_sha256, tracksJson).onFailure {
+        setForeground(createForegroundInfo(notificationId, itemTitle, "Waiting to download…", 0))
+        val copyResult = copyPermit.withPermit {
+            setForeground(createForegroundInfo(notificationId, itemTitle, "Downloading…", 0))
+            downloadRepo.downloadFile(jobId, downloadPath, filename, job!!.output_sha256, tracksJson)
+        }
+        copyResult.onFailure {
             android.util.Log.e("DownloadWorker", "Download failed: ${it.message}", it)
             return if (runAttemptCount < MAX_RETRY_ATTEMPTS) {
                 Result.retry()

@@ -15,7 +15,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 // Drives the local download queue: whenever downloads or settings change, it promotes QUEUED
-// items to Press (via startQueuedItem) until maxConcurrentDownloads items are in flight.
+// items to Press (via startQueuedItem) until maxConcurrentDownloads items are transcoding.
+// Copies of finished files to the device don't hold a slot, so encodes continue during them.
 // Pausing the queue only stops new promotions; items already transcoding/downloading finish.
 @Singleton
 class DownloadQueueManager @Inject constructor(
