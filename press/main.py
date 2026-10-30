@@ -79,18 +79,18 @@ async def detect_encoder() -> str:
     """Probe hardware encoders in priority order; fall back to libx264."""
     candidates = [
         ("h264_nvenc", [
-            "ffmpeg", "-y", "-f", "lavfi", "-i", "color=black:s=128x128:d=0.1",
+            "ffmpeg", "-y", "-f", "lavfi", "-i", "color=black:s=256x256:d=0.1",
             "-c:v", "h264_nvenc", "-f", "null", "-",
         ]),
         ("h264_vaapi", [
             "ffmpeg", "-y",
             "-vaapi_device", VAAPI_DEVICE,
-            "-f", "lavfi", "-i", "color=black:s=128x128:d=0.1",
+            "-f", "lavfi", "-i", "color=black:s=256x256:d=0.1",
             "-vf", "format=nv12,hwupload",
             "-c:v", "h264_vaapi", "-f", "null", "-",
         ]),
         ("h264_qsv", [
-            "ffmpeg", "-y", "-f", "lavfi", "-i", "color=black:s=128x128:d=0.1",
+            "ffmpeg", "-y", "-f", "lavfi", "-i", "color=black:s=256x256:d=0.1",
             "-c:v", "h264_qsv", "-f", "null", "-",
         ]),
     ]
