@@ -243,6 +243,17 @@ interface JellyfinApiService {
         @Query("Genres") genres: String? = null,
     ): ItemsResponse
 
+    // The same list the web client's "Continue Watching" uses: unlike the IsResumable filter, the
+    // server drops items past the user's max-resume percentage (default 90%) and ones barely started.
+    @GET("Users/{userId}/Items/Resume")
+    suspend fun getResumeItems(
+        @Path("userId") userId: String,
+        @Header("Authorization") authHeader: String,
+        @Query("IncludeItemTypes") types: String? = null,
+        @Query("Fields") fields: String = "Overview,MediaSources,BackdropImageTags,ImageTags,UserData,Genres,Trickplay",
+        @Query("Limit") limit: Int = 12,
+    ): ItemsResponse
+
     @GET("Genres")
     suspend fun getGenres(
         @Header("Authorization") authHeader: String,

@@ -219,13 +219,10 @@ class JellyfinRepository @Inject constructor(
         runCatching {
             val s = settings.currentSnapshot()
             val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
-            service.getItems(
+            service.getResumeItems(
                 userId = s.jellyfinUserId,
                 authHeader = JellyfinImageHelper.authHeader(s),
                 types = "Movie,Episode",
-                sortBy = "DatePlayed",
-                sortOrder = "Descending",
-                filters = "IsResumable",
                 limit = limit,
             ).Items
         }
