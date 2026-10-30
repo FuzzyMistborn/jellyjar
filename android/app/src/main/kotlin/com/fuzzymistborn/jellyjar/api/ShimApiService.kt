@@ -1,6 +1,7 @@
 package com.fuzzymistborn.jellyjar.api
 
 import com.fuzzymistborn.jellyjar.model.PresetConfigDto
+import com.fuzzymistborn.jellyjar.model.ReadyCheckRequest
 import com.fuzzymistborn.jellyjar.model.TranscodeJob
 import com.fuzzymistborn.jellyjar.model.TranscodeRequest
 import okhttp3.ResponseBody
@@ -10,6 +11,11 @@ interface ShimApiService {
 
     @POST("transcode")
     suspend fun startTranscode(@Body request: TranscodeRequest): TranscodeJob
+
+    // Indexes of the requests Press could serve from an already-finished file (no encode).
+    // Missing on older Press versions (404) — callers treat that as "none ready".
+    @POST("transcode/ready")
+    suspend fun checkReady(@Body request: ReadyCheckRequest): List<Int>
 
     @GET("jobs/{jobId}")
     suspend fun getJob(@Path("jobId") jobId: String): TranscodeJob

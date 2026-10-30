@@ -741,7 +741,10 @@ class DownloadRepository @Inject constructor(
 
     // Submits a QUEUED item to Press and hands the poll+download off to a DownloadWorker.
     // Called only by DownloadQueueManager, which enforces the concurrency limit and pause flag.
-    suspend fun startQueuedItem(entity: DownloadEntity): Result<Unit> = withContext(Dispatchers.IO) {
+    // Returns whether the item is now being encoded (and so holds a concurrency slot): false when
+    // Press already had a finished file for it and handed that back, which goes straight to the
+    // device copy.
+    suspend fun startQueuedItem(entity: DownloadEntity): Result<Boolean> = withContext(Dispatchers.IO) {
         runCatching {
             val mediaPath = entity.mediaSourcePath ?: error("No source path saved")
             // Named after the original source file (sanitized) instead of the opaque Jellyfin
@@ -765,21 +768,42 @@ class DownloadRepository @Inject constructor(
                 )
             )
             // The row can be deleted while startTranscode() was in flight — an upsert here would
-            // resurrect it with a Press job the user never sees or can cancel. Kill that job instead.
+            // resurrect it with a Press job the user never sees or can cancel. Kill that job instead
+            // — unless it's a finished file Press reused, which other users' downloads may share.
             if (downloadDao.findById(entity.jellyfinId) == null) {
-                runCatching { shimService().deleteJob(job.job_id) }
-                return@runCatching
+                if (job.status != "complete") runCatching { shimService().deleteJob(job.job_id) }
+                return@runCatching false
             }
-            downloadDao.upsert(entity.copy(shimJobId = job.job_id, status = DownloadStatus.TRANSCODING.name, progress = 0f))
+            val encoding = job.status != "complete"
+            downloadDao.upsert(
+                entity.copy(
+                    shimJobId = job.job_id,
+                    status = (if (encoding) DownloadStatus.TRANSCODING else DownloadStatus.DOWNLOADING).name,
+                    progress = 0f,
+                )
+            )
             WorkManager.getInstance(context).enqueueUniqueWork(
                 "download_${entity.jellyfinId}",
                 ExistingWorkPolicy.REPLACE,
                 DownloadWorker.buildRequest(job.job_id, relativePath, settings.currentSnapshot().wifiOnly),
             )
-            Unit
+            encoding
         }.onFailure {
             downloadDao.updateStatus(entity.jellyfinId, DownloadStatus.FAILED.name)
         }
+    }
+
+    // Of these queued items, the ones Press already has a finished file for. Best-effort: an
+    // unreachable or older Press just means "none", and the items wait their turn as usual.
+    suspend fun readyOnPress(items: List<DownloadEntity>): List<DownloadEntity> = withContext(Dispatchers.IO) {
+        val candidates = items.filter { it.mediaSourcePath != null }
+        if (candidates.isEmpty()) return@withContext emptyList()
+        runCatching {
+            val request = ReadyCheckRequest(candidates.map {
+                TranscodeRequest(source_path = it.mediaSourcePath!!, preset = it.preset, output_filename = null)
+            })
+            shimService().checkReady(request).mapNotNull { candidates.getOrNull(it) }
+        }.getOrDefault(emptyList())
     }
 
     suspend fun queuedInOrder(): List<DownloadEntity> = withContext(Dispatchers.IO) {
@@ -1141,7 +1165,13 @@ class DownloadRepository @Inject constructor(
         val entity = downloadDao.findById(jellyfinId) ?: return@withContext
         WorkManager.getInstance(context).cancelUniqueWork("download_$jellyfinId")
         if (entity.status != DownloadStatus.COMPLETE.name && entity.shimJobId != null) {
-            runCatching { shimService().deleteJob(entity.shimJobId) }
+            // Only cancel a job that's still encoding. A finished one may be shared with another
+            // user's download (Press reuses finished files), and is left to CLEANUP_AFTER_DAYS.
+            runCatching {
+                if (shimService().getJob(entity.shimJobId).status != "complete") {
+                    shimService().deleteJob(entity.shimJobId)
+                }
+            }
         }
         if (entity.localPath.isNotBlank()) {
             val downloadPath = settings.currentSnapshot().downloadPath

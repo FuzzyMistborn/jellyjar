@@ -136,6 +136,8 @@ data class TranscodeRequest(
     val display_name: String? = null,
 )
 
+data class ReadyCheckRequest(val items: List<TranscodeRequest>)
+
 data class TranscodeJob(
     val job_id: String,
     val status: String,             // queued | running | complete | failed

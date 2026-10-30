@@ -1,6 +1,7 @@
 import os
 import uuid
 import asyncio
+import copy
 import glob
 import hashlib
 import heapq
@@ -1430,6 +1431,59 @@ def _validate_transcode_request(req: TranscodeRequest) -> tuple[Path, dict]:
     return source, PRESETS[req.preset]
 
 
+def _reuse_key(source: Path, preset: str) -> Optional[dict]:
+    """Fingerprint of the inputs that determine a job's output: the source file (size + mtime, so
+    a replaced file is re-encoded) and the preset/audio settings as they are right now (so editing
+    a preset in the web UI doesn't keep serving files made with the old one). None if the source
+    can't be stat'd."""
+    try:
+        st = source.stat()
+    except OSError:
+        return None
+    return {
+        "source_size": st.st_size,
+        "source_mtime": st.st_mtime,
+        "preset": copy.deepcopy(PRESETS.get(preset)),
+        "audio_languages": list(AUDIO_LANGUAGES),
+    }
+
+
+def _find_reusable_job(source: Path, preset: str) -> Optional[dict]:
+    """A finished job whose output can be served instead of encoding the same thing again.
+
+    Only *complete* jobs qualify: sharing an in-flight job would mean one user cancelling it kills
+    the other's download. Jobs saved before reuse_key existed never match (nothing to compare), as
+    do jobs whose output file has since been removed from disk.
+    """
+    key = _reuse_key(source, preset)
+    if key is None:
+        return None
+    best = None
+    for job in jobs.values():
+        if (
+            job.get("status") != "complete"
+            or job.get("source_path") != str(source)
+            or job.get("preset") != preset
+            or not job.get("output_sha256")
+            or job.get("reuse_key") != key
+        ):
+            continue
+        output_path = job.get("output_path")
+        if not output_path or not Path(output_path).exists():
+            continue
+        if best is None or job["updated_at"] > best["updated_at"]:
+            best = job
+    return best
+
+
+def _reuse_job(job: dict) -> JobStatus:
+    # Restart the CLEANUP_AFTER_DAYS clock: the file was just asked for, and without this a job
+    # near its cutoff could be unlinked between this response and the client's /download.
+    job["updated_at"] = _now_iso()
+    print(f"[Press] reusing finished job {job['job_id']} for {job.get('display_name') or job['source_path']}", flush=True)
+    return _to_job_status(job)
+
+
 async def _create_job(req: TranscodeRequest, source: Path) -> JobStatus:
     job_id = str(uuid.uuid4())
     # .name strips any directory components (and neutralizes an absolute override or ../
@@ -1454,6 +1508,9 @@ async def _create_job(req: TranscodeRequest, source: Path) -> JobStatus:
         "progress": 0.0,
         "source_path": str(source),
         "preset": req.preset,
+        # What this output was made from and with — _find_reusable_job() only hands the file to
+        # another request if all of it still matches.
+        "reuse_key": _reuse_key(source, req.preset),
         "output_path": output,
         "download_filename": requested_filename,
         "error": None,
@@ -1497,6 +1554,11 @@ def _failed_job_status(req: TranscodeRequest, detail: str) -> JobStatus:
 @app.post("/transcode", response_model=JobStatus)
 async def start_transcode(req: TranscodeRequest):
     source, _ = _validate_transcode_request(req)
+    reusable = _find_reusable_job(source, req.preset)
+    if reusable:
+        status = _reuse_job(reusable)
+        _save_jobs()
+        return status
     return await _create_job(req, source)
 
 
@@ -1515,9 +1577,30 @@ async def start_batch_transcode(req: BatchTranscodeRequest):
         except HTTPException as e:
             results.append(_failed_job_status(item, str(e.detail)))
             continue
-        results.append(await _create_job(item, source))
+        reusable = _find_reusable_job(source, item.preset)
+        results.append(_reuse_job(reusable) if reusable else await _create_job(item, source))
     _save_jobs()
     return results
+
+
+class ReadyCheckRequest(BaseModel):
+    items: list[TranscodeRequest] = Field(max_length=100)
+
+
+@app.post("/transcode/ready", response_model=list[int])
+async def check_ready(req: ReadyCheckRequest):
+    """Which of these requests would be served from an existing finished file, without encoding?
+    Returns the indexes into `items` that are ready. Read-only: nothing is created or touched, so
+    a client can use it to decide whether a download needs to wait in its own queue."""
+    ready = []
+    for i, item in enumerate(req.items):
+        try:
+            source, _ = _validate_transcode_request(item)
+        except HTTPException:
+            continue
+        if _find_reusable_job(source, item.preset):
+            ready.append(i)
+    return ready
 
 
 def _queue_position(job_id: str) -> Optional[int]:
