@@ -3,6 +3,7 @@ import uuid
 import asyncio
 import glob
 import hashlib
+import heapq
 import json
 import logging
 import re
@@ -1554,15 +1555,25 @@ async def queue_stats():
     running = [j for j in jobs.values() if j["status"] == "running"]
     queued = [j for j in jobs.values() if j["status"] == "queued"]
 
-    running_remaining = sum(
-        j["eta_seconds"] if j.get("eta_seconds") is not None else (j.get("duration_seconds") or 0)
-        for j in running
-    )
-    queued_work = sum(j.get("duration_seconds") or 0 for j in queued)
-
     remote_capacity = sum(w["max_workers"] for w in _live_workers())
     capacity = MAX_WORKERS + remote_capacity
-    total_remaining = running_remaining + (queued_work / max(capacity, 1))
+
+    # Slots work in parallel, so the queue is done when the last slot is, not when the
+    # per-job ETAs add up. Each running job holds a slot until its own ETA; each queued job,
+    # oldest first, goes to whichever slot frees up soonest.
+    slots = [
+        j["eta_seconds"] if j.get("eta_seconds") is not None else (j.get("duration_seconds") or 0)
+        for j in running
+    ]
+    slots += [0.0] * max(capacity - len(slots), 0)
+    heapq.heapify(slots)
+    # Queued durations are media length; scale by the speed running jobs are actually achieving
+    # (a GPU encodes at several times realtime), falling back to realtime when nothing reports.
+    speeds = [j["speed"] for j in running if j.get("speed")]
+    speed = (sum(speeds) / len(speeds)) if speeds else 1.0
+    for j in sorted(queued, key=lambda j: j["created_at"]):
+        heapq.heappush(slots, heapq.heappop(slots) + (j.get("duration_seconds") or 0) / speed)
+    total_remaining = max(slots, default=0.0)
 
     return {
         "max_workers": capacity,
