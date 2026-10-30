@@ -1014,7 +1014,7 @@ async def execute_ffmpeg(
             return "cancelled", None  # the canceller already removed the output file
         if returncode == 0:
             if publish:
-                os.replace(tmp_output, output)
+                await asyncio.to_thread(os.replace, tmp_output, output)
             return "ok", None
         Path(tmp_output).unlink(missing_ok=True)
         return "failed", error_text
@@ -1901,9 +1901,11 @@ async def health():
     }
 
 
-@app.get("/api/disk")
-async def disk_usage():
-    """Usage of the volume backing OUTPUT_ROOT, plus how much of that is JellyJar's own output."""
+_DISK_CACHE_SECONDS = 30
+_disk_cache: dict = {"at": 0.0, "value": None}
+
+
+def _scan_disk_usage() -> dict:
     usage = shutil.disk_usage(OUTPUT_ROOT)
     output_bytes = sum(f.stat().st_size for f in Path(OUTPUT_ROOT).rglob("*") if f.is_file())
     return {
@@ -1912,6 +1914,21 @@ async def disk_usage():
         "free": usage.free,
         "output_bytes": output_bytes,
     }
+
+
+@app.get("/api/disk")
+async def disk_usage():
+    """Usage of the volume backing OUTPUT_ROOT, plus how much of that is JellyJar's own output.
+
+    Walks every output file, which on a network mount can take many seconds — so it runs in a
+    thread (it used to run on the event loop and froze the whole API, worker heartbeats
+    included, for the duration) and the result is cached, since the dashboard polls it from
+    every open tab.
+    """
+    if _disk_cache["value"] is None or time.monotonic() - _disk_cache["at"] > _DISK_CACHE_SECONDS:
+        _disk_cache["value"] = await asyncio.to_thread(_scan_disk_usage)
+        _disk_cache["at"] = time.monotonic()
+    return _disk_cache["value"]
 
 
 @app.get("/presets")
