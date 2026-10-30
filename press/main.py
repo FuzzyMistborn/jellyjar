@@ -318,13 +318,13 @@ DEFAULT_PRESETS = {
         "video_bitrate": "4000k",
         "audio_bitrate": "192k",
         "scale": "1920:1080",
-        "crf": "18",
+        "crf": "23",
     },
     "720p": {
         "video_bitrate": "2000k",
         "audio_bitrate": "128k",
         "scale": "1280:720",
-        "crf": "22",
+        "crf": "26",
     },
 }
 
@@ -694,6 +694,20 @@ async def probe_audio_plan(source: str, languages: list[str]) -> Optional[dict]:
     return {"tracks": tracks, "default": default_out}
 
 
+def _rate_limit_args(video_bitrate: str) -> list[str]:
+    """Rate-control args that make the preset's bitrate a ceiling, not just a hint.
+
+    The quality target (crf/cq) alone lets busy sources balloon past the bitrate: libx264 ignores
+    -b:v once -crf is set, and NVENC's -cq mode treats it as an uncapped average. Capping
+    -maxrate with a 2x buffer keeps output size predictable while CRF still lets easy content
+    come in well under the cap.
+    """
+    v = video_bitrate.strip()
+    mult = {"k": 1, "m": 1000}.get(v[-1].lower(), None)
+    kbps = int(v[:-1]) * mult if mult else int(v) // 1000
+    return ["-b:v", v, "-maxrate", v, "-bufsize", f"{kbps * 2}k"]
+
+
 def build_ffmpeg_command(
     source: str,
     output: str,
@@ -714,6 +728,7 @@ def build_ffmpeg_command(
     """
     enc = encoder if encoder is not None else _active_encoder
     scale = preset["scale"]
+    rate = _rate_limit_args(preset["video_bitrate"])
     sw_vf = (
         f"scale={scale}:force_original_aspect_ratio=decrease,"
         f"pad={scale}:(ow-iw)/2:(oh-ih)/2"
@@ -780,7 +795,7 @@ def build_ffmpeg_command(
             *stream_map,
             "-vf", f"scale_vaapi={hw_fit},pad_vaapi={hw_pad}",
             "-c:v", "h264_vaapi",
-            "-b:v", preset["video_bitrate"],
+            *rate,
             *common_audio, output,
         ]
     if enc == "h264_vaapi":
@@ -791,7 +806,7 @@ def build_ffmpeg_command(
             *stream_map,
             "-vf", f"{sw_vf},format=nv12,hwupload",
             "-c:v", "h264_vaapi",
-            "-b:v", preset["video_bitrate"],
+            *rate,
             *common_audio, output,
         ]
     if enc == "h264_qsv":
@@ -802,7 +817,7 @@ def build_ffmpeg_command(
             "-vf", sw_vf,
             "-c:v", "h264_qsv",
             "-global_quality", preset["crf"],
-            "-b:v", preset["video_bitrate"],
+            *rate,
             *common_audio, output,
         ]
     if enc == "h264_nvenc" and hw_decode:
@@ -813,9 +828,10 @@ def build_ffmpeg_command(
             *stream_map,
             "-vf", f"scale_cuda={hw_fit},pad_cuda={hw_pad}",
             "-c:v", "h264_nvenc",
+            "-rc", "vbr",
             "-cq", preset["crf"],
             "-preset", "p4",
-            "-b:v", preset["video_bitrate"],
+            *rate,
             *common_audio, output,
         ]
     if enc == "h264_nvenc":
@@ -825,9 +841,10 @@ def build_ffmpeg_command(
             *stream_map,
             "-vf", sw_vf,
             "-c:v", "h264_nvenc",
+            "-rc", "vbr",
             "-cq", preset["crf"],
             "-preset", "p4",
-            "-b:v", preset["video_bitrate"],
+            *rate,
             *common_audio, output,
         ]
     # libx264 software fallback
@@ -839,7 +856,7 @@ def build_ffmpeg_command(
         "-c:v", "libx264",
         "-crf", preset["crf"],
         "-preset", "fast",
-        "-b:v", preset["video_bitrate"],
+        *rate,
         *common_audio, output,
     ]
 
