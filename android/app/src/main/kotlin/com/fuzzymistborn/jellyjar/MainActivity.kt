@@ -40,6 +40,7 @@ sealed class Screen(val route: String) {
     }
     object Downloads : Screen("downloads")
     object Storage : Screen("storage")
+    object ReadyOnPress : Screen("ready_on_press")
     object PinGate : Screen("pin_gate")
     object Admin : Screen("admin")
 }
@@ -156,8 +157,13 @@ fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableSta
                     navController.navigate(Screen.Player.go(localPath, jellyfinId))
                 },
                 onStorageClick = { navController.navigate(Screen.Storage.route) },
+                onReadyClick = { navController.navigate(Screen.ReadyOnPress.route) },
                 onBack = { navController.popBackStack() },
             )
+        }
+
+        composable(Screen.ReadyOnPress.route) {
+            com.fuzzymistborn.jellyjar.ui.screens.ReadyOnPressScreen(onBack = { navController.popBackStack() })
         }
 
         composable(Screen.Storage.route) {

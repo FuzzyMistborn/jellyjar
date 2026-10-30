@@ -34,6 +34,7 @@ Gear icon → PIN gate → Admin/Settings
 | `/transcode` | POST | Starts transcode job, returns `JobStatus` |
 | `/transcode/batch` | POST | Starts multiple transcode jobs in one call (e.g. a whole season); returns `list[JobStatus]`. Bad items are recorded as `failed` jobs rather than aborting the batch |
 | `/transcode/ready` | POST | Body `{ "items": [<TranscodeRequest>, ...] }`; returns the indexes of items that would be served from an existing finished file. Read-only |
+| `/library` | GET | Finished files a new request would be served from (one per source+preset, newest first): `job_id`, `item_id`, `display_name`, `preset`, `size_bytes`, `duration_seconds`, `updated_at`. Jobs without an `item_id` are omitted |
 | `/jobs` | GET | Lists all jobs |
 | `/jobs/{id}` | GET | Gets job status + progress; once complete, `tracks` lists the output's audio/subtitle tracks in file order with `language`/`default`/`forced` |
 | `/download/{id}` | GET | Streams completed MP4 file |
@@ -55,7 +56,7 @@ Gear icon → PIN gate → Admin/Settings
 - **Complete jobs only.** In-flight jobs are deliberately not shared: one user cancelling would kill the other's download. So there's no refcount — the app never deletes a finished job (see below), and reuse bumps `updated_at` so the `CLEANUP_AFTER_DAYS` clock restarts on every reuse
 - App: `startQueuedItem()` goes straight to `DOWNLOADING` (no `maxConcurrentDownloads` slot) when Press hands back a complete job, and returns `false` so `promote()` doesn't count a slot. With all slots busy, `DownloadQueueManager.startReadyItems()` asks `POST /transcode/ready` about the queue (re-asked only when the set of queued ids changes) and starts the ready ones ahead of the line. Respects the pause flag. `deleteDownload()` only cancels a Press job that's still encoding — a finished one may be shared, so it's left for cleanup (a cancelled device-copy now leaves its output on Press until `CLEANUP_AFTER_DAYS`)
 - Test: `s_reuse` in `press/tests/multihost_harness.py` (confirmed to fail against the pre-change Press). Android side not build-verified
-- Not built yet: a "Ready on Press" browse screen (`GET /library`)
+- **Ready on Press** (Downloads → inbox icon, hidden in Kid Mode): `TranscodeRequest.item_id` (the Jellyfin id, sent by `startQueuedItem`) is stored on the job so `GET /library` can map a file back to an item. `ReadyOnPressViewModel` resolves the ids with one `Items?Ids=` call — Jellyfin drops ids the signed-in user can't see, so the list is already permission-filtered — and tapping Download is the ordinary `queueTranscode()` path with the entry's preset, which Press then answers with the existing file. It reuses only if the item's `richestAudioSource()` path matches the one the file was encoded from (multi-version items could re-encode). Jobs made before `item_id` existed don't appear
 
 ## Press Job Persistence & Cleanup
 - Jobs are persisted to `$CONFIG_ROOT/jobs.json` on every status transition (not on every progress tick), so job history survives container restarts

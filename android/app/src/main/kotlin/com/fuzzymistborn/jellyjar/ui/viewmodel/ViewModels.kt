@@ -2059,3 +2059,64 @@ class PlayerViewModel @Inject constructor(
     }
 }
 
+
+// ─── Ready on Press ───────────────────────────────────────────────────────────
+
+data class ReadyOnPressRow(val entry: ReadyEntry, val item: JellyfinItem)
+
+data class ReadyOnPressState(
+    val isLoading: Boolean = true,
+    val error: String? = null,
+    val rows: List<ReadyOnPressRow> = emptyList(),
+    val jellyfinUrl: String = "",
+    // Download status by Jellyfin id, so a row shows "Downloaded"/"In progress" instead of a button
+    val downloadStatus: Map<String, String> = emptyMap(),
+)
+
+// Finished files already sitting on Press. Downloading one is the normal queue path: Press hands
+// the existing file back (see "Press Output Reuse") instead of encoding.
+@HiltViewModel
+class ReadyOnPressViewModel @Inject constructor(
+    private val jellyfinRepo: JellyfinRepository,
+    private val downloadRepo: DownloadRepository,
+    private val settings: SettingsRepository,
+) : ViewModel() {
+
+    private val _state = MutableStateFlow(ReadyOnPressState())
+    val state: StateFlow<ReadyOnPressState> = _state.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            settings.settings.collect { s -> _state.update { it.copy(jellyfinUrl = s.jellyfinUrl) } }
+        }
+        viewModelScope.launch {
+            downloadRepo.downloads.collect { all ->
+                _state.update { it.copy(downloadStatus = all.associate { d -> d.jellyfinId to d.status }) }
+            }
+        }
+        refresh()
+    }
+
+    fun refresh() = viewModelScope.launch {
+        _state.update { it.copy(isLoading = true, error = null) }
+        val entries = downloadRepo.readyLibrary().getOrElse { e ->
+            _state.update { it.copy(isLoading = false, error = "Couldn't reach Press: ${e.message ?: "unknown error"}") }
+            return@launch
+        }
+        // Jellyfin drops ids this account can't see, so rows only appear for titles the signed-in
+        // user could download anyway.
+        val items = jellyfinRepo.getItemsByIds(entries.map { it.item_id }.distinct()).getOrElse { e ->
+            _state.update { it.copy(isLoading = false, error = "Couldn't reach Jellyfin: ${e.message ?: "unknown error"}") }
+            return@launch
+        }.associateBy { it.id }
+        val rows = entries.mapNotNull { e -> items[e.item_id]?.let { ReadyOnPressRow(e, it) } }
+        _state.update { it.copy(isLoading = false, rows = rows) }
+    }
+
+    fun download(row: ReadyOnPressRow) = viewModelScope.launch {
+        val path = row.item.mediaSources.richestAudioSource()?.path ?: return@launch
+        downloadRepo.queueTranscode(row.item, row.entry.preset, path).onFailure { e ->
+            _state.update { it.copy(error = "Couldn't start download: ${e.message ?: "unknown error"}") }
+        }
+    }
+}

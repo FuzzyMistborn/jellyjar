@@ -134,9 +134,22 @@ data class TranscodeRequest(
     val preset: String,
     val output_filename: String?,
     val display_name: String? = null,
+    // Jellyfin item this is for; Press stores it so GET /library can map a file back to the item.
+    val item_id: String? = null,
 )
 
 data class ReadyCheckRequest(val items: List<TranscodeRequest>)
+
+// A finished file on Press that a new download of the same item would reuse (GET /library).
+data class ReadyEntry(
+    val job_id: String,
+    val item_id: String,
+    val display_name: String?,
+    val preset: String,
+    val size_bytes: Long,
+    val duration_seconds: Double?,
+    val updated_at: String,
+)
 
 data class TranscodeJob(
     val job_id: String,

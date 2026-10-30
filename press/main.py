@@ -444,6 +444,9 @@ class TranscodeRequest(BaseModel):
     preset: str               # "1080p" or "720p"
     output_filename: Optional[str] = None
     display_name: Optional[str] = None   # e.g. "The Matrix" or "Breaking Bad · S01E03 · Title"
+    # Jellyfin item this encode is for. Stored so GET /library can let a client map a finished
+    # file back to a library item; Press itself never uses it.
+    item_id: Optional[str] = None
 
 
 class JobStatus(BaseModel):
@@ -1460,20 +1463,24 @@ def _find_reusable_job(source: Path, preset: str) -> Optional[dict]:
         return None
     best = None
     for job in jobs.values():
-        if (
-            job.get("status") != "complete"
-            or job.get("source_path") != str(source)
-            or job.get("preset") != preset
-            or not job.get("output_sha256")
-            or job.get("reuse_key") != key
-        ):
+        if job.get("source_path") != str(source) or job.get("preset") != preset:
             continue
-        output_path = job.get("output_path")
-        if not output_path or not Path(output_path).exists():
+        if not _is_reusable(job, key):
             continue
         if best is None or job["updated_at"] > best["updated_at"]:
             best = job
     return best
+
+
+def _is_reusable(job: dict, key: Optional[dict]) -> bool:
+    """job is complete, its output is still on disk, and it was made from `key` (the current
+    fingerprint of its source + preset)."""
+    if key is None or job.get("status") != "complete" or not job.get("output_sha256"):
+        return False
+    if job.get("reuse_key") != key:
+        return False
+    output_path = job.get("output_path")
+    return bool(output_path) and Path(output_path).exists()
 
 
 def _reuse_job(job: dict) -> JobStatus:
@@ -1517,6 +1524,7 @@ async def _create_job(req: TranscodeRequest, source: Path) -> JobStatus:
         "created_at": now,
         "updated_at": now,
         "display_name": req.display_name,
+        "item_id": req.item_id,
         "duration_seconds": (duration_us / 1_000_000) if duration_us else None,
         "fps": None,
         "speed": None,
@@ -1581,6 +1589,45 @@ async def start_batch_transcode(req: BatchTranscodeRequest):
         results.append(_reuse_job(reusable) if reusable else await _create_job(item, source))
     _save_jobs()
     return results
+
+
+class LibraryEntry(BaseModel):
+    job_id: str
+    item_id: str              # Jellyfin item the file was made for
+    display_name: Optional[str] = None
+    preset: str
+    size_bytes: int
+    duration_seconds: Optional[float] = None
+    updated_at: str
+
+
+@app.get("/library", response_model=list[LibraryEntry])
+async def list_library():
+    """Finished files a new request would be served from right now (see _find_reusable_job), one
+    per source+preset, newest first. Jobs made without an item_id are left out: a client has no way
+    to turn them back into a library item."""
+    newest: dict[tuple[str, str], dict] = {}
+    for job in jobs.values():
+        if not job.get("item_id") or job.get("status") != "complete":
+            continue
+        source = Path(job.get("source_path") or "")
+        if not _is_reusable(job, _reuse_key(source, job["preset"])):
+            continue
+        k = (job["source_path"], job["preset"])
+        if k not in newest or job["updated_at"] > newest[k]["updated_at"]:
+            newest[k] = job
+    entries = []
+    for job in newest.values():
+        try:
+            size = Path(job["output_path"]).stat().st_size
+        except OSError:
+            continue
+        entries.append(LibraryEntry(
+            job_id=job["job_id"], item_id=job["item_id"], display_name=job.get("display_name"),
+            preset=job["preset"], size_bytes=size, duration_seconds=job.get("duration_seconds"),
+            updated_at=job["updated_at"],
+        ))
+    return sorted(entries, key=lambda e: e.updated_at, reverse=True)
 
 
 class ReadyCheckRequest(BaseModel):
