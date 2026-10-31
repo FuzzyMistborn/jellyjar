@@ -28,6 +28,9 @@ class DownloadQueueManager @Inject constructor(
     private val kick = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     private var backoffUntilMs = 0L
     private var retryKick: Job? = null
+    // Queue contents the last "already on Press?" check was made for, so it isn't repeated on
+    // every progress emission while the queue sits full.
+    private var lastReadyCheck: Set<String> = emptySet()
 
     companion object {
         // Wait this long after a failed promotion (e.g. Press unreachable) before trying the
@@ -57,15 +60,37 @@ class DownloadQueueManager @Inject constructor(
             return@withLock
         }
         var slots = s.maxConcurrentDownloads - downloadRepo.countInFlight()
+        if (slots <= 0) {
+            startReadyItems()
+            return@withLock
+        }
         while (slots > 0) {
             val next = downloadRepo.queuedInOrder().firstOrNull() ?: return@withLock
-            if (downloadRepo.startQueuedItem(next).isFailure) {
+            val result = downloadRepo.startQueuedItem(next)
+            if (result.isFailure) {
                 // startQueuedItem already marked the item FAILED; back off before the next one
                 backoffUntilMs = System.currentTimeMillis() + FAILURE_BACKOFF_MS
                 scheduleRetryKick()
                 return@withLock
             }
-            slots--
+            // A file Press already had finished goes straight to the device copy, no slot used
+            if (result.getOrDefault(true)) slots--
+        }
+    }
+
+    // With every encode slot busy, queued items that Press already has a finished file for (another
+    // user got there first) skip the line: they're only a copy to the device, not an encode.
+    private suspend fun startReadyItems() {
+        val queued = downloadRepo.queuedInOrder()
+        val ids = queued.map { it.jellyfinId }.toSet()
+        if (ids.isEmpty() || ids == lastReadyCheck) return
+        lastReadyCheck = ids
+        for (item in downloadRepo.readyOnPress(queued)) {
+            if (downloadRepo.startQueuedItem(item).isFailure) {
+                backoffUntilMs = System.currentTimeMillis() + FAILURE_BACKOFF_MS
+                scheduleRetryKick()
+                return
+            }
         }
     }
 

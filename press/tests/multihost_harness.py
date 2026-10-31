@@ -305,9 +305,63 @@ def s_broken_worker_releases():
     return not failed_early and check_clean(root, js, ids) and grep(root, "coord", "handed back job")
 
 
+def s_reuse():
+    """A finished output is served to later requests for the same source+preset instead of being
+    encoded again, and is NOT reused once the source, the preset or the file on disk changes."""
+    root = fresh("reuse")
+    coordinator(root, max_workers=1, role="standalone")
+    src = root / "media" / "ep0.mkv"
+    body = {"source_path": str(src), "preset": "720p"}
+
+    def post(path="/transcode", payload=None):
+        r = httpx.post(COORD + path, json=payload if payload is not None else body, timeout=10)
+        r.raise_for_status()
+        return r.json()
+
+    first = post()["job_id"]
+    wait_done([first])
+    ok = True
+
+    def expect(label, cond):
+        nonlocal ok
+        if not cond:
+            print(f"   FAIL {label}")
+            ok = False
+
+    again = post()
+    expect("same request returns the finished job", again["job_id"] == first and again["status"] == "complete")
+    batch = post("/transcode/batch", {"items": [body]})
+    expect("batch reuses too", batch[0]["job_id"] == first)
+    expect("no second job was created", len(jobs()) == 1)
+    expect("ready check says yes", post("/transcode/ready", {"items": [body]}) == [0])
+    expect("ready check says no for another preset",
+           post("/transcode/ready", {"items": [{**body, "preset": "1080p"}]}) == [])
+
+    # Changed preset settings -> the old file no longer matches.
+    presets = httpx.get(COORD + "/api/presets").json()
+    edited = {**presets["720p"], "crf": str(int(presets["720p"]["crf"]) + 1)}
+    httpx.put(COORD + "/api/presets/720p", json=edited).raise_for_status()
+    expect("edited preset is not reused", post("/transcode/ready", {"items": [body]}) == [])
+    httpx.put(COORD + "/api/presets/720p", json=presets["720p"]).raise_for_status()
+    expect("restored preset matches again", post("/transcode/ready", {"items": [body]}) == [0])
+
+    # Replaced source -> re-encode.
+    src.write_bytes(b"a different, longer source")
+    second = post()
+    expect("changed source is re-encoded", second["job_id"] != first)
+    wait_done([second["job_id"]])
+
+    # Output removed from disk -> re-encode.
+    Path(jobs()[second["job_id"]]["output_path"]).unlink()
+    third = post()
+    expect("missing output is re-encoded", third["job_id"] not in (first, second["job_id"]))
+    wait_done([third["job_id"]])
+    return ok
+
+
 SCENARIOS = [s_basic, s_standalone, s_worker_killed, s_coordinator_restart_with_local_slot,
              s_frozen_worker, s_coordinator_unreachable_self_fence, s_delete_remote,
-             s_broken_worker_releases]
+             s_broken_worker_releases, s_reuse]
 
 if __name__ == "__main__":
     wanted = sys.argv[1:]
