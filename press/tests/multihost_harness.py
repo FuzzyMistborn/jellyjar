@@ -337,6 +337,16 @@ def s_reuse():
     expect("ready check says no for another preset",
            post("/transcode/ready", {"items": [{**body, "preset": "1080p"}]}) == [])
 
+    # /library lists it, but only once the job knows which Jellyfin item it was for.
+    expect("library is empty without item_id", httpx.get(COORD + "/library").json() == [])
+    with_item = {**body, "source_path": str(root / "media" / "ep1.mkv"), "item_id": "abc123"}
+    j1 = post(payload=with_item)["job_id"]
+    wait_done([j1])
+    lib = httpx.get(COORD + "/library").json()
+    expect("library lists the finished item", [e["item_id"] for e in lib] == ["abc123"] and lib[0]["size_bytes"] > 0)
+    dup = post(payload=with_item)
+    expect("reuse doesn't duplicate library entry", dup["job_id"] == j1 and len(httpx.get(COORD + "/library").json()) == 1)
+
     # Changed preset settings -> the old file no longer matches.
     presets = httpx.get(COORD + "/api/presets").json()
     edited = {**presets["720p"], "crf": str(int(presets["720p"]["crf"]) + 1)}

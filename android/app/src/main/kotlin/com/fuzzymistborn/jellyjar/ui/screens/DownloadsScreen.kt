@@ -23,6 +23,7 @@ import com.fuzzymistborn.jellyjar.ui.viewmodel.DownloadsViewModel
 fun DownloadsScreen(
     onPlayClick: (localPath: String, jellyfinId: String) -> Unit,
     onStorageClick: () -> Unit,
+    onReadyClick: () -> Unit,
     onBack: () -> Unit,
     viewModel: DownloadsViewModel = hiltViewModel(),
 ) {
@@ -53,8 +54,13 @@ fun DownloadsScreen(
                 // "Delete Everything" / "Delete Oldest" out of reach in Kid Mode.
                 trailingContent = if (kidMode) null else {
                     {
-                        IconButton(onClick = onStorageClick) {
-                            Icon(Icons.Default.Storage, contentDescription = "Manage Storage", tint = OnSurface)
+                        Row {
+                            IconButton(onClick = onReadyClick) {
+                                Icon(Icons.Default.Inbox, contentDescription = "Ready on Press", tint = OnSurface)
+                            }
+                            IconButton(onClick = onStorageClick) {
+                                Icon(Icons.Default.Storage, contentDescription = "Manage Storage", tint = OnSurface)
+                            }
                         }
                     }
                 },

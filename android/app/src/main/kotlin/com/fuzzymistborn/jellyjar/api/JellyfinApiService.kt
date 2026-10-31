@@ -241,6 +241,7 @@ interface JellyfinApiService {
         @Query("SearchTerm") searchTerm: String? = null,
         @Query("Filters") filters: String? = null,
         @Query("Genres") genres: String? = null,
+        @Query("Ids") ids: String? = null,
     ): ItemsResponse
 
     // The same list the web client's "Continue Watching" uses: unlike the IsResumable filter, the

@@ -200,6 +200,22 @@ class JellyfinRepository @Inject constructor(
         }
     }
 
+    // The given items as this user can see them: the server drops ids the account has no access
+    // to, so this doubles as a permission filter.
+    suspend fun getItemsByIds(ids: List<String>): Result<List<JellyfinItem>> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (ids.isEmpty()) return@runCatching emptyList()
+            val s = settings.currentSnapshot()
+            val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
+            service.getItems(
+                userId = s.jellyfinUserId,
+                authHeader = JellyfinImageHelper.authHeader(s),
+                ids = ids.joinToString(","),
+                limit = ids.size,
+            ).Items
+        }
+    }
+
     suspend fun getRecentlyAdded(limit: Int = 15): Result<List<JellyfinItem>> = withContext(Dispatchers.IO) {
         runCatching {
             val s = settings.currentSnapshot()
@@ -765,6 +781,7 @@ class DownloadRepository @Inject constructor(
                     preset = entity.preset,
                     output_filename = filename,
                     display_name = entity.title,
+                    item_id = entity.jellyfinId,
                 )
             )
             // The row can be deleted while startTranscode() was in flight — an upsert here would
@@ -791,6 +808,11 @@ class DownloadRepository @Inject constructor(
         }.onFailure {
             downloadDao.updateStatus(entity.jellyfinId, DownloadStatus.FAILED.name)
         }
+    }
+
+    // Files Press has finished and would hand out again without encoding (GET /library).
+    suspend fun readyLibrary(): Result<List<ReadyEntry>> = withContext(Dispatchers.IO) {
+        runCatching { shimService().library() }
     }
 
     // Of these queued items, the ones Press already has a finished file for. Best-effort: an
