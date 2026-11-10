@@ -611,7 +611,13 @@ private fun ActionButtonsSection(
 ) {
     val dl = state.download
     val offlinePositionMs = dl?.playbackPositionMs ?: 0L
-    val streamPositionMs = state.streamPositionMs
+    // The local position (saved when the player closes), else the server's — set by playback on
+    // another device, or here when the app was killed before the player could save it. The
+    // episode rows already fell back like this; movies only read the local one, so a title in
+    // Continue Watching could open to a plain Play button.
+    val streamPositionMs = state.streamPositionMs.takeIf { it > 0L }
+        ?: item.userData?.playbackPositionTicks?.div(10_000L)
+        ?: 0L
     val hasPosition = offlinePositionMs > 0L || streamPositionMs > 0L
     val resumeAction: (() -> Unit)? = when {
         dl?.status == DownloadStatus.COMPLETE.name && offlinePositionMs > 0L ->
