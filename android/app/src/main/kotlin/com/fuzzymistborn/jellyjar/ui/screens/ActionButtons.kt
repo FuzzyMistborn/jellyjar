@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -32,7 +31,6 @@ fun PrimaryActionButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     accentColor: Color = Primary,
-    compact: Boolean = false,
 ) {
     Button(
         onClick = onClick,
@@ -40,14 +38,13 @@ fun PrimaryActionButton(
             containerColor = accentColor,
             contentColor = readableContentColor(accentColor),
         ),
-        contentPadding = PaddingValues(horizontal = if (compact) Spacing.md else Spacing.xl, vertical = 14.dp),
+        contentPadding = PaddingValues(horizontal = Spacing.xl, vertical = 14.dp),
         modifier = modifier,
     ) {
         Icon(icon, contentDescription = null)
         Spacer(Modifier.width(Spacing.sm))
         Text(
             text,
-            style = if (compact) MaterialTheme.typography.labelMedium else LocalTextStyle.current,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -55,9 +52,7 @@ fun PrimaryActionButton(
 }
 
 // Full-size outlined action button. Pass contentColor to recolor for a destructive/error action
-// (e.g. Remove); omit text for an icon-only button. Pass compact = true in tighter layouts (the
-// tablet two-pane Detail sidebar) to shrink padding/text so labels like "Download" fit without
-// clipping in a narrower column.
+// (e.g. Remove); omit text for an icon-only button.
 @Composable
 fun SecondaryActionButton(
     icon: ImageVector,
@@ -65,13 +60,12 @@ fun SecondaryActionButton(
     modifier: Modifier = Modifier,
     text: String? = null,
     contentColor: Color? = null,
-    compact: Boolean = false,
 ) {
     OutlinedButton(
         onClick = onClick,
         colors = scrimOutlinedButtonColors(contentColor),
         border = scrimOutlinedButtonBorder(contentColor),
-        contentPadding = PaddingValues(horizontal = if (compact) Spacing.md else Spacing.xl, vertical = 14.dp),
+        contentPadding = PaddingValues(horizontal = Spacing.xl, vertical = 14.dp),
         modifier = modifier,
     ) {
         Icon(icon, contentDescription = null)
@@ -79,7 +73,6 @@ fun SecondaryActionButton(
             Spacer(Modifier.width(Spacing.sm))
             Text(
                 text,
-                style = if (compact) MaterialTheme.typography.labelMedium else LocalTextStyle.current,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

@@ -331,3 +331,13 @@ fun Modifier.tintedPanel(
     .background(Color.Black.copy(alpha = 0.45f), shape)
     .background(accent.copy(alpha = 0.18f), shape)
     .border(1.dp, Color.White.copy(alpha = 0.08f), shape)
+
+// Big hero title style (Detail/Season) with a subtle drop shadow as a legibility backstop over
+// backdrop art.
+fun androidx.compose.ui.text.TextStyle.withHeroShadow(): androidx.compose.ui.text.TextStyle = copy(
+    shadow = androidx.compose.ui.graphics.Shadow(
+        color = Color.Black.copy(alpha = 0.4f),
+        offset = androidx.compose.ui.geometry.Offset(0f, 2f),
+        blurRadius = 6f,
+    ),
+)

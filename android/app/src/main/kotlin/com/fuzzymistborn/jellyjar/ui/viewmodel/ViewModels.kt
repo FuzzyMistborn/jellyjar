@@ -1765,8 +1765,9 @@ class SeasonViewModel @Inject constructor(
         settings.saveEpisodeViewGrid(newValue)
     }
 
+    // Blank for a synthetic "offline-series-…" id — it would only 404.
     fun backdropUrl() =
-        _state.value.seriesId?.let {
+        _state.value.seriesId?.takeUnless { it.startsWith("offline-series-") }?.let {
             JellyfinImageHelper.backdropImageUrl(_state.value.jellyfinUrl, it)
         } ?: ""
 

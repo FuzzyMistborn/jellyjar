@@ -343,14 +343,14 @@ private fun DetailLandscapeContent(
                 Row(
                     modifier = Modifier
                         .padding(horizontal = 40.dp)
-                        .fillMaxWidth()
-                        .height(heroHeight),
+                        .fillMaxWidth(),
                 ) {
-                    // Artwork fills the hero height, but never more than half the content width —
-                    // a 16:9 episode still at full height would otherwise squeeze the title
+                    // Artwork targets the hero height, but never more than half the content width
+                    // — a 16:9 episode still at full height would otherwise squeeze the title
                     // column on narrower landscape tablets.
                     val aspect = if (item.type == "Episode") 16f / 9f else 2f / 3f
                     val artworkWidth = minOf(heroHeight * aspect, contentWidth * 0.5f)
+                    val artworkHeight = artworkWidth / aspect
                     PosterImage(
                         imageUrl = state.download?.thumbnailUri ?: viewModel.posterUrl(item.id),
                         contentDescription = item.name,
@@ -361,17 +361,22 @@ private fun DetailLandscapeContent(
                         ),
                     )
                     Spacer(Modifier.width(32.dp))
-                    BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                        // Play + Favorite/Played + Download need ~520dp on one row; narrower
-                        // columns stack them on two.
-                        val fitsOneRow = maxWidth >= 520.dp
-                        Column(modifier = Modifier.fillMaxSize()) {
-                            TitleBlock(item, maxTitleLines = 2)
-                            Spacer(Modifier.weight(1f))
-                            if (item.type != "Series") {
+                    // At least as tall as the artwork, with the title at the top and the actions
+                    // pinned to the artwork's bottom edge — but free to grow taller when the title
+                    // and wrapped buttons need more room (a fixed height clipped the buttons on
+                    // narrower landscape tablets).
+                    Column(
+                        modifier = Modifier.weight(1f).heightIn(min = artworkHeight),
+                        verticalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        // Each half in its own Column so SpaceBetween separates title from
+                        // actions rather than spreading TitleBlock's eyebrow/title apart.
+                        Column { TitleBlock(item, maxTitleLines = 2) }
+                        if (item.type != "Series") {
+                            Column(modifier = Modifier.padding(top = Spacing.md)) {
                                 ActionButtonsSection(
                                     item, state, viewModel, accentColor, actions, coroutineScope,
-                                    singleRow = fitsOneRow,
+                                    flowRow = true,
                                 )
                             }
                         }
@@ -476,13 +481,7 @@ private fun TitleBlock(item: JellyfinItem, maxTitleLines: Int = Int.MAX_VALUE) {
     // Subtle text shadow as a legibility backstop where the title sits over backdrop art.
     Text(
         text = if (item.type == "Episode") item.name else item.displayTitle,
-        style = MaterialTheme.typography.displayMedium.copy(
-            shadow = androidx.compose.ui.graphics.Shadow(
-                color = Color.Black.copy(alpha = 0.4f),
-                offset = androidx.compose.ui.geometry.Offset(0f, 2f),
-                blurRadius = 6f,
-            ),
-        ),
+        style = MaterialTheme.typography.displayMedium.withHeroShadow(),
         color = OnSurface,
         maxLines = maxTitleLines,
         overflow = TextOverflow.Ellipsis,
@@ -508,6 +507,7 @@ private fun MetaRow(item: JellyfinItem, accentColor: Color, large: Boolean = fal
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+        itemVerticalAlignment = Alignment.CenterVertically,
     ) {
         dateLabel?.let { Text(it, style = textStyle, color = textColor) }
         item.runtimeMinutes?.let { Text("${it}m", style = textStyle, color = textColor) }
@@ -534,6 +534,7 @@ private fun MetaRow(item: JellyfinItem, accentColor: Color, large: Boolean = fal
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ActionButtonsSection(
     item: JellyfinItem,
@@ -542,7 +543,10 @@ private fun ActionButtonsSection(
     accentColor: Color,
     actions: DetailActions,
     coroutineScope: kotlinx.coroutines.CoroutineScope,
-    singleRow: Boolean = false,
+    // Landscape hero: everything in one FlowRow that wraps onto another line when it runs out
+    // of width (Resume + Play + Favorite + Played + Download can need ~600dp), instead of a
+    // single Row that clipped the trailing button off-screen.
+    flowRow: Boolean = false,
 ) {
     val dl = state.download
     val offlinePositionMs = dl?.playbackPositionMs ?: 0L
@@ -593,7 +597,7 @@ private fun ActionButtonsSection(
         }
     }
 
-    if (!singleRow) {
+    if (!flowRow) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
@@ -602,14 +606,10 @@ private fun ActionButtonsSection(
         Spacer(Modifier.height(Spacing.sm))
     }
 
-    // The landscape hero (singleRow=true) puts the play button(s) and the status icons on one
-    // row anchored to the artwork's bottom edge — it has width to spare but a fixed height.
-    // Stacked layouts keep the two-row split.
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (singleRow) playRow()
+    // The landscape hero (flowRow=true) puts the play button(s) and the status controls in one
+    // wrapping FlowRow; stacked layouts keep the two-row split.
+    val controls: @Composable RowScope.() -> Unit = {
+        if (flowRow) playRow()
         IconButton(onClick = { viewModel.toggleFavorite() }) {
             Icon(
                 if (state.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
@@ -662,6 +662,19 @@ private fun ActionButtonsSection(
             }
             else -> {}
         }
+    }
+    if (flowRow) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            itemVerticalAlignment = Alignment.CenterVertically,
+        ) { controls() }
+    } else {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            verticalAlignment = Alignment.CenterVertically,
+            content = controls,
+        )
     }
 }
 
