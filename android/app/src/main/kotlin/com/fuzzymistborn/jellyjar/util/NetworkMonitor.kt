@@ -123,7 +123,11 @@ class NetworkMonitor @Inject constructor(
             }
             override fun onLost(network: Network) {
                 okHttpClient.connectionPool.evictAll()
-                _rawOnline.value = isCurrentlyConnected()
+                // A default-network callback only reports a loss when nothing replaces the network
+                // (a replacement arrives via onAvailable). Re-reading activeNetwork here can still
+                // return the network that's going away, which left isOnline stuck true after
+                // airplane mode or a Wi-Fi drop.
+                _rawOnline.value = false
             }
             // Doze/app-standby blocks this app's network access while it's in the background
             // even though the network itself stays up, so every call fails and the server gets

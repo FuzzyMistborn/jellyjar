@@ -530,8 +530,17 @@ fun PlayerScreen(
     var videoFormat by remember { mutableStateOf<androidx.media3.common.Format?>(null) }
     var audioFormat by remember { mutableStateOf<androidx.media3.common.Format?>(null) }
     var nerdStatsVisible by remember { mutableStateOf(false) }
+    // A source failure (stream dropped, file gone) leaves ExoPlayer idle and paused; without this
+    // the screen just sits there with no hint why.
+    var playbackError by remember { mutableStateOf<String?>(null) }
     DisposableEffect(player) {
         val listener = object : Player.Listener {
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                playbackError = if (isStreamed) "Playback stopped. Check your connection." else "Couldn't play this file."
+            }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY) playbackError = null
+            }
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
                 videoFormat = player.videoFormat
             }
@@ -726,6 +735,27 @@ fun PlayerScreen(
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
                 )
+            }
+        }
+
+        playbackError?.let { message ->
+            androidx.compose.material3.Surface(
+                color = Surface,
+                shape = RoundedCornerShape(Radius.md),
+                modifier = Modifier.align(Alignment.Center).widthIn(max = 360.dp),
+            ) {
+                Column(
+                    modifier = Modifier.padding(Spacing.lg),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                ) {
+                    Text(message, style = MaterialTheme.typography.titleMedium, color = OnSurface)
+                    Button(onClick = {
+                        playbackError = null
+                        player.prepare()
+                        player.play()
+                    }) { Text("Retry") }
+                }
             }
         }
 

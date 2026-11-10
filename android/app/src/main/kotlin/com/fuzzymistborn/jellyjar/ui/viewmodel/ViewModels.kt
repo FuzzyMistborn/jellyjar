@@ -165,6 +165,15 @@ class LibraryViewModel @Inject constructor(
                                 recentlyAdded = emptyList(),
                             )
                         }
+                    } else if (!librariesLoadedOnline && !_state.value.showingDownloads &&
+                        !_state.value.authExpired && libraryJob?.isActive != true
+                    ) {
+                        // Online and reachable but still on the offline stand-ins. The edge-driven
+                        // reloads (reconnected, serverReachable false->true) each depend on seeing
+                        // the other signal at the right instant — an outage that begins and ends
+                        // while the player is on top could miss both and strand the home screen
+                        // with no banner and no retry. This level check can't be missed.
+                        loadLibrary(isRefresh = true)
                     }
                 }
         }
