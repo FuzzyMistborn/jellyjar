@@ -947,7 +947,19 @@ class DetailViewModel @Inject constructor(
         val nowPlayed = !_state.value.isPlayed
         if (nowPlayed) jellyfinRepo.markPlayed(item.id)
         else jellyfinRepo.markUnplayed(item.id)
-        _state.update { it.copy(isPlayed = nowPlayed) }
+        // Jellyfin drops the resume position either way; drop the local one too, or Resume kept
+        // offering the old spot (it wins over the server's position) after marking the title
+        // watched or unwatched.
+        downloadRepo.updatePlaybackPosition(item.id, 0L)
+        _state.update {
+            it.copy(
+                isPlayed = nowPlayed,
+                streamPositionMs = 0L,
+                item = it.item?.copy(
+                    userData = it.item.userData?.copy(playbackPositionTicks = 0L, played = nowPlayed),
+                ),
+            )
+        }
     }
 
     fun toggleEpisodeView() = viewModelScope.launch {
