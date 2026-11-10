@@ -309,6 +309,7 @@ fun LibraryScreen(
                         isOnline = state.isOnline,
                         jellyfinAvailable = state.jellyfinAvailable,
                         authExpired = state.authExpired,
+                        needsSetup = state.needsSetup,
                         isReconnecting = state.isReconnecting,
                         onRetry = viewModel::retryConnection,
                         onSignIn = onAdminClick,
@@ -400,6 +401,7 @@ private fun HomeScreen(
     isOnline: Boolean,
     jellyfinAvailable: Boolean,
     authExpired: Boolean,
+    needsSetup: Boolean,
     isReconnecting: Boolean,
     onRetry: () -> Unit,
     onSignIn: () -> Unit,
@@ -442,7 +444,12 @@ private fun HomeScreen(
         verticalArrangement = Arrangement.spacedBy(Spacing.xl),
         modifier = Modifier.fillMaxSize(),
     ) {
-        if (isOnline && !jellyfinAvailable) {
+        if (needsSetup) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                // Same PIN-gated route as the gear icon; with no PIN set yet it opens Settings directly.
+                SetupPrompt(onSetUp = onSignIn)
+            }
+        } else if (isOnline && !jellyfinAvailable) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Surface(
                     color = Warning.copy(alpha = 0.15f),
@@ -635,6 +642,45 @@ private fun PosterCard(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+    }
+}
+
+// First-run guidance: without it a fresh install just said "Jellyfin server unreachable".
+@Composable
+private fun SetupPrompt(onSetUp: () -> Unit) {
+    Surface(
+        color = Primary.copy(alpha = 0.12f),
+        contentColor = OnSurface,
+        shape = RoundedCornerShape(Radius.lg),
+        modifier = Modifier.fillMaxWidth().padding(top = Spacing.lg),
+    ) {
+        Column(
+            modifier = Modifier.padding(Spacing.xl),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+        ) {
+            Icon(
+                Icons.Default.Dns,
+                contentDescription = null,
+                tint = Primary,
+                modifier = Modifier.size(IconSize.lg),
+            )
+            Text("Welcome to JellyJar", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "Connect to your Jellyfin server in Settings to browse and stream your library.",
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                "To download for offline viewing, also add your Press server and choose a download folder there.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = OnSurfaceMuted,
+            )
+            Spacer(Modifier.height(Spacing.xs))
+            Button(onClick = onSetUp) {
+                Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(IconSize.sm))
+                Spacer(Modifier.width(Spacing.sm))
+                Text("Set Up")
+            }
         }
     }
 }

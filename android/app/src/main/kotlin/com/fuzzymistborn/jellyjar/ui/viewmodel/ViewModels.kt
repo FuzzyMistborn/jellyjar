@@ -33,6 +33,9 @@ data class LibraryState(
     val jellyfinAvailable: Boolean = true,
     // Jellyfin rejected the saved token (see NetworkMonitor.authExpired).
     val authExpired: Boolean = false,
+    // First run: no Jellyfin sign-in saved yet. Home shows setup guidance instead of an
+    // "unreachable" banner. False until settings first load, so a signed-in start doesn't flash it.
+    val needsSetup: Boolean = false,
     // A retry the user can see is in flight (Retry button, reconnect, app returning to front).
     val isReconnecting: Boolean = false,
     val showingDownloads: Boolean = false,
@@ -231,7 +234,7 @@ class LibraryViewModel @Inject constructor(
             settings.settings.collect { s ->
                 val prevToken = _state.value.jellyfinToken
                 val prevUrl = _state.value.jellyfinUrl
-                _state.update { it.copy(jellyfinUrl = s.jellyfinUrl, jellyfinToken = s.jellyfinToken, showContinueWatching = s.showContinueWatching, showRecentlyAdded = s.showRecentlyAdded, showMyList = s.showMyList, genreFilterEnabled = s.genreFilterEnabled, kidModeEnabled = s.kidModeEnabled) }
+                _state.update { it.copy(needsSetup = s.jellyfinToken.isBlank(), jellyfinUrl = s.jellyfinUrl, jellyfinToken = s.jellyfinToken, showContinueWatching = s.showContinueWatching, showRecentlyAdded = s.showRecentlyAdded, showMyList = s.showMyList, genreFilterEnabled = s.genreFilterEnabled, kidModeEnabled = s.kidModeEnabled) }
                 // Any new token, not just the first: signing in again after a rejected token must
                 // reload rather than wait for the next retry.
                 val tokenChanged = prevToken != s.jellyfinToken && s.jellyfinToken.isNotBlank()
@@ -296,6 +299,9 @@ class LibraryViewModel @Inject constructor(
     }
 
     private suspend fun loadLibraryInner(isRefresh: Boolean): Unit = coroutineScope {
+        // Nothing to connect to yet. Calling the server anyway would fail, mark Jellyfin
+        // unreachable and start the retry loop. Signing in reloads (see the settings collector).
+        if (settings.currentSnapshot().jellyfinToken.isBlank()) return@coroutineScope
         if (!isRefresh) {
             _state.update { s -> s.copy(isLoading = true, items = emptyList(), totalCount = 0) }
         }
