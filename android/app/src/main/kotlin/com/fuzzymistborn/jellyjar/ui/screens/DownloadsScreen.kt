@@ -176,11 +176,15 @@ fun DownloadsScreen(
                                     modifier = Modifier.padding(bottom = 4.dp),
                                 )
                             }
-                        } else if (state.active.isNotEmpty()) {
-                            item {
+                        } else {
+                            // Only encodes hold a queue slot: an item already copying to the device
+                            // doesn't (see DownloadQueueManager), so counting all of `active` said
+                            // "2 items transcoding" while one of them was downloading.
+                            val transcoding = state.active.count { it.status == "TRANSCODING" }
+                            if (transcoding > 0) item {
                                 Text(
-                                    "Waiting for Press — ${state.active.size} " +
-                                        "item${if (state.active.size != 1) "s" else ""} transcoding",
+                                    "Waiting for Press — $transcoding " +
+                                        "item${if (transcoding != 1) "s" else ""} transcoding",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = OnSurfaceMuted,
                                     modifier = Modifier.padding(bottom = 4.dp),

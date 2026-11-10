@@ -1825,10 +1825,15 @@ class SeasonViewModel @Inject constructor(
         if (failCount > 0) _state.update { it.copy(downloadError = "$failCount episode(s) failed to queue") }
     }
 
-    fun downloadNextN(n: Int, preset: String) = viewModelScope.launch {
+    // The next [n] not-yet-downloaded episodes counting from [fromEpisodeId] — the season's "next
+    // up", the one its Play button offers. It used to count from E01, so on a half-watched season
+    // "Next 5" fetched episodes already watched instead of the ones coming up.
+    fun downloadNextN(n: Int, preset: String, fromEpisodeId: String?) = viewModelScope.launch {
         val downloads = _state.value.episodeDownloads
+        val episodes = _state.value.episodes
+        val start = episodes.indexOfFirst { it.id == fromEpisodeId }.coerceAtLeast(0)
         var failCount = 0
-        _state.value.episodes
+        episodes.drop(start)
             .filter { ep ->
                 val dl = downloads[ep.id]
                 dl == null || dl.status == DownloadStatus.FAILED.name
