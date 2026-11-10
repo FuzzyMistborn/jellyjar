@@ -68,6 +68,13 @@ data class CachedItemEntity(
     val played: Boolean = false,
 )
 
+// What the player opens. The SAF URI is readable through the folder grant alone; the file path
+// (localPath) needs READ_MEDIA_VIDEO, because files written through SAF belong to the storage
+// provider, not this app — so with "Allow limited access" or the permission denied, path
+// playback failed with EACCES. The path stays the fallback for a download with no URI (a non-SAF
+// destination).
+fun DownloadEntity.playbackUri(): String = localUri?.takeIf { it.isNotBlank() } ?: localPath
+
 // Stores playback position for any item, whether downloaded or stream-only.
 @Entity(tableName = "playback_positions")
 data class PlaybackPositionEntity(

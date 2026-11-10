@@ -31,6 +31,7 @@ import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import kotlinx.coroutines.launch
+import com.fuzzymistborn.jellyjar.data.local.playbackUri
 import com.fuzzymistborn.jellyjar.model.DownloadStatus
 import com.fuzzymistborn.jellyjar.model.JellyfinItem
 import com.fuzzymistborn.jellyjar.model.MediaSource
@@ -614,7 +615,7 @@ private fun ActionButtonsSection(
     val hasPosition = offlinePositionMs > 0L || streamPositionMs > 0L
     val resumeAction: (() -> Unit)? = when {
         dl?.status == DownloadStatus.COMPLETE.name && offlinePositionMs > 0L ->
-            { { actions.onPlayClick(dl.localPath, dl.jellyfinId, offlinePositionMs) } }
+            { { actions.onPlayClick(dl.playbackUri(), dl.jellyfinId, offlinePositionMs) } }
         state.canStream && streamPositionMs > 0L ->
             {
                 {
@@ -627,7 +628,7 @@ private fun ActionButtonsSection(
     }
     val playFromStartAction: (() -> Unit)? = when {
         dl?.status == DownloadStatus.COMPLETE.name ->
-            { { actions.onPlayClick(dl.localPath, dl.jellyfinId, 0L) } }
+            { { actions.onPlayClick(dl.playbackUri(), dl.jellyfinId, 0L) } }
         state.canStream ->
             {
                 {
@@ -755,7 +756,7 @@ private fun SeriesPlayButton(
     val streamPos = ep.userData?.playbackPositionTicks?.div(10_000L) ?: 0L
     val startMs = if (complete && offlinePos > 0L) offlinePos else streamPos
     val action: () -> Unit = when {
-        complete && dl != null -> { { actions.onPlayClick(dl.localPath, dl.jellyfinId, startMs) } }
+        complete && dl != null -> { { actions.onPlayClick(dl.playbackUri(), dl.jellyfinId, startMs) } }
         state.canStream -> {
             {
                 coroutineScope.launch {
@@ -1019,7 +1020,7 @@ internal fun EpisodeRow(
                     if (hasPos) {
                         val resumeAction: (() -> Unit)? = when {
                             download?.status == DownloadStatus.COMPLETE.name && offlinePos > 0L ->
-                                { { onPlayOfflineClick(download.localPath, download.jellyfinId, offlinePos) } }
+                                { { onPlayOfflineClick(download.playbackUri(), download.jellyfinId, offlinePos) } }
                             canStream && onStreamClick != null && streamPos > 0L ->
                                 { { onStreamClick(streamPos) } }
                             else -> null
@@ -1030,7 +1031,7 @@ internal fun EpisodeRow(
                     }
                     val playFromStartAction: (() -> Unit)? = when {
                         download?.status == DownloadStatus.COMPLETE.name ->
-                            { { onPlayOfflineClick(download.localPath, download.jellyfinId, 0L) } }
+                            { { onPlayOfflineClick(download.playbackUri(), download.jellyfinId, 0L) } }
                         canStream && onStreamClick != null -> { { onStreamClick(0L) } }
                         else -> null
                     }
@@ -1295,7 +1296,7 @@ internal fun EpisodeThumb(
             if (hasPos) {
                 val resumeAction: (() -> Unit)? = when {
                     download?.status == DownloadStatus.COMPLETE.name && offlinePos > 0L ->
-                        { { onPlayOfflineClick(download.localPath, download.jellyfinId, offlinePos) } }
+                        { { onPlayOfflineClick(download.playbackUri(), download.jellyfinId, offlinePos) } }
                     canStream && onStreamClick != null && streamPos > 0L ->
                         { { onStreamClick(streamPos) } }
                     else -> null
@@ -1311,7 +1312,7 @@ internal fun EpisodeThumb(
             }
             val playFromStartAction: (() -> Unit)? = when {
                 download?.status == DownloadStatus.COMPLETE.name ->
-                    { { onPlayOfflineClick(download.localPath, download.jellyfinId, 0L) } }
+                    { { onPlayOfflineClick(download.playbackUri(), download.jellyfinId, 0L) } }
                 canStream && onStreamClick != null -> { { onStreamClick(0L) } }
                 else -> null
             }

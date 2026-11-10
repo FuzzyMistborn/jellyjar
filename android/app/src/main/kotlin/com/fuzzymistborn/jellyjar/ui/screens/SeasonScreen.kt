@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import com.fuzzymistborn.jellyjar.data.local.playbackUri
 import com.fuzzymistborn.jellyjar.model.DownloadStatus
 import com.fuzzymistborn.jellyjar.ui.theme.*
 import com.fuzzymistborn.jellyjar.ui.viewmodel.SeasonViewModel
@@ -153,13 +154,13 @@ fun SeasonScreen(
                                 }
                                 val resumeAction: (() -> Unit)? = when {
                                     isComplete && download != null && offlinePos > 0L ->
-                                        { { onPlayClick(download.localPath, download.jellyfinId, offlinePos) } }
+                                        { { onPlayClick(download.playbackUri(), download.jellyfinId, offlinePos) } }
                                     state.canStream && streamPos > 0L -> { { streamFrom(streamPos) } }
                                     else -> null
                                 }
                                 val playFromStartAction: (() -> Unit)? = when {
                                     isComplete && download != null ->
-                                        { { onPlayClick(download.localPath, download.jellyfinId, 0L) } }
+                                        { { onPlayClick(download.playbackUri(), download.jellyfinId, 0L) } }
                                     state.canStream -> { { streamFrom(0L) } }
                                     else -> null
                                 }
