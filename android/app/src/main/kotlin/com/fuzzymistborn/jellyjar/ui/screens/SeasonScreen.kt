@@ -226,8 +226,8 @@ fun SeasonScreen(
                                     onPresetSelected = { preset ->
                                         when (showPresetsFor) {
                                             "remaining" -> viewModel.downloadRemaining(preset)
-                                            "next5" -> viewModel.downloadNextN(5, preset)
-                                            "next10" -> viewModel.downloadNextN(10, preset)
+                                            "next5" -> viewModel.downloadNextN(5, preset, nextEpisode?.id)
+                                            "next10" -> viewModel.downloadNextN(10, preset, nextEpisode?.id)
                                         }
                                         showPresetsFor = null
                                     },
