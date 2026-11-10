@@ -2,6 +2,7 @@ package com.fuzzymistborn.jellyjar.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.fuzzymistborn.jellyjar.api.ItemsResponse
 import com.fuzzymistborn.jellyjar.api.JellyfinImageHelper
 import com.fuzzymistborn.jellyjar.data.local.DownloadEntity
 import com.fuzzymistborn.jellyjar.data.local.FavoriteEntity
@@ -43,6 +44,9 @@ data class LibraryState(
     val downloadProgress: Map<String, Float> = emptyMap(),
     val searchQuery: String = "",
     val sortOrder: SortOrder = SortOrder.DEFAULT,
+    // `items` came from the server with searchQuery/sortOrder already applied (see
+    // LibraryViewModel.fetchPage). Offline grids hold every item and are filtered here instead.
+    val serverFiltered: Boolean = false,
     val genres: List<String> = emptyList(),
     val selectedGenre: String? = null,
     val showContinueWatching: Boolean = true,
@@ -65,6 +69,7 @@ data class LibraryState(
     val hasMore: Boolean get() = items.size < totalCount
 
     val displayItems: List<JellyfinItem> get() {
+        if (serverFiltered) return items
         var result = items
         if (searchQuery.isNotBlank()) {
             result = result.filter { it.name.contains(searchQuery, ignoreCase = true) }
@@ -102,6 +107,9 @@ class LibraryViewModel @Inject constructor(
     // refresh, selectLibrary, setSortOrder). Two overlapping loads race to write `items`, and the
     // slower one wins — leaving the grid showing the library you just switched away from.
     private var libraryJob: Job? = null
+    // A page still loading when search/sort/genre change would be appended to the new results.
+    private var loadMoreJob: Job? = null
+    private var searchJob: Job? = null
 
     // Whether `libraries` currently holds the server's list rather than the offline stand-ins.
     // serverReachable can flip back to true from another screen (Detail loading an item), which
@@ -279,6 +287,7 @@ class LibraryViewModel @Inject constructor(
 
     private fun loadLibrary(isRefresh: Boolean = false) {
         libraryJob?.cancel()
+        cancelLoadMore()
         libraryJob = viewModelScope.launch {
             val self = coroutineContext[Job]
             try {
@@ -320,16 +329,9 @@ class LibraryViewModel @Inject constructor(
         val selectedLib = _state.value.libraries
             .find { lib -> lib.name == _state.value.selectedLibrary }
         val parentId = selectedLib?.id
-        val types = when (selectedLib?.collectionType) {
-            "movies" -> "Movie"
-            "tvshows" -> "Series"
-            else -> "Movie,Series"
-        }
         // Items and genre chips are independent of each other — fetch them concurrently instead
         // of paying for two sequential round trips.
-        val itemsDeferred = async {
-            jellyfinRepo.getItems(parentId = parentId, types = types, startIndex = 0, genres = _state.value.selectedGenre)
-        }
+        val itemsDeferred = async { fetchPage(startIndex = 0) }
         val fetchGenres = selectedLib != null && _state.value.genres.isEmpty()
         val genresDeferred = if (fetchGenres) async { jellyfinRepo.getGenres(parentId) } else null
 
@@ -339,6 +341,7 @@ class LibraryViewModel @Inject constructor(
                     s.copy(
                         items = response.Items,
                         totalCount = response.TotalRecordCount,
+                        serverFiltered = true,
                         isLoading = false,
                         isRefreshing = false,
                     )
@@ -351,6 +354,65 @@ class LibraryViewModel @Inject constructor(
         genresDeferred?.await()?.onSuccess { genres ->
             _state.update { s -> s.copy(genres = genres) }
         }
+    }
+
+    // One page of the selected library with the grid's genre, search, sort and Unwatched filter
+    // applied server-side. They used to be applied client-side to the pages loaded so far, so
+    // search missed anything past the first page or two and "Top Rated" only reordered those.
+    private suspend fun fetchPage(startIndex: Int): Result<ItemsResponse> {
+        val s = _state.value
+        val selectedLib = s.libraries.find { lib -> lib.name == s.selectedLibrary }
+        val types = when (selectedLib?.collectionType) {
+            "movies" -> "Movie"
+            "tvshows" -> "Series"
+            else -> "Movie,Series"
+        }
+        val (sortBy, sortOrder) = when (s.sortOrder) {
+            SortOrder.DEFAULT, SortOrder.ALPHABETICAL, SortOrder.UNWATCHED_FIRST -> "SortName" to "Ascending"
+            SortOrder.YEAR_ASC -> "ProductionYear,SortName" to "Ascending"
+            SortOrder.YEAR_DESC -> "ProductionYear,SortName" to "Descending"
+            SortOrder.RATING_DESC -> "CommunityRating,SortName" to "Descending"
+        }
+        return jellyfinRepo.getItems(
+            parentId = selectedLib?.id,
+            types = types,
+            startIndex = startIndex,
+            searchTerm = s.searchQuery,
+            filters = "IsUnplayed".takeIf { s.sortOrder == SortOrder.UNWATCHED_FIRST },
+            genres = s.selectedGenre,
+            sortBy = sortBy,
+            sortOrder = sortOrder,
+        )
+    }
+
+    // Re-fetches just the grid after a search/sort/genre change — not the libraries and home rows
+    // a full loadLibrary() also reloads. Offline, displayItems filters the local items instead.
+    private fun reloadItems() {
+        if (_state.value.selectedLibrary == null ||
+            !networkMonitor.isOnline.value || !_state.value.jellyfinAvailable
+        ) return
+        libraryJob?.cancel()
+        cancelLoadMore()
+        libraryJob = viewModelScope.launch {
+            val self = coroutineContext[Job]
+            _state.update { it.copy(isLoading = true, items = emptyList(), totalCount = 0) }
+            try {
+                fetchPage(startIndex = 0)
+                    .onSuccess { response ->
+                        _state.update {
+                            it.copy(items = response.Items, totalCount = response.TotalRecordCount, serverFiltered = true)
+                        }
+                    }
+                    .onFailure { e -> networkMonitor.reportServerFailure(e) }
+            } finally {
+                if (libraryJob === self) _state.update { it.copy(isLoading = false) }
+            }
+        }
+    }
+
+    private fun cancelLoadMore() {
+        loadMoreJob?.cancel()
+        _state.update { it.copy(isLoadingMore = false) }
     }
 
     private suspend fun loadHomeRows() {
@@ -386,22 +448,9 @@ class LibraryViewModel @Inject constructor(
 
     fun loadMore() {
         if (_state.value.isLoadingMore || !_state.value.hasMore) return
-        viewModelScope.launch {
+        loadMoreJob = viewModelScope.launch {
             _state.update { it.copy(isLoadingMore = true) }
-            val selectedLib = _state.value.libraries
-                .find { lib -> lib.name == _state.value.selectedLibrary }
-            val parentId = selectedLib?.id
-            val types = when (selectedLib?.collectionType) {
-                "movies" -> "Movie"
-                "tvshows" -> "Series"
-                else -> "Movie,Series"
-            }
-            jellyfinRepo.getItems(
-                parentId = parentId,
-                types = types,
-                startIndex = _state.value.items.size,
-                genres = _state.value.selectedGenre,
-            ).onSuccess { response ->
+            fetchPage(startIndex = _state.value.items.size).onSuccess { response ->
                 _state.update { s ->
                     s.copy(
                         items = s.items + response.Items,
@@ -418,7 +467,7 @@ class LibraryViewModel @Inject constructor(
     private fun loadOffline() = viewModelScope.launch {
         downloadRepo.completedDownloads.collect { downloads ->
             val items = downloads.map { it.toJellyfinItem() }
-            _state.update { s -> s.copy(items = items, isLoading = false) }
+            _state.update { s -> s.copy(items = items, serverFiltered = false, isLoading = false) }
         }
     }
 
@@ -461,11 +510,12 @@ class LibraryViewModel @Inject constructor(
             }
             else -> downloads.map { it.toJellyfinItem() }
         }
-        _state.update { s -> s.copy(items = items, totalCount = items.size, isLoading = false) }
+        _state.update { s -> s.copy(items = items, totalCount = items.size, serverFiltered = false, isLoading = false) }
     }
 
     fun goHome() {
-        _state.update { it.copy(selectedLibrary = null, showingDownloads = false, items = emptyList(), totalCount = 0, genres = emptyList(), selectedGenre = null) }
+        searchJob?.cancel()
+        _state.update { it.copy(selectedLibrary = null, showingDownloads = false, items = emptyList(), totalCount = 0, genres = emptyList(), selectedGenre = null, searchQuery = "") }
     }
 
     fun showDownloads() {
@@ -480,7 +530,9 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun selectLibrary(name: String?) {
-        _state.update { it.copy(selectedLibrary = name, items = emptyList(), totalCount = 0, genres = emptyList(), selectedGenre = null) }
+        // The search box belongs to one library; it used to carry over into the next one opened.
+        searchJob?.cancel()
+        _state.update { it.copy(selectedLibrary = name, items = emptyList(), totalCount = 0, genres = emptyList(), selectedGenre = null, searchQuery = "") }
         if (name != null) {
             // Read networkMonitor.isOnline.value directly, not _state.value.isOnline: the state
             // field defaults to true and is only synced by an async collector launched in init,
@@ -496,18 +548,26 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun setSearchQuery(query: String) {
+        if (query == _state.value.searchQuery) return
         _state.update { it.copy(searchQuery = query) }
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+            delay(300)
+            reloadItems()
+        }
     }
 
     fun setSortOrder(order: SortOrder) {
+        if (order == _state.value.sortOrder) return
         _state.update { it.copy(sortOrder = order) }
+        reloadItems()
     }
 
     // Genre filtering is server-side (results are paginated), so changing it reloads the library
     fun setGenre(genre: String?) {
         if (_state.value.selectedGenre == genre) return
-        _state.update { it.copy(selectedGenre = genre, items = emptyList(), totalCount = 0) }
-        if (networkMonitor.isOnline.value && _state.value.jellyfinAvailable) loadLibrary()
+        _state.update { it.copy(selectedGenre = genre) }
+        reloadItems()
     }
 
     fun openGlobalSearch() {
