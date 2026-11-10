@@ -178,6 +178,8 @@ class JellyfinRepository @Inject constructor(
         searchTerm: String? = null,
         filters: String? = null,
         genres: String? = null,
+        sortBy: String = "SortName",
+        sortOrder: String = "Ascending",
     ): Result<ItemsResponse> = withContext(Dispatchers.IO) {
         runCatching {
             val s = settings.currentSnapshot()
@@ -192,6 +194,8 @@ class JellyfinRepository @Inject constructor(
                 searchTerm = searchTerm?.takeIf { it.isNotBlank() },
                 filters = filters,
                 genres = genres?.takeIf { it.isNotBlank() },
+                sortBy = sortBy,
+                sortOrder = sortOrder,
             )
             if (searchTerm.isNullOrBlank()) {
                 cachedItemDao.upsertAll(response.Items.map { it.toEntity() })
