@@ -13,11 +13,14 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.fuzzymistborn.jellyjar.ui.theme.IconSize
+import com.fuzzymistborn.jellyjar.ui.theme.OnSurface
 import com.fuzzymistborn.jellyjar.ui.theme.Primary
 import com.fuzzymistborn.jellyjar.ui.theme.Spacing
 
@@ -33,7 +36,10 @@ fun PrimaryActionButton(
 ) {
     Button(
         onClick = onClick,
-        colors = ButtonDefaults.buttonColors(containerColor = accentColor),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = accentColor,
+            contentColor = readableContentColor(accentColor),
+        ),
         contentPadding = PaddingValues(horizontal = if (compact) Spacing.md else Spacing.xl, vertical = 14.dp),
         modifier = modifier,
     ) {
@@ -63,11 +69,8 @@ fun SecondaryActionButton(
 ) {
     OutlinedButton(
         onClick = onClick,
-        colors = if (contentColor != null) {
-            ButtonDefaults.outlinedButtonColors(contentColor = contentColor)
-        } else {
-            ButtonDefaults.outlinedButtonColors()
-        },
+        colors = scrimOutlinedButtonColors(contentColor),
+        border = scrimOutlinedButtonBorder(contentColor),
         contentPadding = PaddingValues(horizontal = if (compact) Spacing.md else Spacing.xl, vertical = 14.dp),
         modifier = modifier,
     ) {
@@ -95,11 +98,8 @@ fun CompactActionButton(
 ) {
     OutlinedButton(
         onClick = onClick,
-        colors = if (contentColor != null) {
-            ButtonDefaults.outlinedButtonColors(contentColor = contentColor)
-        } else {
-            ButtonDefaults.outlinedButtonColors()
-        },
+        colors = scrimOutlinedButtonColors(contentColor),
+        border = scrimOutlinedButtonBorder(contentColor),
         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
         modifier = modifier,
     ) {
@@ -110,3 +110,25 @@ fun CompactActionButton(
         }
     }
 }
+
+// Black or white, whichever has the higher WCAG contrast against [background] — a dynamic accent
+// can land anywhere from a deep blue to a pale pastel, and a fixed content colour is unreadable
+// on one end of that range.
+internal fun readableContentColor(background: Color): Color {
+    val l = background.luminance()
+    val contrastWithBlack = (l + 0.05f) / 0.05f
+    val contrastWithWhite = 1.05f / (l + 0.05f)
+    return if (contrastWithBlack >= contrastWithWhite) Color.Black else Color.White
+}
+
+// Outlined buttons sit directly over backdrop art on Detail/Season, where a transparent fill and
+// the theme's grey outline washed out on bright or busy images. A dark translucent fill and a
+// bright label/border keep them legible on any background (and look unchanged on plain dark).
+@Composable
+private fun scrimOutlinedButtonColors(contentColor: Color?) = ButtonDefaults.outlinedButtonColors(
+    containerColor = Color.Black.copy(alpha = 0.5f),
+    contentColor = contentColor ?: OnSurface,
+)
+
+private fun scrimOutlinedButtonBorder(contentColor: Color?) =
+    BorderStroke(1.dp, (contentColor ?: OnSurface).copy(alpha = 0.6f))
