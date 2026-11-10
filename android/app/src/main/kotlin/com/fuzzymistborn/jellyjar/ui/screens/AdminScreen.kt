@@ -392,6 +392,12 @@ fun AdminScreen(
         // ── Downloads ─────────────────────────────────────────────────────────
         SettingsCard(title = "Downloads", icon = Icons.Default.Download) {
             val context = androidx.compose.ui.platform.LocalContext.current
+            // Offline playback opens downloads by file path (documentUriToFilePath), which needs
+            // READ_MEDIA_VIDEO — SAF's grant only covers the content:// URI. Denied, playback of a
+            // primary-storage download fails, so there's nothing more to do with the result.
+            val videoPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+            ) { }
             val folderPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
                 contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree(),
             ) { uri ->
@@ -402,6 +408,12 @@ fun AdminScreen(
                             android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
                     )
                     viewModel.setDownloadPath(uri.toString())
+                    val videoPermission = android.Manifest.permission.READ_MEDIA_VIDEO
+                    if (androidx.core.content.ContextCompat.checkSelfPermission(context, videoPermission) !=
+                        android.content.pm.PackageManager.PERMISSION_GRANTED
+                    ) {
+                        videoPermissionLauncher.launch(videoPermission)
+                    }
                 }
             }
 

@@ -70,7 +70,7 @@ private fun navigateToNextEpisode(
 class MainActivity : ComponentActivity() {
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { /* results ignored — app still runs; playback will fail gracefully without the permission */ }
+    ) { /* results ignored — the app still runs; download notifications just won't show */ }
 
     // Set by a tap on a "download complete/failed" notification (see DownloadWorker); read once by
     // JellyJarNavHost to jump straight to the Downloads screen, then reset to avoid re-navigating.
@@ -79,7 +79,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        requestMediaPermissionsIfNeeded()
+        requestNotificationPermissionIfNeeded()
         openDownloads.value = intent?.getBooleanExtra(EXTRA_OPEN_DOWNLOADS, false) == true
         setContent {
             JellyJarTheme {
@@ -96,9 +96,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun requestMediaPermissionsIfNeeded() {
+    // READ_MEDIA_VIDEO is asked for when a download folder is picked (AdminScreen), not here —
+    // at launch, before anything is set up, a photos/videos prompt made no sense.
+    private fun requestNotificationPermissionIfNeeded() {
         val needed = listOf(
-            Manifest.permission.READ_MEDIA_VIDEO,
             Manifest.permission.POST_NOTIFICATIONS,
         ).filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (needed.isNotEmpty()) requestPermissions.launch(needed.toTypedArray())
