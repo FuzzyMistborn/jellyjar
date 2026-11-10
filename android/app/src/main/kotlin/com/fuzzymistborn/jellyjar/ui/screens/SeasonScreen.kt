@@ -319,6 +319,32 @@ fun SeasonScreen(
                         CircularProgressIndicator(color = accent)
                     }
                 }
+            } else {
+                // Offline hides everything that isn't downloaded, which can leave nothing at all.
+                item(key = "empty") {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = Spacing.xl),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    ) {
+                        Text(
+                            text = when {
+                                !state.isOnline -> "No downloaded episodes in this season"
+                                state.error != null -> state.error!!
+                                else -> "No episodes"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            color = OnSurface,
+                        )
+                        if (!state.isOnline) {
+                            Text(
+                                text = "Reconnect to browse and stream the rest of the season.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = OnSurfaceMuted,
+                            )
+                        }
+                    }
+                }
             }
         }
 
