@@ -84,14 +84,6 @@ val BackgroundGradient = Brush.linearGradient(
     )
 )
 
-// Fades a full-bleed hero image down into the solid background (Detail/Season screen backdrops).
-fun heroBackdropScrim(scrimStop: Float = 0.35f, solidStop: Float = 0.55f): Brush = Brush.verticalGradient(
-    0f to Color.Transparent,
-    scrimStop to ScrimStrong,
-    solidStop to Background,
-    1f to Background,
-)
-
 // Dark overlay fading to background, used behind content drawn atop a full-screen featured backdrop.
 fun featuredBackdropScrim(): Brush = Brush.verticalGradient(
     0f to ScrimStrong,
