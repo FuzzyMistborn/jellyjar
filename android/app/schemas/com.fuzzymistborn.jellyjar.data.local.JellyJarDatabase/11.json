@@ -1,0 +1,351 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 11,
+    "identityHash": "70988a50274ef642d7bedf773f4534a7",
+    "entities": [
+      {
+        "tableName": "downloads",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`jellyfinId` TEXT NOT NULL, `title` TEXT NOT NULL, `localPath` TEXT NOT NULL, `status` TEXT NOT NULL, `progress` REAL NOT NULL, `sizeBytes` INTEGER NOT NULL, `preset` TEXT NOT NULL, `addedAt` INTEGER NOT NULL, `shimJobId` TEXT, `thumbnailPath` TEXT, `overview` TEXT, `year` INTEGER, `runtimeMinutes` INTEGER, `type` TEXT NOT NULL, `seriesName` TEXT, `seasonName` TEXT, `indexNumber` INTEGER, `parentIndexNumber` INTEGER, `mediaSourcePath` TEXT, `playbackPositionMs` INTEGER NOT NULL, `queuePosition` INTEGER NOT NULL, `segmentsJson` TEXT, `played` INTEGER NOT NULL, `localUri` TEXT, `tracksJson` TEXT, PRIMARY KEY(`jellyfinId`))",
+        "fields": [
+          {
+            "fieldPath": "jellyfinId",
+            "columnName": "jellyfinId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "localPath",
+            "columnName": "localPath",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "progress",
+            "columnName": "progress",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sizeBytes",
+            "columnName": "sizeBytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "preset",
+            "columnName": "preset",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "addedAt",
+            "columnName": "addedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "shimJobId",
+            "columnName": "shimJobId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "thumbnailPath",
+            "columnName": "thumbnailPath",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "overview",
+            "columnName": "overview",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "year",
+            "columnName": "year",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "runtimeMinutes",
+            "columnName": "runtimeMinutes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seriesName",
+            "columnName": "seriesName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "seasonName",
+            "columnName": "seasonName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "indexNumber",
+            "columnName": "indexNumber",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "parentIndexNumber",
+            "columnName": "parentIndexNumber",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "mediaSourcePath",
+            "columnName": "mediaSourcePath",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "playbackPositionMs",
+            "columnName": "playbackPositionMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "queuePosition",
+            "columnName": "queuePosition",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "segmentsJson",
+            "columnName": "segmentsJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "played",
+            "columnName": "played",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "localUri",
+            "columnName": "localUri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "tracksJson",
+            "columnName": "tracksJson",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "jellyfinId"
+          ]
+        }
+      },
+      {
+        "tableName": "cached_items",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `type` TEXT NOT NULL, `overview` TEXT, `year` INTEGER, `communityRating` REAL, `runtimeMinutes` INTEGER, `seriesName` TEXT, `seasonName` TEXT, `indexNumber` INTEGER, `parentIndexNumber` INTEGER, `mediaSourcePath` TEXT, `cachedAt` INTEGER NOT NULL, `played` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "overview",
+            "columnName": "overview",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "year",
+            "columnName": "year",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "communityRating",
+            "columnName": "communityRating",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "runtimeMinutes",
+            "columnName": "runtimeMinutes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "seriesName",
+            "columnName": "seriesName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "seasonName",
+            "columnName": "seasonName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "indexNumber",
+            "columnName": "indexNumber",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "parentIndexNumber",
+            "columnName": "parentIndexNumber",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "mediaSourcePath",
+            "columnName": "mediaSourcePath",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "cachedAt",
+            "columnName": "cachedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "played",
+            "columnName": "played",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "playback_positions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`jellyfinId` TEXT NOT NULL, `positionMs` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`jellyfinId`))",
+        "fields": [
+          {
+            "fieldPath": "jellyfinId",
+            "columnName": "jellyfinId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "positionMs",
+            "columnName": "positionMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "jellyfinId"
+          ]
+        }
+      },
+      {
+        "tableName": "favorites",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`jellyfinId` TEXT NOT NULL, `title` TEXT NOT NULL, `type` TEXT NOT NULL, `addedAt` INTEGER NOT NULL, PRIMARY KEY(`jellyfinId`))",
+        "fields": [
+          {
+            "fieldPath": "jellyfinId",
+            "columnName": "jellyfinId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "addedAt",
+            "columnName": "addedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "jellyfinId"
+          ]
+        }
+      },
+      {
+        "tableName": "pending_playback_sync",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`jellyfinId` TEXT NOT NULL, `positionMs` INTEGER NOT NULL, `played` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`jellyfinId`))",
+        "fields": [
+          {
+            "fieldPath": "jellyfinId",
+            "columnName": "jellyfinId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "positionMs",
+            "columnName": "positionMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "played",
+            "columnName": "played",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "jellyfinId"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '70988a50274ef642d7bedf773f4534a7')"
+    ]
+  }
+}
