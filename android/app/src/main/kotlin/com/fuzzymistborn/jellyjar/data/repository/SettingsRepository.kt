@@ -27,6 +27,9 @@ class SettingsRepository @Inject constructor(
         val JELLYFIN_URL = stringPreferencesKey("jellyfin_url")
         val JELLYFIN_USER_ID = stringPreferencesKey("jellyfin_user_id")
         val JELLYFIN_TOKEN = stringPreferencesKey("jellyfin_token")
+        // Display name of the signed-in user. Absent for sign-ins from before it was stored; the
+        // Admin screen's connection check fills it in.
+        val JELLYFIN_USER_NAME = stringPreferencesKey("jellyfin_user_name")
         // DeviceId the stored token was issued to. Absent for tokens from before per-install ids.
         val JELLYFIN_DEVICE_ID = stringPreferencesKey("jellyfin_device_id")
         val SHIM_URL = stringPreferencesKey("shim_url")
@@ -65,6 +68,7 @@ class SettingsRepository @Inject constructor(
             jellyfinUrl = prefs[Keys.JELLYFIN_URL] ?: "",
             jellyfinUserId = prefs[Keys.JELLYFIN_USER_ID] ?: "",
             jellyfinToken = prefs[Keys.JELLYFIN_TOKEN] ?: "",
+            jellyfinUserName = prefs[Keys.JELLYFIN_USER_NAME] ?: "",
             jellyfinDeviceId = prefs[Keys.JELLYFIN_DEVICE_ID] ?: "",
             shimUrl = prefs[Keys.SHIM_URL] ?: "",
             downloadPath = prefs[Keys.DOWNLOAD_PATH] ?: "",
@@ -110,12 +114,19 @@ class SettingsRepository @Inject constructor(
     suspend fun deviceIdForSignIn(): String =
         settings.first().jellyfinDeviceId.ifBlank { java.util.UUID.randomUUID().toString() }
 
-    suspend fun saveJellyfinAuth(url: String, userId: String, token: String, deviceId: String) {
+    suspend fun saveJellyfinAuth(url: String, userId: String, userName: String, token: String, deviceId: String) {
         context.dataStore.edit { prefs ->
             prefs[Keys.JELLYFIN_URL] = url
             prefs[Keys.JELLYFIN_USER_ID] = userId
+            prefs[Keys.JELLYFIN_USER_NAME] = userName
             prefs[Keys.JELLYFIN_TOKEN] = token
             prefs[Keys.JELLYFIN_DEVICE_ID] = deviceId
+        }
+    }
+
+    suspend fun saveJellyfinUserName(userName: String) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.JELLYFIN_USER_NAME] = userName
         }
     }
 

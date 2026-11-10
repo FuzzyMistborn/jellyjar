@@ -19,7 +19,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -150,6 +154,25 @@ fun AdminScreen(
                 }
             },
         ) {
+            // Kid Mode leans on this account's library access and parental rating, so say which
+            // one the app is signed in as — previously nothing did.
+            if (state.hasCredentials && state.jellyfinUserName.isNotBlank()) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.AccountCircle, contentDescription = null,
+                        tint = Primary, modifier = Modifier.size(IconSize.md))
+                    Text(
+                        buildAnnotatedString {
+                            append("Signed in as ")
+                            withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(state.jellyfinUserName) }
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = OnSurface,
+                    )
+                }
+            }
             SettingsTextField(
                 label = "Server URL",
                 placeholder = "192.168.1.x:8096",
