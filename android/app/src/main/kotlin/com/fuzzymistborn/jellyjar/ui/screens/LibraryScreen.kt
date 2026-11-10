@@ -56,7 +56,6 @@ import com.fuzzymistborn.jellyjar.ui.viewmodel.LibraryViewModel
 @Composable
 fun LibraryScreen(
     onItemClick: (JellyfinItem) -> Unit,
-    onPlayOffline: (String) -> Unit,
     onAdminClick: () -> Unit,
     onDownloadsClick: () -> Unit,
     viewModel: LibraryViewModel = hiltViewModel(),
@@ -71,11 +70,11 @@ fun LibraryScreen(
     BackHandler(enabled = state.globalSearchActive) {
         viewModel.closeGlobalSearch()
     }
-    BackHandler(enabled = state.selectedLibrary != null || state.showingDownloads) {
+    BackHandler(enabled = state.selectedLibrary != null) {
         viewModel.goHome()
     }
 
-    val isHome = state.selectedLibrary == null && !state.showingDownloads
+    val isHome = state.selectedLibrary == null
 
     // The search bar and two chip rows take about a third of a tablet screen, so they slide away
     // while scrolling down the grid and come back on the first scroll up. Observed, never consumed.
@@ -122,7 +121,7 @@ fun LibraryScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (state.selectedLibrary != null || state.showingDownloads) {
+                    if (state.selectedLibrary != null) {
                         IconButton(onClick = { viewModel.goHome() }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Home", tint = OnSurface)
                         }
@@ -130,7 +129,6 @@ fun LibraryScreen(
                     }
                     Text(
                         text = when {
-                            state.showingDownloads -> "Downloads"
                             state.selectedLibrary != null -> state.selectedLibrary!!
                             else -> "JellyJar"
                         },
@@ -303,7 +301,7 @@ fun LibraryScreen(
 
             // Content
             when {
-                !state.showingDownloads && state.selectedLibrary == null -> {
+                state.selectedLibrary == null -> {
                     HomeScreen(
                         libraries = state.libraries,
                         isOnline = state.isOnline,
@@ -327,33 +325,6 @@ fun LibraryScreen(
                         onItemClick = onItemClick,
                         viewModel = viewModel,
                     )
-                }
-                state.showingDownloads -> {
-                    if (state.items.isEmpty() && !state.isLoading) {
-                        EmptyState(
-                            icon = Icons.Default.DownloadDone,
-                            title = "No downloads yet",
-                            subtitle = "Download movies and shows to watch offline.",
-                            actionLabel = "Browse Library",
-                            onAction = { viewModel.goHome() },
-                        )
-                    } else {
-                        MediaGrid(
-                            items = state.displayItems,
-                            isRefreshing = false,
-                            downloadStatuses = state.downloadStatuses,
-                            downloadProgress = state.downloadProgress,
-                            onItemClick = { item ->
-                                val localPath = item.mediaSources?.firstOrNull()?.path
-                                if (localPath != null) onPlayOffline(localPath) else onItemClick(item)
-                            },
-                            onItemFocus = viewModel::setFeatured,
-                            onRefresh = {},
-                            viewModel = viewModel,
-                            sharedTransitionScope = sharedTransitionScope,
-                            animatedVisibilityScope = animatedVisibilityScope,
-                        )
-                    }
                 }
                 state.isLoading -> SkeletonGrid()
                 state.displayItems.isEmpty() -> {
