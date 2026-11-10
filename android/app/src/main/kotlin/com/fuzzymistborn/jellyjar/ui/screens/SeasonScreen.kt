@@ -46,24 +46,38 @@ fun SeasonScreen(
         }
     }
 
-    // The series' colour, from the same backdrop URL the series Detail screen uses — usually a
-    // cache hit, so the Season screen matches the series it was opened from.
-    val accent = rememberDynamicAccentColor(viewModel.backdropUrl().ifBlank { null })
-
-    // "Next up": the first unwatched episode, else the first episode.
-    val nextEpisode = remember(visibleEpisodes) {
-        visibleEpisodes.firstOrNull { it.userData?.played != true } ?: visibleEpisodes.firstOrNull()
+    // "Next up" — see nextUpEpisode(). Its downloaded thumbnail (a local file) is the art of last
+    // resort for a season that exists only from downloads, where the season and series ids are
+    // both synthetic and nothing can be fetched from the server.
+    val nextEpisode = remember(visibleEpisodes, state.episodeDownloads) {
+        nextUpEpisode(visibleEpisodes, state.episodeDownloads)
     }
+    val localThumbnail = remember(visibleEpisodes, state.episodeDownloads, nextEpisode) {
+        nextEpisode?.let { state.episodeDownloads[it.id]?.thumbnailUri }
+            ?: visibleEpisodes.firstNotNullOfOrNull { state.episodeDownloads[it.id]?.thumbnailUri }
+    }
+
+    // Same URL as the hero poster, so the portrait background is a cache hit.
+    val seasonPosterUrl = viewModel.posterItemId(seasonId, seriesId)?.let { viewModel.posterUrl(it) }
+        ?: localThumbnail
+
+    // Accent from the art actually behind the content: the season poster in portrait, the
+    // series backdrop in landscape (the same URL the series Detail screen uses, so the colours
+    // match there). Portrait falls back to the backdrop when the poster is missing or fails.
+    val backdropUrl = viewModel.backdropUrl().ifBlank { null } ?: localThumbnail
+    val portrait = isPortraitWindow()
+    val accent = rememberDynamicAccentColor(
+        imageUrl = if (portrait) seasonPosterUrl ?: backdropUrl else backdropUrl,
+        fallbackImageUrl = if (portrait && seasonPosterUrl != null) backdropUrl else null,
+    )
 
     Box(modifier = Modifier.fillMaxSize().background(BackgroundGradient)) {
 
         // Portrait windows show the season poster (series poster for a synthetic offline season)
         // as the background instead of a zoomed-in crop of the 16:9 series backdrop.
         DimmedBackdrop(
-            imageUrl = viewModel.backdropUrl(),
-            portraitImageUrl = viewModel.backgroundPosterUrl(
-                if (seasonId.startsWith("offline-season-")) seriesId else seasonId,
-            ),
+            imageUrl = backdropUrl,
+            portraitImageUrl = seasonPosterUrl,
         )
 
         LazyColumn(
@@ -90,10 +104,10 @@ fun SeasonScreen(
                             .padding(top = Spacing.lg, bottom = Spacing.xl),
                         verticalAlignment = Alignment.Bottom,
                     ) {
-                        // A synthetic offline season has no fetchable art — use the series'
-                        // poster, the same fallback the Detail screen's seasons row uses.
+                        // Season poster; series poster for a synthetic offline season; a
+                        // downloaded episode thumbnail when the series is synthetic too.
                         PosterImage(
-                            imageUrl = viewModel.posterUrl(if (seasonId.startsWith("offline-season-")) seriesId else seasonId),
+                            imageUrl = seasonPosterUrl ?: "",
                             contentDescription = state.seasonName,
                             modifier = Modifier.width(if (isWide) 160.dp else 110.dp),
                         )
@@ -105,20 +119,14 @@ fun SeasonScreen(
                             }
                             Text(
                                 text = state.seasonName ?: "",
-                                style = MaterialTheme.typography.displaySmall.copy(
-                                    shadow = androidx.compose.ui.graphics.Shadow(
-                                        color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.4f),
-                                        offset = androidx.compose.ui.geometry.Offset(0f, 2f),
-                                        blurRadius = 6f,
-                                    ),
-                                ),
+                                style = MaterialTheme.typography.displaySmall.withHeroShadow(),
                                 color = OnSurface,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                             )
                             if (visibleEpisodes.isNotEmpty()) {
                                 Spacer(Modifier.height(Spacing.sm))
-                                val watched = visibleEpisodes.count { it.userData?.played == true }
+                                val watched = visibleEpisodes.count { isEpisodePlayed(it, state.episodeDownloads) }
                                 Text(
                                     text = buildString {
                                         append("${visibleEpisodes.size} episode")
@@ -133,23 +141,29 @@ fun SeasonScreen(
                                 val download = state.episodeDownloads[ep.id]
                                 val offlinePos = download?.playbackPositionMs ?: 0L
                                 val streamPos = ep.userData?.playbackPositionTicks?.div(10_000L) ?: 0L
-                                // Same offline-first resolution as EpisodeRow: a finished download
-                                // plays locally, otherwise stream when streaming is allowed.
-                                val playsOffline = download?.status == DownloadStatus.COMPLETE.name
-                                val isResume = if (playsOffline) offlinePos > 0L else streamPos > 0L
-                                val playAction: (() -> Unit)? = when {
-                                    playsOffline && download != null ->
+                                // Same resolution as EpisodeRow: resume the offline position from
+                                // the download, else the server's stream position; otherwise play
+                                // from the start, offline first.
+                                val isComplete = download?.status == DownloadStatus.COMPLETE.name
+                                val streamFrom: (Long) -> Unit = { startMs ->
+                                    coroutineScope.launch {
+                                        onStreamClick(viewModel.streamUrl(ep.id), ep.id, startMs)
+                                    }
+                                }
+                                val resumeAction: (() -> Unit)? = when {
+                                    isComplete && download != null && offlinePos > 0L ->
                                         { { onPlayClick(download.localPath, download.jellyfinId, offlinePos) } }
-                                    state.canStream ->
-                                        {
-                                            {
-                                                coroutineScope.launch {
-                                                    onStreamClick(viewModel.streamUrl(ep.id), ep.id, streamPos)
-                                                }
-                                            }
-                                        }
+                                    state.canStream && streamPos > 0L -> { { streamFrom(streamPos) } }
                                     else -> null
                                 }
+                                val playFromStartAction: (() -> Unit)? = when {
+                                    isComplete && download != null ->
+                                        { { onPlayClick(download.localPath, download.jellyfinId, 0L) } }
+                                    state.canStream -> { { streamFrom(0L) } }
+                                    else -> null
+                                }
+                                val isResume = resumeAction != null
+                                val playAction = resumeAction ?: playFromStartAction
                                 if (playAction != null) {
                                     val code = ep.indexNumber?.let { e ->
                                         val season = ep.parentIndexNumber?.let { "S${it.toString().padStart(2, '0')}" } ?: ""
@@ -310,4 +324,35 @@ fun SeasonScreen(
 
         DownloadErrorSnackbar(state.downloadError) { viewModel.clearDownloadError() }
     }
+}
+
+// Watched either on the server or offline: offline playback marks the download played right
+// away (PlayerViewModel.markFinished), while the server's flag only updates after a sync and a
+// reload.
+private fun isEpisodePlayed(
+    episode: com.fuzzymistborn.jellyjar.model.JellyfinItem,
+    downloads: Map<String, com.fuzzymistborn.jellyjar.data.local.DownloadEntity>,
+): Boolean = episode.userData?.played == true || downloads[episode.id]?.played == true
+
+// Which episode the Season hero's Play/Resume button offers:
+// 1. the furthest-along episode that's partly watched (offline or streamed), so a half-watched
+//    E05 wins over a skipped E02;
+// 2. else the first unwatched episode after the last watched one;
+// 3. else the first unwatched episode (anything skipped earlier);
+// 4. else the first episode (whole season watched — rewatch).
+// Scoped to this season; cross-season "next up" is the server's Shows/NextUp, not done here.
+private fun nextUpEpisode(
+    episodes: List<com.fuzzymistborn.jellyjar.model.JellyfinItem>,
+    downloads: Map<String, com.fuzzymistborn.jellyjar.data.local.DownloadEntity>,
+): com.fuzzymistborn.jellyjar.model.JellyfinItem? {
+    fun played(ep: com.fuzzymistborn.jellyjar.model.JellyfinItem) = isEpisodePlayed(ep, downloads)
+    fun inProgress(ep: com.fuzzymistborn.jellyjar.model.JellyfinItem): Boolean {
+        val offlinePos = downloads[ep.id]?.playbackPositionMs ?: 0L
+        val streamTicks = ep.userData?.playbackPositionTicks ?: 0L
+        return !played(ep) && (offlinePos > 0L || streamTicks > 0L)
+    }
+    episodes.lastOrNull(::inProgress)?.let { return it }
+    val lastPlayed = episodes.indexOfLast(::played)
+    episodes.drop(lastPlayed + 1).firstOrNull { !played(it) }?.let { return it }
+    return episodes.firstOrNull { !played(it) } ?: episodes.firstOrNull()
 }

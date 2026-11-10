@@ -884,11 +884,6 @@ class DetailViewModel @Inject constructor(
     fun posterUrl(itemId: String) =
         JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId)
 
-    // Full-screen portrait background — the default 400px poster would look soft stretched to
-    // a whole screen.
-    fun backgroundPosterUrl(itemId: String) =
-        JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId, maxWidth = 1080)
-
     fun thumbnailUrl(itemId: String) =
         JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId, maxWidth = 500)
 }
@@ -1770,18 +1765,23 @@ class SeasonViewModel @Inject constructor(
         settings.saveEpisodeViewGrid(newValue)
     }
 
+    // Blank for a synthetic "offline-series-…" id — it would only 404.
     fun backdropUrl() =
-        _state.value.seriesId?.let {
+        _state.value.seriesId?.takeUnless { it.startsWith("offline-series-") }?.let {
             JellyfinImageHelper.backdropImageUrl(_state.value.jellyfinUrl, it)
         } ?: ""
 
     fun posterUrl(itemId: String) =
         JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId)
 
-    // Full-screen portrait background — the default 400px poster would look soft stretched to
-    // a whole screen.
-    fun backgroundPosterUrl(itemId: String) =
-        JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId, maxWidth = 1080)
+    // Which item's Primary image represents this season: the season itself, or for a synthetic
+    // offline season (DetailViewModel.loadOfflineSeasons) the series — unless that's synthetic
+    // too, in which case there's nothing fetchable.
+    fun posterItemId(seasonId: String, seriesId: String): String? = when {
+        !seasonId.startsWith("offline-season-") -> seasonId
+        !seriesId.startsWith("offline-series-") -> seriesId
+        else -> null
+    }
 
     fun thumbnailUrl(itemId: String) =
         JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId, maxWidth = 500)
