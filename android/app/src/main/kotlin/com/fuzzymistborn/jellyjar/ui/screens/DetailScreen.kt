@@ -846,12 +846,17 @@ private fun TechSpecRow(mediaSources: List<MediaSource>, accentColor: Color) {
     val video = streams.firstOrNull { it.type == "Video" }
     val audio = streams.firstOrNull { it.type == "Audio" }
 
-    val resolution = video?.height?.let {
+    // Width counts too: a widescreen encode is cropped vertically, so 1280×688 is 720p and
+    // 1920×800 is 1080p — height alone labelled them "688p" and "720p".
+    val resolution = video?.let { v ->
+        val w = v.width ?: 0
+        val h = v.height ?: 0
         when {
-            it >= 2000 -> "4K"
-            it >= 1000 -> "1080p"
-            it >= 700 -> "720p"
-            else -> "${it}p"
+            w >= 3200 || h >= 2000 -> "4K"
+            w >= 1800 || h >= 1000 -> "1080p"
+            w >= 1200 || h >= 700 -> "720p"
+            h > 0 -> "SD"
+            else -> null
         }
     }
     val isHdr = video?.videoRange?.contains("HDR", ignoreCase = true) == true
