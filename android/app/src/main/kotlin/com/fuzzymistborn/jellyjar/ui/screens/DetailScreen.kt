@@ -66,57 +66,13 @@ fun DetailScreen(
     var showDeleteConfirm by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
-    // Tall/narrow (phone-style portrait) windows size the backdrop off its own 16:9 aspect ratio
-    // instead of a fraction of screen height — on a very tall display, a height fraction is far
-    // taller than a 16:9 image actually renders at that width, so the image ends abruptly partway
-    // down and leaves a dead gap of plain gradient before the title/poster content below. Wide
-    // (landscape tablet) windows fill the whole screen with the backdrop, evenly dimmed, and the
-    // content scrolls over it — fading to black two-thirds of the way down left the lower half
-    // of a landscape tablet as dead space.
-    val isWideScreen = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 840
-    val backdropModifier = if (isWideScreen) {
-        Modifier.fillMaxSize()
-    } else {
-        Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-    }
-
     Box(modifier = Modifier.fillMaxSize().background(BackgroundGradient)) {
 
-        // Backdrop — episodes fall back to series backdrop, then episode primary
-        state.item?.let { item ->
-            val backdropId = if (item.type == "Episode") item.seriesId ?: item.id else item.id
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(viewModel.backdropUrl(backdropId))
-                    .crossfade(300)
-                    .build(),
-                contentDescription = null,
-                contentScale = if (isWideScreen) ContentScale.Crop else ContentScale.FillWidth,
-                alignment = Alignment.TopCenter,
-                modifier = backdropModifier.clip(RectangleShape),
-            )
-        }
-
-        // Wide: an even dim over the whole backdrop (plus vignette and a short fade at the very
-        // bottom) so the hero and info panel stay legible wherever they scroll to. Narrow: a
-        // gradient fade to background confined to the same aspect-ratio box as the backdrop
-        // (rather than the full screen) so it doesn't keep darkening well past where the image
-        // itself has already ended.
-        if (isWideScreen) {
-            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)))
-            Box(modifier = Modifier.fillMaxSize().background(vignetteScrim()))
-            Box(
-                modifier = Modifier.fillMaxSize().background(
-                    androidx.compose.ui.graphics.Brush.verticalGradient(
-                        0f to Color.Transparent,
-                        0.75f to Color.Transparent,
-                        1f to Background,
-                    ),
-                ),
-            )
-        } else {
-            Box(modifier = backdropModifier.background(heroBackdropScrim(scrimStop = 0.36f, solidStop = 0.65f)))
-        }
+        // Backdrop — episodes use the series backdrop. Full-screen and evenly dimmed at every
+        // width; content scrolls over it.
+        DimmedBackdrop(
+            state.item?.let { viewModel.backdropUrl(if (it.type == "Episode") it.seriesId ?: it.id else it.id) },
+        )
 
         val item = state.item
 
@@ -258,7 +214,7 @@ private fun DetailStackedContent(
             ) {}
         }
 
-        item(key = "hero_spacer") { Spacer(Modifier.height(72.dp)) }
+        item(key = "hero_spacer") { Spacer(Modifier.height(Spacing.lg)) }
 
         if (item != null) {
             item(key = "metadata") {
@@ -284,24 +240,15 @@ private fun DetailStackedContent(
                             ),
                         )
                     }
+                    // Hero text: title + actions only. Metadata, tech specs and the overview live
+                    // in the tinted info panel below, as in the landscape layout.
                     val textColumn = @Composable {
                         Column(modifier = Modifier.fillMaxWidth()) {
                             TitleBlock(item)
-                            Spacer(Modifier.height(Spacing.sm))
-                            MetaRow(item, accentColor)
-                            if (!item.mediaSources.isNullOrEmpty() && !state.kidModeEnabled) {
-                                Spacer(Modifier.height(Spacing.sm))
-                                TechSpecRow(item.mediaSources, accentColor)
-                            }
-                            // Actions sit right under the title/tech specs, ahead of the overview
-                            // paragraph — a long description no longer pushes Play/Favorite/Download
-                            // below the fold on shorter windows.
                             if (item.type != "Series") {
-                                Spacer(Modifier.height(Spacing.sm))
+                                Spacer(Modifier.height(Spacing.md))
                                 ActionButtonsSection(item, state, viewModel, accentColor, actions, coroutineScope)
                             }
-                            Spacer(Modifier.height(Spacing.md))
-                            OverviewBlock(item, isWide = isWide, accentColor = accentColor)
                         }
                     }
 
@@ -314,10 +261,26 @@ private fun DetailStackedContent(
                     } else {
                         Row {
                             poster()
-                            Spacer(Modifier.width(if (isWide) Spacing.lg else Spacing.lg))
+                            Spacer(Modifier.width(Spacing.lg))
                             Box(modifier = Modifier.weight(1f)) { textColumn() }
                         }
                     }
+                }
+            }
+
+            item(key = "info") {
+                BoxWithConstraints {
+                    val isWide = maxWidth >= 600.dp
+                    InfoPanel(
+                        item = item,
+                        accentColor = accentColor,
+                        showTechSpecs = !state.kidModeEnabled,
+                        clampOverview = !isWide,
+                        modifier = Modifier.padding(
+                            horizontal = if (isWide) 32.dp else Spacing.lg,
+                            vertical = Spacing.xl,
+                        ),
+                    )
                 }
             }
 
@@ -431,20 +394,27 @@ private fun InfoPanel(
     accentColor: Color,
     showTechSpecs: Boolean,
     modifier: Modifier = Modifier,
+    // Phone widths clamp the overview to 4 lines with a Read more toggle so a long description
+    // doesn't push the Seasons row far down; wider layouts show it all.
+    clampOverview: Boolean = false,
 ) {
     val hasTechSpecs = showTechSpecs && !item.mediaSources.isNullOrEmpty()
     val hasMeta = item.premiereDate != null || item.year != null || item.runtimeMinutes != null ||
         item.communityRating != null || item.officialRating != null
     if (!hasMeta && item.overview == null && !hasTechSpecs) return
 
-    val shape = RoundedCornerShape(Radius.lg)
+    var overviewExpanded by remember(item.id) { mutableStateOf(false) }
+    var overviewOverflows by remember(item.id) { mutableStateOf(false) }
+    val clamped = clampOverview && !overviewExpanded
+
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(Color.Black.copy(alpha = 0.45f), shape)
-            .background(accentColor.copy(alpha = 0.18f), shape)
-            .border(1.dp, Color.White.copy(alpha = 0.08f), shape)
-            .padding(horizontal = Spacing.xl, vertical = Spacing.lg),
+            .tintedPanel(accentColor)
+            .padding(
+                horizontal = if (clampOverview) Spacing.lg else Spacing.xl,
+                vertical = Spacing.lg,
+            ),
     ) {
         if (hasMeta) {
             MetaRow(item, accentColor, large = true)
@@ -459,7 +429,21 @@ private fun InfoPanel(
                 text = overview,
                 style = MaterialTheme.typography.bodyLarge,
                 color = OnSurface.copy(alpha = 0.9f),
+                maxLines = if (clamped) 4 else Int.MAX_VALUE,
+                overflow = TextOverflow.Ellipsis,
+                onTextLayout = { result -> if (clamped) overviewOverflows = result.hasVisualOverflow },
+                modifier = if (clampOverview) Modifier.clickable { overviewExpanded = !overviewExpanded } else Modifier,
             )
+            if (clampOverview && (overviewOverflows || overviewExpanded)) {
+                Text(
+                    text = if (overviewExpanded) "Read less" else "Read more",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = accentColor,
+                    modifier = Modifier
+                        .clickable { overviewExpanded = !overviewExpanded }
+                        .padding(top = Spacing.xs),
+                )
+            }
         }
     }
 }
@@ -498,6 +482,7 @@ private val premiereDateFormat: java.time.format.DateTimeFormatter =
 
 // Year/air date · runtime · ★ rating · age-rating badge. Episodes show their full air date when
 // the server has one ("March 17, 2020") — a bare year says little within a series.
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun MetaRow(item: JellyfinItem, accentColor: Color, large: Boolean = false) {
     val textStyle = if (large) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium
@@ -507,9 +492,10 @@ private fun MetaRow(item: JellyfinItem, accentColor: Color, large: Boolean = fal
         ?.let { runCatching { java.time.LocalDate.parse(it.take(10)).format(premiereDateFormat) }.getOrNull() }
         ?: item.year?.toString()
 
-    Row(
+    // FlowRow so a long air date + runtime + rating + badge wraps on a phone instead of clipping.
+    FlowRow(
         horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
         dateLabel?.let { Text(it, style = textStyle, color = textColor) }
         item.runtimeMinutes?.let { Text("${it}m", style = textStyle, color = textColor) }
@@ -531,45 +517,6 @@ private fun MetaRow(item: JellyfinItem, accentColor: Color, large: Boolean = fal
                 modifier = Modifier
                     .border(1.dp, textColor.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
                     .padding(horizontal = 6.dp, vertical = 2.dp),
-            )
-        }
-    }
-}
-
-// Portrait/phone widths get a clamped, tap-to-expand overview so a long description doesn't
-// push the Seasons row far down the scroll; wide/tablet layouts have room to just show it all.
-@Composable
-private fun OverviewBlock(item: JellyfinItem, isWide: Boolean, accentColor: Color) {
-    val overview = item.overview ?: return
-    var overviewExpanded by remember(item.id) { mutableStateOf(false) }
-    var overviewOverflows by remember(item.id) { mutableStateOf(false) }
-    // The overview sits directly over the backdrop image (most visibly in the two-pane tablet
-    // layout, where it's right beside the poster near the top of the hero art) — a soft scrim
-    // card behind the text keeps it legible over busy/bright parts of the image without needing
-    // the whole backdrop darkened further.
-    Column(
-        modifier = Modifier
-            .widthIn(max = 600.dp)
-            .background(ScrimSoft, RoundedCornerShape(Radius.sm))
-            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
-    ) {
-        Text(
-            text = overview,
-            style = MaterialTheme.typography.bodyLarge,
-            color = OnSurface.copy(alpha = 0.85f),
-            maxLines = if (isWide || overviewExpanded) Int.MAX_VALUE else 4,
-            overflow = TextOverflow.Ellipsis,
-            onTextLayout = { result -> overviewOverflows = result.hasVisualOverflow },
-            modifier = if (isWide) Modifier else Modifier.clickable { overviewExpanded = !overviewExpanded },
-        )
-        if (!isWide && (overviewOverflows || overviewExpanded)) {
-            Text(
-                text = if (overviewExpanded) "Read less" else "Read more",
-                style = MaterialTheme.typography.labelLarge,
-                color = accentColor,
-                modifier = Modifier
-                    .clickable { overviewExpanded = !overviewExpanded }
-                    .padding(top = 2.dp),
             )
         }
     }
@@ -927,13 +874,18 @@ internal fun EpisodeRow(
     onDeleteClick: () -> Unit,
     onPlayOfflineClick: (path: String, jellyfinId: String, startMs: Long) -> Unit,
     modifier: Modifier = Modifier,
+    // Tints the row's panel, progress bar and rating star (the series' colour on the Season screen).
+    accentColor: Color = Primary,
 ) {
     var showPresetDialog by remember { mutableStateOf(false) }
 
-    Surface(
-        color = ScrimSoft,
-        shape = RoundedCornerShape(Radius.md),
-        modifier = modifier.fillMaxWidth().clickable(onClick = onClick),
+    val panelShape = RoundedCornerShape(Radius.md)
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(panelShape)
+            .tintedPanel(accentColor, panelShape)
+            .clickable(onClick = onClick),
     ) {
         Row(
             modifier = Modifier.padding(10.dp),
@@ -981,7 +933,7 @@ internal fun EpisodeRow(
                     LinearProgressIndicator(
                         progress = { watchFraction },
                         modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.BottomCenter),
-                        color = Primary,
+                        color = accentColor,
                         trackColor = Color.Transparent,
                     )
                 }
@@ -1003,7 +955,7 @@ internal fun EpisodeRow(
                     episode.communityRating?.let {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Star, contentDescription = null,
-                                tint = Accent, modifier = Modifier.size(IconSize.xs))
+                                tint = accentColor, modifier = Modifier.size(IconSize.xs))
                             Spacer(Modifier.width(2.dp))
                             Text("${"%.1f".format(it)}", style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
                         }
@@ -1068,7 +1020,7 @@ internal fun EpisodeRow(
                                 progress = { animatedProgress },
                                 modifier = Modifier.size(IconSize.sm),
                                 strokeWidth = 2.dp,
-                                color = Primary,
+                                color = accentColor,
                             )
                             Text(
                                 if (download.status == DownloadStatus.QUEUED.name) "Queued"

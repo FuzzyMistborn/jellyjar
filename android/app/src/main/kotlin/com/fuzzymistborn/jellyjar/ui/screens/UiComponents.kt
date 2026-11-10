@@ -1,6 +1,9 @@
 package com.fuzzymistborn.jellyjar.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
@@ -10,6 +13,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.fuzzymistborn.jellyjar.ui.theme.*
@@ -249,3 +255,44 @@ fun UnwatchedCountBadge(count: Int, modifier: Modifier = Modifier) {
         )
     }
 }
+
+// Full-screen backdrop art, evenly dimmed (plus vignette and a short fade into the background at
+// the very bottom) so content scrolling over it stays legible anywhere on screen. Shared by the
+// Detail and Season screens — replaced backdrops that faded to black partway down and left the
+// rest of the screen as dead space.
+@Composable
+fun DimmedBackdrop(imageUrl: String?) {
+    if (!imageUrl.isNullOrBlank()) {
+        coil.compose.AsyncImage(
+            model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
+                .data(imageUrl)
+                .crossfade(300)
+                .build(),
+            contentDescription = null,
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            alignment = Alignment.TopCenter,
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)))
+    Box(modifier = Modifier.fillMaxSize().background(vignetteScrim()))
+    Box(
+        modifier = Modifier.fillMaxSize().background(
+            Brush.verticalGradient(
+                0f to Color.Transparent,
+                0.75f to Color.Transparent,
+                1f to Background,
+            ),
+        ),
+    )
+}
+
+// Translucent card tinted with a title's accent colour: a black wash for contrast over any
+// backdrop, the accent on top so it reads as "this title's colour", and a faint hairline edge.
+fun Modifier.tintedPanel(
+    accent: Color,
+    shape: Shape = RoundedCornerShape(Radius.lg),
+): Modifier = this
+    .background(Color.Black.copy(alpha = 0.45f), shape)
+    .background(accent.copy(alpha = 0.18f), shape)
+    .border(1.dp, Color.White.copy(alpha = 0.08f), shape)

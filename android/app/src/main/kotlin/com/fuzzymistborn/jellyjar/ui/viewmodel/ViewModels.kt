@@ -1770,6 +1770,9 @@ class SeasonViewModel @Inject constructor(
             JellyfinImageHelper.backdropImageUrl(_state.value.jellyfinUrl, it)
         } ?: ""
 
+    fun posterUrl(itemId: String) =
+        JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId)
+
     fun thumbnailUrl(itemId: String) =
         JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId, maxWidth = 500)
 
