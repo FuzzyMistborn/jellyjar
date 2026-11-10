@@ -220,6 +220,12 @@ interface JellyfinApiService {
         @Body body: QuickConnectAuthRequest,
     ): AuthResponse
 
+    // The user the token belongs to.
+    @GET("Users/Me")
+    suspend fun getCurrentUser(
+        @Header("Authorization") authHeader: String,
+    ): JellyfinUser
+
     @GET("Users/{userId}/Views")
     suspend fun getLibraries(
         @Path("userId") userId: String,

@@ -159,6 +159,14 @@ class JellyfinRepository @Inject constructor(
             }
         }
 
+    suspend fun getCurrentUser(): Result<com.fuzzymistborn.jellyjar.api.JellyfinUser> = withContext(Dispatchers.IO) {
+        runCatching {
+            val s = settings.currentSnapshot()
+            val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
+            service.getCurrentUser(authHeader = JellyfinImageHelper.authHeader(s))
+        }
+    }
+
     suspend fun getLibraries(): Result<List<JellyfinLibrary>> = withContext(Dispatchers.IO) {
         runCatching {
             val s = settings.currentSnapshot()

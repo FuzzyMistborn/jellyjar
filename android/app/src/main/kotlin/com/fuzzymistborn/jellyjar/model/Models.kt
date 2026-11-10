@@ -219,6 +219,7 @@ data class AppSettings(
     val jellyfinUrl: String = "",
     val jellyfinUserId: String = "",
     val jellyfinToken: String = "",
+    val jellyfinUserName: String = "",
     // Blank = token predates per-install ids; JellyfinImageHelper then sends the legacy id.
     val jellyfinDeviceId: String = "",
     val shimUrl: String = "",

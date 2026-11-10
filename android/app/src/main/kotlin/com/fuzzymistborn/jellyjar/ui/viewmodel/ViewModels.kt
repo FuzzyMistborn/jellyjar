@@ -996,6 +996,8 @@ data class AdminState(
     val isPinEnabled: Boolean = false,
     val settingsLoaded: Boolean = false,
     val hasCredentials: Boolean = false,
+    // Who the saved sign-in belongs to; blank until known (see checkJellyfinConnection).
+    val jellyfinUserName: String = "",
     val isAuthenticated: Boolean = false,
     val isAuthenticating: Boolean = false,
     val isCheckingConnection: Boolean = false,
@@ -1065,6 +1067,7 @@ class AdminViewModel @Inject constructor(
                         downloadPath = s.downloadPath,
                         isPinEnabled = s.isPinEnabled,
                         hasCredentials = hasCredentials,
+                        jellyfinUserName = s.jellyfinUserName,
                         settingsLoaded = true,
                         wifiOnly = s.wifiOnly,
                         streamOverCellular = s.streamOverCellular,
@@ -1149,7 +1152,7 @@ class AdminViewModel @Inject constructor(
             password = _state.value.password,
             deviceId = settings.deviceIdForSignIn(),
         ).onSuccess { result ->
-            settings.saveJellyfinAuth(ensureScheme(_state.value.jellyfinUrl), result.userId, result.token, result.deviceId)
+            settings.saveJellyfinAuth(ensureScheme(_state.value.jellyfinUrl), result.userId, result.username, result.token, result.deviceId)
             jellyfinUrlDirty = false
             networkMonitor.reportServerReachable(true)
             _state.update { it.copy(isAuthenticating = false, hasCredentials = true, isAuthenticated = true, authExpired = false) }
@@ -1189,7 +1192,7 @@ class AdminViewModel @Inject constructor(
                 if (poll.Authenticated) {
                     jellyfinRepo.authenticateWithQuickConnect(url, session.Secret, deviceId)
                         .onSuccess { result ->
-                            settings.saveJellyfinAuth(url, result.userId, result.token, result.deviceId)
+                            settings.saveJellyfinAuth(url, result.userId, result.username, result.token, result.deviceId)
                             jellyfinUrlDirty = false
                             networkMonitor.reportServerReachable(true)
                             _state.update {
@@ -1220,6 +1223,8 @@ class AdminViewModel @Inject constructor(
 
     // Performs a real call to Jellyfin (not just "do we have a saved token") so the Admin
     // "Connected" indicator matches what the Home screen actually experiences.
+    private var userNameLookupStarted = false
+
     fun checkJellyfinConnection() = viewModelScope.launch {
         if (!_state.value.hasCredentials) {
             _state.update { it.copy(isAuthenticated = false) }
@@ -1232,6 +1237,14 @@ class AdminViewModel @Inject constructor(
             .onSuccess {
                 networkMonitor.reportServerReachable(true)
                 _state.update { it.copy(isCheckingConnection = false, isAuthenticated = true, authExpired = false, authError = null) }
+                // Sign-ins from before the name was stored: look it up once. Several checks can
+                // overlap when the screen opens, so only the first one asks.
+                if (_state.value.jellyfinUserName.isBlank() && !userNameLookupStarted) {
+                    userNameLookupStarted = true
+                    jellyfinRepo.getCurrentUser()
+                        .onSuccess { user -> settings.saveJellyfinUserName(user.Name) }
+                        .onFailure { userNameLookupStarted = false }
+                }
             }
             .onFailure { e ->
                 networkMonitor.reportServerFailure(e)
