@@ -142,9 +142,6 @@ fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableSta
                     onItemClick = { item ->
                         navController.navigate(Screen.Detail.go(item.id))
                     },
-                    onPlayOffline = { localPath ->
-                        navController.navigate(Screen.Player.go(localPath, ""))
-                    },
                     onAdminClick = {
                         navController.navigate(Screen.PinGate.route)
                     },

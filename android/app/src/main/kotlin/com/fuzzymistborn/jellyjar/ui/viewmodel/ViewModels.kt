@@ -40,7 +40,6 @@ data class LibraryState(
     val needsSetup: Boolean = false,
     // A retry the user can see is in flight (Retry button, reconnect, app returning to front).
     val isReconnecting: Boolean = false,
-    val showingDownloads: Boolean = false,
     val featuredItem: JellyfinItem? = null,
     val jellyfinUrl: String = "",
     val jellyfinToken: String = "",
@@ -136,7 +135,7 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             networkMonitor.isOnline.collect { online ->
                 _state.update { it.copy(isOnline = online) }
-                if (online && !initialLoadDone && !_state.value.showingDownloads) {
+                if (online && !initialLoadDone) {
                     initialLoadDone = true
                     loadLibrary()
                 }
@@ -177,7 +176,7 @@ class LibraryViewModel @Inject constructor(
                                 recentlyAdded = emptyList(),
                             )
                         }
-                    } else if (!librariesLoadedOnline && !_state.value.showingDownloads &&
+                    } else if (!librariesLoadedOnline &&
                         !_state.value.authExpired && libraryJob?.isActive != true
                     ) {
                         // Online and reachable but still on the offline stand-ins. The edge-driven
@@ -208,7 +207,7 @@ class LibraryViewModel @Inject constructor(
                         // the offline stand-ins, so fetch the real ones. Only on the edge — the
                         // cold-start load belongs to the isOnline collector above.
                         if (becameAvailable && !librariesLoadedOnline &&
-                            networkMonitor.isOnline.value && !_state.value.showingDownloads
+                            networkMonitor.isOnline.value
                         ) {
                             loadLibrary(isRefresh = true)
                         }
@@ -217,7 +216,7 @@ class LibraryViewModel @Inject constructor(
                     if (expired) return@collectLatest
                     for (delayMs in RETRY_DELAYS_MS.asSequence() + generateSequence { RETRY_DELAYS_MS.last() }) {
                         kotlinx.coroutines.delay(delayMs)
-                        if (_state.value.isOnline && !_state.value.showingDownloads) {
+                        if (_state.value.isOnline) {
                             loadLibrary(isRefresh = true)
                         }
                     }
@@ -248,7 +247,7 @@ class LibraryViewModel @Inject constructor(
                 // reload rather than wait for the next retry.
                 val tokenChanged = prevToken != s.jellyfinToken && s.jellyfinToken.isNotBlank()
                 val urlChanged = prevUrl != s.jellyfinUrl && s.jellyfinToken.isNotBlank()
-                if ((tokenChanged || urlChanged) && _state.value.isOnline && !_state.value.showingDownloads) {
+                if ((tokenChanged || urlChanged) && _state.value.isOnline) {
                     loadLibrary()
                 }
             }
@@ -434,7 +433,6 @@ class LibraryViewModel @Inject constructor(
     // Re-checks the server now (Retry button, reconnect, app back in front) and restarts the
     // backoff from its shortest delay. Keeps what's on screen until the answer arrives.
     fun retryConnection() {
-        if (_state.value.showingDownloads) return
         _state.update { it.copy(isReconnecting = true) }
         retryGeneration.update { it + 1 }
         loadLibrary(isRefresh = true)
@@ -468,13 +466,6 @@ class LibraryViewModel @Inject constructor(
             }.onFailure {
                 _state.update { it.copy(isLoadingMore = false) }
             }
-        }
-    }
-
-    private fun loadOffline() = viewModelScope.launch {
-        downloadRepo.completedDownloads.collect { downloads ->
-            val items = downloads.map { it.toJellyfinItem() }
-            _state.update { s -> s.copy(items = items, serverFiltered = false, isLoading = false) }
         }
     }
 
@@ -522,18 +513,7 @@ class LibraryViewModel @Inject constructor(
 
     fun goHome() {
         searchJob?.cancel()
-        _state.update { it.copy(selectedLibrary = null, showingDownloads = false, items = emptyList(), totalCount = 0, genres = emptyList(), selectedGenre = null, searchQuery = "") }
-    }
-
-    fun showDownloads() {
-        _state.update { it.copy(showingDownloads = true, selectedLibrary = null) }
-        loadOffline()
-    }
-
-    fun toggleTab() {
-        val showDownloads = !_state.value.showingDownloads
-        _state.update { it.copy(showingDownloads = showDownloads, selectedLibrary = null) }
-        if (showDownloads) loadOffline()
+        _state.update { it.copy(selectedLibrary = null, items = emptyList(), totalCount = 0, genres = emptyList(), selectedGenre = null, searchQuery = "") }
     }
 
     fun selectLibrary(name: String?) {
