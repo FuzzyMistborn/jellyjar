@@ -6,6 +6,11 @@ on:
     paths:
       - 'android/**'
       - '.github/workflows/build-apk-ci.yml'
+  # Build PRs too, so a compile error is caught before merge instead of breaking main.
+  pull_request:
+    paths:
+      - 'android/**'
+      - '.github/workflows/build-apk-ci.yml'
 
 jobs:
   build:
