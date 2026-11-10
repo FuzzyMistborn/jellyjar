@@ -6,6 +6,7 @@ import com.fuzzymistborn.jellyjar.api.ItemsResponse
 import com.fuzzymistborn.jellyjar.api.JellyfinImageHelper
 import com.fuzzymistborn.jellyjar.data.local.DownloadEntity
 import com.fuzzymistborn.jellyjar.data.local.FavoriteEntity
+import com.fuzzymistborn.jellyjar.data.local.playbackUri
 import com.fuzzymistborn.jellyjar.data.repository.*
 import com.fuzzymistborn.jellyjar.model.*
 import com.fuzzymistborn.jellyjar.model.SortOrder
@@ -626,7 +627,7 @@ class LibraryViewModel @Inject constructor(
         seriesName = seriesName, seasonName = null,
         indexNumber = null, parentIndexNumber = null,
         mediaSources = if (localPath.isNotBlank()) listOf(
-            MediaSource(id = jellyfinId, path = localPath, size = sizeBytes,
+            MediaSource(id = jellyfinId, path = playbackUri(), size = sizeBytes,
                         container = "mp4", mediaStreams = null)
         ) else null,
         imageTags = null,
@@ -2101,7 +2102,7 @@ class PlayerViewModel @Inject constructor(
         val dl = downloadRepo.findById(next.id)
         return if (dl?.status == com.fuzzymistborn.jellyjar.model.DownloadStatus.COMPLETE.name) {
             NextEpisodeTarget.Local(
-                dl.localPath,
+                dl.playbackUri(),
                 next.id,
                 nextEpisodeLabel(next.name, next.parentIndexNumber, next.indexNumber),
             )

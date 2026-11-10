@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.fuzzymistborn.jellyjar.data.local.DownloadEntity
+import com.fuzzymistborn.jellyjar.data.local.playbackUri
 import com.fuzzymistborn.jellyjar.ui.theme.*
 import com.fuzzymistborn.jellyjar.ui.viewmodel.DownloadsViewModel
 
@@ -220,7 +221,7 @@ fun DownloadsScreen(
                                 entity = entity,
                                 thumbnailUrl = entity.thumbnailUri
                                     ?: viewModel.thumbnailUrl(entity.jellyfinId),
-                                onPlay = { onPlayClick(entity.localPath, entity.jellyfinId) },
+                                onPlay = { onPlayClick(entity.playbackUri(), entity.jellyfinId) },
                                 onDelete = if (kidMode) null else {
                                     { pendingDeleteId = entity.jellyfinId }
                                 },

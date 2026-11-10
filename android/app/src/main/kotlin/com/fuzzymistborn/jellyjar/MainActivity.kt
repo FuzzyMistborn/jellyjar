@@ -45,8 +45,12 @@ sealed class Screen(val route: String) {
     object Admin : Screen("admin")
 }
 
-private fun String.encode() = java.net.URLEncoder.encode(this, "UTF-8")
-private fun String.decode() = java.net.URLDecoder.decode(this, "UTF-8")
+// Encode once; Navigation percent-decodes path arguments itself, so they're read back as-is.
+// They used to be URLDecoder-decoded a second time — harmless for ids and file paths, but it
+// turned the %2F inside a SAF document URI into "/", so offline playback from a content:// URI
+// opened the parent folder (EISDIR). Uri.encode also writes spaces as %20, not URLEncoder's "+",
+// which only that second decode turned back into a space.
+private fun String.encode(): String = android.net.Uri.encode(this)
 
 // Replaces the current player entry with the next episode so repeated auto-play doesn't pile up
 // player screens on the back stack.
@@ -96,8 +100,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // READ_MEDIA_VIDEO is asked for when a download folder is picked (AdminScreen), not here —
-    // at launch, before anything is set up, a photos/videos prompt made no sense.
+    // No media permission: downloads play from their SAF URI, which the download folder's grant
+    // covers (DownloadEntity.playbackUri).
     private fun requestNotificationPermissionIfNeeded() {
         val needed = listOf(
             Manifest.permission.POST_NOTIFICATIONS,
@@ -175,7 +179,7 @@ fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableSta
             route = Screen.Detail.route,
             arguments = listOf(navArgument("itemId") { type = NavType.StringType }),
         ) { backStack ->
-            val itemId = backStack.arguments?.getString("itemId")?.decode() ?: return@composable
+            val itemId = backStack.arguments?.getString("itemId") ?: return@composable
             DetailScreen(
                 itemId = itemId,
                 onPlayClick = { localPath, jellyfinId, startMs ->
@@ -203,8 +207,8 @@ fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableSta
                 navArgument("seriesId") { type = NavType.StringType },
             ),
         ) { backStack ->
-            val seasonId = backStack.arguments?.getString("seasonId")?.decode() ?: return@composable
-            val seriesId = backStack.arguments?.getString("seriesId")?.decode() ?: return@composable
+            val seasonId = backStack.arguments?.getString("seasonId") ?: return@composable
+            val seriesId = backStack.arguments?.getString("seriesId") ?: return@composable
             SeasonScreen(
                 seasonId = seasonId,
                 seriesId = seriesId,
@@ -230,8 +234,8 @@ fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableSta
                 navArgument("auto") { type = NavType.BoolType; defaultValue = false },
             ),
         ) { backStack ->
-            val streamUrl = backStack.arguments?.getString("streamUrl")?.decode() ?: return@composable
-            val jellyfinId = backStack.arguments?.getString("jellyfinId")?.decode()?.takeIf { it.isNotBlank() }
+            val streamUrl = backStack.arguments?.getString("streamUrl") ?: return@composable
+            val jellyfinId = backStack.arguments?.getString("jellyfinId")?.takeIf { it.isNotBlank() }
             val startMs = backStack.arguments?.getLong("startMs") ?: 0L
             val auto = backStack.arguments?.getBoolean("auto") ?: false
             PlayerScreen(
@@ -253,8 +257,8 @@ fun JellyJarNavHost(openDownloads: MutableState<Boolean> = remember { mutableSta
                 navArgument("auto") { type = NavType.BoolType; defaultValue = false },
             ),
         ) { backStack ->
-            val localPath = backStack.arguments?.getString("localPath")?.decode() ?: return@composable
-            val jellyfinId = backStack.arguments?.getString("jellyfinId")?.decode()?.takeIf { it.isNotBlank() }
+            val localPath = backStack.arguments?.getString("localPath") ?: return@composable
+            val jellyfinId = backStack.arguments?.getString("jellyfinId")?.takeIf { it.isNotBlank() }
             val startMs = backStack.arguments?.getLong("startMs") ?: 0L
             val auto = backStack.arguments?.getBoolean("auto") ?: false
             PlayerScreen(
