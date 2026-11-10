@@ -128,17 +128,20 @@ fun SeasonScreen(
                                 val streamPos = ep.userData?.playbackPositionTicks?.div(10_000L) ?: 0L
                                 // Same offline-first resolution as EpisodeRow: a finished download
                                 // plays locally, otherwise stream when streaming is allowed.
-                                val (isResume, playAction): Pair<Boolean, (() -> Unit)?> = when {
-                                    download?.status == DownloadStatus.COMPLETE.name ->
-                                        (offlinePos > 0L) to { onPlayClick(download.localPath, download.jellyfinId, offlinePos) }
+                                val playsOffline = download?.status == DownloadStatus.COMPLETE.name
+                                val isResume = if (playsOffline) offlinePos > 0L else streamPos > 0L
+                                val playAction: (() -> Unit)? = when {
+                                    playsOffline && download != null ->
+                                        { { onPlayClick(download.localPath, download.jellyfinId, offlinePos) } }
                                     state.canStream ->
-                                        (streamPos > 0L) to {
-                                            coroutineScope.launch {
-                                                onStreamClick(viewModel.streamUrl(ep.id), ep.id, streamPos)
+                                        {
+                                            {
+                                                coroutineScope.launch {
+                                                    onStreamClick(viewModel.streamUrl(ep.id), ep.id, streamPos)
+                                                }
                                             }
-                                            Unit
                                         }
-                                    else -> false to null
+                                    else -> null
                                 }
                                 if (playAction != null) {
                                     val code = ep.indexNumber?.let { e ->
