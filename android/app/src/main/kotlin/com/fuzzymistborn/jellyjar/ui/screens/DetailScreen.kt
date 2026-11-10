@@ -257,12 +257,24 @@ private fun DetailStackedContent(
                     // in the tinted info panel below, as in the landscape layout.
                     val textColumn = @Composable {
                         Column(modifier = Modifier.fillMaxWidth()) {
-                            TitleBlock(item)
-                            Spacer(Modifier.height(Spacing.md))
-                            if (item.type != "Series") {
-                                ActionButtonsSection(item, state, viewModel, accentColor, actions, coroutineScope)
-                            } else {
+                            if (item.type == "Series" && isWide) {
+                                // Wide series heroes carry their own meta row and overview next to
+                                // the poster, rather than a separate panel below the seasons.
+                                TitleBlock(item, maxTitleLines = 2)
+                                Spacer(Modifier.height(Spacing.sm))
+                                MetaRow(item, accentColor, large = true)
+                                Spacer(Modifier.height(Spacing.md))
+                                SeriesOverview(item, accentColor, maxLines = 4)
+                                Spacer(Modifier.height(Spacing.lg))
                                 SeriesPlayButton(state, viewModel, accentColor, actions, coroutineScope)
+                            } else {
+                                TitleBlock(item)
+                                Spacer(Modifier.height(Spacing.md))
+                                if (item.type != "Series") {
+                                    ActionButtonsSection(item, state, viewModel, accentColor, actions, coroutineScope)
+                                } else {
+                                    SeriesPlayButton(state, viewModel, accentColor, actions, coroutineScope)
+                                }
                             }
                         }
                     }
@@ -294,6 +306,7 @@ private fun DetailStackedContent(
             item(key = "info") {
                 BoxWithConstraints {
                     val isWide = maxWidth >= 600.dp
+                    if (item.type == "Series" && isWide) return@BoxWithConstraints
                     InfoPanel(
                         item = item,
                         accentColor = accentColor,
@@ -375,15 +388,25 @@ private fun DetailLandscapeContent(
                     ) {
                         // Each half in its own Column so SpaceBetween separates title from
                         // actions rather than spreading TitleBlock's eyebrow/title apart.
-                        Column { TitleBlock(item, maxTitleLines = 2) }
-                        Column(modifier = Modifier.padding(top = Spacing.md)) {
-                            if (item.type != "Series") {
+                        Column {
+                            TitleBlock(item, maxTitleLines = 2)
+                            if (item.type == "Series") {
+                                Spacer(Modifier.height(Spacing.sm))
+                                MetaRow(item, accentColor, large = true)
+                                Spacer(Modifier.height(Spacing.md))
+                                SeriesOverview(item, accentColor, maxLines = 5)
+                                // Straight under the overview rather than pinned to the artwork's
+                                // bottom edge: a short description otherwise leaves a gap.
+                                Spacer(Modifier.height(Spacing.lg))
+                                SeriesPlayButton(state, viewModel, accentColor, actions, coroutineScope)
+                            }
+                        }
+                        if (item.type != "Series") {
+                            Column(modifier = Modifier.padding(top = Spacing.md)) {
                                 ActionButtonsSection(
                                     item, state, viewModel, accentColor, actions, coroutineScope,
                                     flowRow = true,
                                 )
-                            } else {
-                                SeriesPlayButton(state, viewModel, accentColor, actions, coroutineScope)
                             }
                         }
                     }
@@ -396,13 +419,15 @@ private fun DetailLandscapeContent(
                 }
             }
 
-            item(key = "info") {
-                InfoPanel(
-                    item = item,
-                    accentColor = accentColor,
-                    showTechSpecs = !state.kidModeEnabled,
-                    modifier = Modifier.padding(horizontal = 40.dp, vertical = Spacing.xl),
-                )
+            if (item.type != "Series") {
+                item(key = "info") {
+                    InfoPanel(
+                        item = item,
+                        accentColor = accentColor,
+                        showTechSpecs = !state.kidModeEnabled,
+                        modifier = Modifier.padding(horizontal = 40.dp, vertical = Spacing.xl),
+                    )
+                }
             }
         }
     }
@@ -468,6 +493,35 @@ private fun InfoPanel(
                 )
             }
         }
+    }
+}
+
+// A series' overview inside the hero: clamped to a few lines, tap (or Read more) to expand.
+// Sits straight on the backdrop, so it carries the same text shadow as the title.
+@Composable
+private fun SeriesOverview(item: JellyfinItem, accentColor: Color, maxLines: Int) {
+    val overview = item.overview ?: return
+    var expanded by remember(item.id) { mutableStateOf(false) }
+    var overflows by remember(item.id) { mutableStateOf(false) }
+    Text(
+        text = overview,
+        style = MaterialTheme.typography.bodyLarge.withHeroShadow(),
+        color = OnSurface.copy(alpha = 0.92f),
+        maxLines = if (expanded) Int.MAX_VALUE else maxLines,
+        overflow = TextOverflow.Ellipsis,
+        onTextLayout = { result -> if (!expanded) overflows = result.hasVisualOverflow },
+        // A readable line length, and it keeps the text off the brightest part of a wide backdrop.
+        modifier = Modifier.widthIn(max = 640.dp).clickable(enabled = overflows || expanded) { expanded = !expanded },
+    )
+    if (overflows || expanded) {
+        Text(
+            text = if (expanded) "Read less" else "Read more",
+            style = MaterialTheme.typography.labelLarge,
+            color = accentColor,
+            modifier = Modifier
+                .clickable { expanded = !expanded }
+                .padding(top = Spacing.xs),
+        )
     }
 }
 
