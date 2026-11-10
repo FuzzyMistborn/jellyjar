@@ -80,6 +80,15 @@ private const val UP_NEXT_LEAD_MS = 30_000L
 // Marks a subtitle track that was side-loaded from the server rather than muxed into the stream.
 private const val EXTERNAL_SUBTITLE_ID_PREFIX = "jf-sub-"
 
+// Whether [format] is the side-loaded subtitle for server stream [index]. ExoPlayer's merging
+// source prefixes each track id with its source's position ("1:jf-sub-3"), so an exact match
+// never hit: picking a side-loaded subtitle fell through to a server re-negotiation that changed
+// nothing, and the sheet never showed it as selected.
+private fun isExternalSubtitle(format: androidx.media3.common.Format, index: Int): Boolean {
+    val id = EXTERNAL_SUBTITLE_ID_PREFIX + index
+    return format.id == id || format.id?.endsWith(":$id") == true
+}
+
 // Countdown used only when the duration is unknown, so no real remaining time can be shown.
 private const val AUTO_PLAY_FALLBACK_SECONDS = 10
 
@@ -1135,19 +1144,22 @@ private fun PlayerSettingsSheet(
                 val subtitlesDisabled = player.trackSelectionParameters.disabledTrackTypes
                     .contains(C.TRACK_TYPE_TEXT)
                 val externalIndices = externalSubtitles.map { it.index }.toSet()
+                val burnedIn = selectedSubtitleIndex != null && selectedSubtitleIndex !in externalIndices
 
                 fun isSideLoadedSelected(index: Int): Boolean =
                     !subtitlesDisabled && textGroups.any { group ->
                         (0 until group.length).any { trackIdx ->
                             group.isTrackSelected(trackIdx) &&
-                                group.getTrackFormat(trackIdx).id == EXTERNAL_SUBTITLE_ID_PREFIX + index
+                                isExternalSubtitle(group.getTrackFormat(trackIdx), index)
                         }
                     }
 
+                // Nothing showing counts as Off too, not just an explicit disable: ExoPlayer often
+                // leaves a side-loaded track unselected (a forced one, say), and the sheet then
+                // had no row checked at all.
                 TrackRow(
                     label = "Off",
-                    selected = subtitlesDisabled ||
-                        (selectedSubtitleIndex == null && textGroups.isEmpty()),
+                    selected = subtitlesDisabled || (!textGroups.anyTrackSelected() && !burnedIn),
                     enabled = !trackChanging,
                 ) {
                     player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
@@ -1171,8 +1183,7 @@ private fun PlayerSettingsSheet(
                         if (sideLoaded) {
                             val target = textGroups.firstNotNullOfOrNull { group ->
                                 (0 until group.length).firstOrNull { trackIdx ->
-                                    group.getTrackFormat(trackIdx).id ==
-                                        EXTERNAL_SUBTITLE_ID_PREFIX + track.index
+                                    isExternalSubtitle(group.getTrackFormat(trackIdx), track.index)
                                 }?.let { group to it }
                             }
                             if (target != null) {
@@ -1200,7 +1211,7 @@ private fun PlayerSettingsSheet(
                     modifier = Modifier.padding(bottom = 4.dp))
                 val subtitlesDisabled = player.trackSelectionParameters.disabledTrackTypes
                     .contains(C.TRACK_TYPE_TEXT)
-                TrackRow(label = "Off", selected = subtitlesDisabled) {
+                TrackRow(label = "Off", selected = subtitlesDisabled || !textGroups.anyTrackSelected()) {
                     player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
                         .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
                     onDismiss()
@@ -1226,6 +1237,9 @@ private fun PlayerSettingsSheet(
         }
     }
 }
+
+private fun List<androidx.media3.common.Tracks.Group>.anyTrackSelected(): Boolean =
+    any { group -> (0 until group.length).any { group.isTrackSelected(it) } }
 
 // The forced subtitle track to turn on for a downloaded file, or null to leave subtitles as they
 // are. Picks the forced track in the language of the audio that's playing — forced tracks carry
