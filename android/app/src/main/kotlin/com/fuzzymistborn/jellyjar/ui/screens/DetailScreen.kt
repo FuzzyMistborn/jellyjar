@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -257,9 +258,11 @@ private fun DetailStackedContent(
                     val textColumn = @Composable {
                         Column(modifier = Modifier.fillMaxWidth()) {
                             TitleBlock(item)
+                            Spacer(Modifier.height(Spacing.md))
                             if (item.type != "Series") {
-                                Spacer(Modifier.height(Spacing.md))
                                 ActionButtonsSection(item, state, viewModel, accentColor, actions, coroutineScope)
+                            } else {
+                                SeriesPlayButton(state, viewModel, accentColor, actions, coroutineScope)
                             }
                         }
                     }
@@ -280,6 +283,14 @@ private fun DetailStackedContent(
                 }
             }
 
+            // Seasons are a series' main navigation, so they sit right under the hero instead of
+            // below a tall info panel, where they were clipped at the bottom of the screen.
+            if (item.type == "Series" && state.seasons.isNotEmpty()) {
+                item(key = "seasons_header") {
+                    SeasonsSection(item, state, viewModel, actions)
+                }
+            }
+
             item(key = "info") {
                 BoxWithConstraints {
                     val isWide = maxWidth >= 600.dp
@@ -296,14 +307,7 @@ private fun DetailStackedContent(
                 }
             }
 
-            if (item.type == "Series" && state.seasons.isNotEmpty()) {
-                item(key = "seasons_header") {
-                    SeasonsSection(item, state, viewModel, actions)
-                }
-                item(key = "bottom_spacer") { Spacer(Modifier.height(0.dp)) }
-            } else {
-                item(key = "bottom_spacer") { Spacer(Modifier.height(40.dp)) }
-            }
+            item(key = "bottom_spacer") { Spacer(Modifier.height(40.dp)) }
         }
     }
 }
@@ -372,15 +376,23 @@ private fun DetailLandscapeContent(
                         // Each half in its own Column so SpaceBetween separates title from
                         // actions rather than spreading TitleBlock's eyebrow/title apart.
                         Column { TitleBlock(item, maxTitleLines = 2) }
-                        if (item.type != "Series") {
-                            Column(modifier = Modifier.padding(top = Spacing.md)) {
+                        Column(modifier = Modifier.padding(top = Spacing.md)) {
+                            if (item.type != "Series") {
                                 ActionButtonsSection(
                                     item, state, viewModel, accentColor, actions, coroutineScope,
                                     flowRow = true,
                                 )
+                            } else {
+                                SeriesPlayButton(state, viewModel, accentColor, actions, coroutineScope)
                             }
                         }
                     }
+                }
+            }
+
+            if (item.type == "Series" && state.seasons.isNotEmpty()) {
+                item(key = "seasons_header") {
+                    SeasonsSection(item, state, viewModel, actions)
                 }
             }
 
@@ -391,12 +403,6 @@ private fun DetailLandscapeContent(
                     showTechSpecs = !state.kidModeEnabled,
                     modifier = Modifier.padding(horizontal = 40.dp, vertical = Spacing.xl),
                 )
-            }
-
-            if (item.type == "Series" && state.seasons.isNotEmpty()) {
-                item(key = "seasons_header") {
-                    SeasonsSection(item, state, viewModel, actions)
-                }
             }
         }
     }
@@ -678,6 +684,45 @@ private fun ActionButtonsSection(
     }
 }
 
+// The series page's Play/Resume: the server's "Next Up" episode, played from the downloaded copy
+// when there is one. Absent while offline with nothing downloaded, or before Next Up has loaded.
+@Composable
+private fun SeriesPlayButton(
+    state: DetailState,
+    viewModel: DetailViewModel,
+    accentColor: Color,
+    actions: DetailActions,
+    coroutineScope: kotlinx.coroutines.CoroutineScope,
+) {
+    val ep = state.nextUp ?: return
+    val dl = state.episodeDownloads[ep.id]
+    val complete = dl?.status == DownloadStatus.COMPLETE.name
+    val offlinePos = dl?.playbackPositionMs ?: 0L
+    val streamPos = ep.userData?.playbackPositionTicks?.div(10_000L) ?: 0L
+    val startMs = if (complete && offlinePos > 0L) offlinePos else streamPos
+    val action: () -> Unit = when {
+        complete && dl != null -> { { actions.onPlayClick(dl.localPath, dl.jellyfinId, startMs) } }
+        state.canStream -> {
+            {
+                coroutineScope.launch {
+                    actions.onStreamClick(viewModel.streamUrl(ep.id), ep.id, startMs)
+                }
+            }
+        }
+        else -> return
+    }
+    val code = ep.indexNumber?.let { e ->
+        val season = ep.parentIndexNumber?.let { "S${it.toString().padStart(2, '0')}" } ?: ""
+        " ${season}E${e.toString().padStart(2, '0')}"
+    } ?: ""
+    PrimaryActionButton(
+        text = (if (startMs > 0L) "Resume" else "Play") + code,
+        icon = Icons.Default.PlayArrow,
+        onClick = action,
+        accentColor = accentColor,
+    )
+}
+
 @Composable
 private fun SeasonsSection(
     item: JellyfinItem,
@@ -686,7 +731,7 @@ private fun SeasonsSection(
     actions: DetailActions,
 ) {
     Column {
-        Spacer(Modifier.height(40.dp))
+        Spacer(Modifier.height(Spacing.xl))
         Text(
             text = "Seasons",
             style = MaterialTheme.typography.titleMedium,
@@ -803,7 +848,8 @@ private fun DownloadProgressButton(status: String, progress: Float, accentColor:
             )
             Text(
                 text = when (status) {
-                    "TRANSCODING" -> "Transcoding ${"%.0f".format(progress)}%"
+                    // Press holds a finished encode at ~100% while it hashes the file.
+                    "TRANSCODING" -> if (progress >= 99.5f) "Finishing…" else "Transcoding ${"%.0f".format(progress)}%"
                     "DOWNLOADING" -> "Downloading ${"%.0f".format(progress)}%"
                     else -> "Working..."
                 },
@@ -904,6 +950,85 @@ internal fun EpisodeRow(
 ) {
     var showPresetDialog by remember { mutableStateOf(false) }
 
+    // On wide screens the controls sit beside the text instead of under it, which takes the row
+    // from thumbnail + buttons tall down to roughly the thumbnail's height — short episodes (1–2
+    // minute shorts) otherwise fit only a couple of rows on screen.
+    val sideControls = LocalConfiguration.current.screenWidthDp >= 700
+    val controls: @Composable () -> Unit = {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    val offlinePos = download?.playbackPositionMs ?: 0L
+                    val streamPos = episode.userData?.playbackPositionTicks?.div(10_000L) ?: 0L
+                    val hasPos = offlinePos > 0L || streamPos > 0L
+                    if (hasPos) {
+                        val resumeAction: (() -> Unit)? = when {
+                            download?.status == DownloadStatus.COMPLETE.name && offlinePos > 0L ->
+                                { { onPlayOfflineClick(download.localPath, download.jellyfinId, offlinePos) } }
+                            canStream && onStreamClick != null && streamPos > 0L ->
+                                { { onStreamClick(streamPos) } }
+                            else -> null
+                        }
+                        if (resumeAction != null) {
+                            CompactActionButton(icon = Icons.Default.PlayArrow, onClick = resumeAction, text = "Resume")
+                        }
+                    }
+                    val playFromStartAction: (() -> Unit)? = when {
+                        download?.status == DownloadStatus.COMPLETE.name ->
+                            { { onPlayOfflineClick(download.localPath, download.jellyfinId, 0L) } }
+                        canStream && onStreamClick != null -> { { onStreamClick(0L) } }
+                        else -> null
+                    }
+                    if (playFromStartAction != null) {
+                        CompactActionButton(icon = Icons.Default.PlayArrow, onClick = playFromStartAction, text = "Play")
+                    }
+                    when {
+                        kidMode -> {}
+                        download == null && isOnline -> CompactActionButton(
+                            icon = Icons.Default.Download,
+                            onClick = { showPresetDialog = true },
+                            text = "Download",
+                        )
+                        download != null && download.status in listOf(
+                            DownloadStatus.QUEUED.name,
+                            DownloadStatus.TRANSCODING.name,
+                            DownloadStatus.DOWNLOADING.name,
+                        ) -> {
+                            val animatedProgress by animateFloatAsState(
+                                targetValue = download.progress / 100f, label = "episodeProgress",
+                            )
+                            CircularProgressIndicator(
+                                progress = { animatedProgress },
+                                modifier = Modifier.size(IconSize.sm),
+                                strokeWidth = 2.dp,
+                                color = accentColor,
+                            )
+                            Text(
+                                if (download.status == DownloadStatus.QUEUED.name) "Queued"
+                                else if (download.status == DownloadStatus.TRANSCODING.name && download.progress >= 99.5f) "Finishing…"
+                                else "${"%.0f".format(download.progress)}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = OnSurface,
+                            )
+                        }
+                        download?.status == DownloadStatus.COMPLETE.name ->
+                            CompactActionButton(icon = Icons.Default.Delete, onClick = onDeleteClick, contentColor = Error)
+                        download?.status == DownloadStatus.FAILED.name -> {
+                            if (isOnline) {
+                                CompactActionButton(
+                                    icon = Icons.Default.Refresh,
+                                    onClick = { onDownloadClick("retry") },
+                                    text = "Retry",
+                                )
+                            }
+                            CompactActionButton(icon = Icons.Default.Delete, onClick = onDeleteClick, contentColor = Error)
+                        }
+                        else -> {}
+                    }
+                }
+    }
+
     val panelShape = RoundedCornerShape(Radius.md)
     Box(
         modifier = modifier
@@ -913,7 +1038,7 @@ internal fun EpisodeRow(
             .clickable(onClick = onClick),
     ) {
         Row(
-            modifier = Modifier.padding(10.dp),
+            modifier = Modifier.padding(8.dp),
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -995,81 +1120,12 @@ internal fun EpisodeRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Spacer(Modifier.height(4.dp))
-
-                // Play + download controls
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val offlinePos = download?.playbackPositionMs ?: 0L
-                    val streamPos = episode.userData?.playbackPositionTicks?.div(10_000L) ?: 0L
-                    val hasPos = offlinePos > 0L || streamPos > 0L
-                    if (hasPos) {
-                        val resumeAction: (() -> Unit)? = when {
-                            download?.status == DownloadStatus.COMPLETE.name && offlinePos > 0L ->
-                                { { onPlayOfflineClick(download.localPath, download.jellyfinId, offlinePos) } }
-                            canStream && onStreamClick != null && streamPos > 0L ->
-                                { { onStreamClick(streamPos) } }
-                            else -> null
-                        }
-                        if (resumeAction != null) {
-                            CompactActionButton(icon = Icons.Default.PlayArrow, onClick = resumeAction, text = "Resume")
-                        }
-                    }
-                    val playFromStartAction: (() -> Unit)? = when {
-                        download?.status == DownloadStatus.COMPLETE.name ->
-                            { { onPlayOfflineClick(download.localPath, download.jellyfinId, 0L) } }
-                        canStream && onStreamClick != null -> { { onStreamClick(0L) } }
-                        else -> null
-                    }
-                    if (playFromStartAction != null) {
-                        CompactActionButton(icon = Icons.Default.PlayArrow, onClick = playFromStartAction, text = "Play")
-                    }
-                    when {
-                        kidMode -> {}
-                        download == null && isOnline -> CompactActionButton(
-                            icon = Icons.Default.Download,
-                            onClick = { showPresetDialog = true },
-                            text = "Download",
-                        )
-                        download != null && download.status in listOf(
-                            DownloadStatus.QUEUED.name,
-                            DownloadStatus.TRANSCODING.name,
-                            DownloadStatus.DOWNLOADING.name,
-                        ) -> {
-                            val animatedProgress by animateFloatAsState(
-                                targetValue = download.progress / 100f, label = "episodeProgress",
-                            )
-                            CircularProgressIndicator(
-                                progress = { animatedProgress },
-                                modifier = Modifier.size(IconSize.sm),
-                                strokeWidth = 2.dp,
-                                color = accentColor,
-                            )
-                            Text(
-                                if (download.status == DownloadStatus.QUEUED.name) "Queued"
-                                else "${"%.0f".format(download.progress)}%",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = OnSurface,
-                            )
-                        }
-                        download?.status == DownloadStatus.COMPLETE.name ->
-                            CompactActionButton(icon = Icons.Default.Delete, onClick = onDeleteClick, contentColor = Error)
-                        download?.status == DownloadStatus.FAILED.name -> {
-                            if (isOnline) {
-                                CompactActionButton(
-                                    icon = Icons.Default.Refresh,
-                                    onClick = { onDownloadClick("retry") },
-                                    text = "Retry",
-                                )
-                            }
-                            CompactActionButton(icon = Icons.Default.Delete, onClick = onDeleteClick, contentColor = Error)
-                        }
-                        else -> {}
-                    }
+                if (!sideControls) {
+                    Spacer(Modifier.height(4.dp))
+                    controls()
                 }
             }
+            if (sideControls) controls()
         }
     }
 

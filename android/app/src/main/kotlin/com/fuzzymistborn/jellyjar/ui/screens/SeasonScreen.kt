@@ -1,6 +1,7 @@
 package com.fuzzymistborn.jellyjar.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -322,8 +323,14 @@ fun SeasonScreen(
             } else {
                 // Offline hides everything that isn't downloaded, which can leave nothing at all.
                 item(key = "empty") {
+                    // On a scrim so the text stays readable over a bright backdrop.
                     Column(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = Spacing.xl),
+                        modifier = Modifier
+                            .padding(horizontal = 32.dp, vertical = Spacing.xl)
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(Radius.md))
+                            .background(ScrimStrong)
+                            .padding(Spacing.xl),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                     ) {
@@ -340,7 +347,7 @@ fun SeasonScreen(
                             Text(
                                 text = "Reconnect to browse and stream the rest of the season.",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = OnSurfaceMuted,
+                                color = OnSurface.copy(alpha = 0.85f),
                             )
                         }
                     }

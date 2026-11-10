@@ -244,6 +244,18 @@ class JellyfinRepository @Inject constructor(
         }
     }
 
+    suspend fun getNextUp(seriesId: String): Result<JellyfinItem?> = withContext(Dispatchers.IO) {
+        runCatching {
+            val s = settings.currentSnapshot()
+            val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
+            service.getNextUp(
+                authHeader = JellyfinImageHelper.authHeader(s),
+                userId = s.jellyfinUserId,
+                seriesId = seriesId,
+            ).Items.firstOrNull()
+        }
+    }
+
     suspend fun getGenres(parentId: String? = null): Result<List<String>> = withContext(Dispatchers.IO) {
         runCatching {
             val s = settings.currentSnapshot()

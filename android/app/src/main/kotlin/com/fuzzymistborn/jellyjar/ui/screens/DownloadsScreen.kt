@@ -399,7 +399,9 @@ private fun ActiveDownloadCard(
                     trackColor = Background,
                 )
                 Spacer(Modifier.height(4.dp))
-                val progressLabel = phasePrefix?.let { "$it ${entity.progress.toInt()}%" } ?: "${entity.progress.toInt()}%"
+                val finishing = entity.status == "TRANSCODING" && entity.progress >= 99.5f
+                val progressLabel = if (finishing) "Finishing…"
+                    else phasePrefix?.let { "$it ${entity.progress.toInt()}%" } ?: "${entity.progress.toInt()}%"
                 val etaLabel = etaMinutes?.let { " · ~${it}m left" } ?: ""
                 Text(
                     "$progressLabel$etaLabel",

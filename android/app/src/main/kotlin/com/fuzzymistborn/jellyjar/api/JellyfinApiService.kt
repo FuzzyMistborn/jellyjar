@@ -255,6 +255,17 @@ interface JellyfinApiService {
         @Query("Limit") limit: Int = 12,
     ): ItemsResponse
 
+    // The next episode to watch for a series (first unwatched after the last watched, or the one in
+    // progress), as the web client's "Next Up" resolves it.
+    @GET("Shows/NextUp")
+    suspend fun getNextUp(
+        @Header("Authorization") authHeader: String,
+        @Query("UserId") userId: String,
+        @Query("SeriesId") seriesId: String,
+        @Query("Fields") fields: String = "Overview,MediaSources,UserData",
+        @Query("Limit") limit: Int = 1,
+    ): ItemsResponse
+
     @GET("Genres")
     suspend fun getGenres(
         @Header("Authorization") authHeader: String,
