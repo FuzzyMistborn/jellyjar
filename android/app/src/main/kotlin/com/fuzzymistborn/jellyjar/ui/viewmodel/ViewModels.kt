@@ -593,6 +593,8 @@ data class DetailState(
     val isFavorite: Boolean = false,
     val isPlayed: Boolean = false,
     val kidModeEnabled: Boolean = false,
+    // Series only: the episode the hero's Play/Resume button offers.
+    val nextUp: com.fuzzymistborn.jellyjar.model.JellyfinItem? = null,
 ) {
     // Streaming/direct-play requires Wi-Fi unless the user opted into cellular streaming;
     // library browsing and download-queueing stay gated on plain isOnline.
@@ -617,9 +619,12 @@ class DetailViewModel @Inject constructor(
         viewModelScope.launch {
             combine(
                 networkMonitor.isOnline,
+                networkMonitor.serverReachable,
                 networkMonitor.isWifi,
                 settings.settings.map { it.streamOverCellular },
-            ) { online, wifi, overCellular -> Triple(online, wifi, overCellular) }
+            ) { online, reachable, wifi, overCellular -> Triple(online && reachable, wifi, overCellular) }
+                // "Online" here gates Download/Stream: a device on Wi-Fi with the Jellyfin server
+                // down can't do either, so don't offer them.
                 .collect { (online, wifi, overCellular) ->
                     _state.update { it.copy(isOnline = online, isWifi = wifi, streamOverCellular = overCellular) }
                 }
@@ -666,7 +671,10 @@ class DetailViewModel @Inject constructor(
                         networkMonitor.reportServerReachable(true)
                         val isFav = favoriteRepo.isFavorite(item.id)
                         _state.update { it.copy(item = item, isLoading = false, isFavorite = isFav, isPlayed = item.userData?.played == true) }
-                        if (item.type == "Series") loadSeasons(itemId)
+                        if (item.type == "Series") {
+                            loadSeasons(itemId)
+                            loadNextUp(itemId)
+                        }
                     }
                     .onFailure { e ->
                         // Reports through NetworkMonitor so the Library screen (and any other
@@ -748,6 +756,10 @@ class DetailViewModel @Inject constructor(
         }.onFailure {
             _state.update { it.copy(seasonDownloadProgress = it.seasonDownloadProgress - seasonId) }
         }
+    }
+
+    private fun loadNextUp(seriesId: String) = viewModelScope.launch {
+        jellyfinRepo.getNextUp(seriesId).onSuccess { ep -> _state.update { it.copy(nextUp = ep) } }
     }
 
     private fun loadSeasons(seriesId: String) = viewModelScope.launch {
@@ -1623,9 +1635,12 @@ class SeasonViewModel @Inject constructor(
         viewModelScope.launch {
             combine(
                 networkMonitor.isOnline,
+                networkMonitor.serverReachable,
                 networkMonitor.isWifi,
                 settings.settings.map { it.streamOverCellular },
-            ) { online, wifi, overCellular -> Triple(online, wifi, overCellular) }
+            ) { online, reachable, wifi, overCellular -> Triple(online && reachable, wifi, overCellular) }
+                // "Online" here gates Download/Stream: a device on Wi-Fi with the Jellyfin server
+                // down can't do either, so don't offer them.
                 .collect { (online, wifi, overCellular) ->
                     _state.update { it.copy(isOnline = online, isWifi = wifi, streamOverCellular = overCellular) }
                 }
@@ -1834,7 +1849,11 @@ class PlayerViewModel @Inject constructor(
     private val screenTime: com.fuzzymistborn.jellyjar.data.repository.ScreenTimeManager,
     private val settings: SettingsRepository,
     private val okHttpClient: okhttp3.OkHttpClient,
+    private val networkMonitor: NetworkMonitor,
 ) : ViewModel() {
+
+    // Lets the player retry a dropped stream on its own once the device is back online.
+    val isOnline: StateFlow<Boolean> get() = networkMonitor.isOnline
 
     // Detached scope for reportStopped(): deliberately NOT tied to viewModelScope/onCleared —
     // it must outlive ViewModel clearing so the final "stopped" event still reaches Jellyfin
@@ -2055,7 +2074,11 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun reportProgress(jellyfinId: String, positionMs: Long, isPaused: Boolean, mediaSourceId: String? = null) = viewModelScope.launch {
+        // Progress reports are the only Jellyfin traffic during a long stream, so they're also the
+        // earliest sign the server went away (home shows its banner) or came back (home reloads).
         jellyfinRepo.reportPlaybackProgress(jellyfinId, positionMs, isPaused, mediaSourceId)
+            .onSuccess { networkMonitor.reportServerReachable(true) }
+            .onFailure { networkMonitor.reportServerFailure(it) }
     }
 
     // Goes through PlaybackSyncRepository rather than straight to Jellyfin, so a stop that can't

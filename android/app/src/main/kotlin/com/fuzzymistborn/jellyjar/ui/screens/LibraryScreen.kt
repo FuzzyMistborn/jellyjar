@@ -1,12 +1,17 @@
 package com.fuzzymistborn.jellyjar.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -72,6 +77,19 @@ fun LibraryScreen(
 
     val isHome = state.selectedLibrary == null && !state.showingDownloads
 
+    // The search bar and two chip rows take about a third of a tablet screen, so they slide away
+    // while scrolling down the grid and come back on the first scroll up. Observed, never consumed.
+    var filtersVisible by remember(state.selectedLibrary) { mutableStateOf(true) }
+    val scrollConnection = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (available.y < -12f) filtersVisible = false
+                else if (available.y > 12f) filtersVisible = true
+                return Offset.Zero
+            }
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(BackgroundGradient)) {
 
         if (state.selectedLibrary != null) {
@@ -92,7 +110,7 @@ fun LibraryScreen(
             }
         }
 
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().nestedScroll(scrollConnection)) {
 
             // Top bar
             Row(
@@ -205,6 +223,8 @@ fun LibraryScreen(
 
             // Search bar — shown when inside a library
             if (state.selectedLibrary != null) {
+              AnimatedVisibility(visible = filtersVisible) {
+               Column {
                 OutlinedTextField(
                     value = state.searchQuery,
                     onValueChange = viewModel::setSearchQuery,
@@ -277,6 +297,8 @@ fun LibraryScreen(
                         }
                     }
                 }
+               }
+              }
             }
 
             // Content
@@ -512,6 +534,23 @@ private fun HomeScreen(
         }
         item {
             DownloadsTile(thumbnails = downloadThumbnails, onClick = onDownloadsClick)
+        }
+        // Offline with nothing downloaded leaves a lone tile on a mostly empty screen.
+        if (!isOnline && libraries.isEmpty() && downloadThumbnails.isEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.xl),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    Icon(Icons.Default.WifiOff, contentDescription = null, tint = OnSurfaceMuted,
+                        modifier = Modifier.size(IconSize.lg))
+                    Text("You're offline and nothing is downloaded yet",
+                        style = MaterialTheme.typography.titleMedium, color = OnSurface)
+                    Text("Connect to Wi-Fi to browse your library, then download titles to watch anywhere.",
+                        style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
+                }
+            }
         }
     }
 }

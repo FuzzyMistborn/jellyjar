@@ -12,6 +12,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bedtime
@@ -141,6 +142,10 @@ fun PlayerScreen(
             // Headphones disconnecting or switching off pauses instead of carrying on through
             // the tablet speaker.
             .setHandleAudioBecomingNoisy(true)
+            // The on-screen skip buttons default to 5s back / 15s forward; keep them in step with
+            // the double-tap gesture.
+            .setSeekBackIncrementMs(SEEK_STEP_MS)
+            .setSeekForwardIncrementMs(SEEK_STEP_MS)
             .build().apply {
                 setMediaItem(MediaItem.fromUri(localPath))
                 prepare()
@@ -533,6 +538,19 @@ fun PlayerScreen(
     // A source failure (stream dropped, file gone) leaves ExoPlayer idle and paused; without this
     // the screen just sits there with no hint why.
     var playbackError by remember { mutableStateOf<String?>(null) }
+    // A dropped stream retries itself, backing off, once the device is online again — a kid
+    // shouldn't need a grown-up to tap Retry after the Wi-Fi blips.
+    val deviceOnline by viewModel.isOnline.collectAsStateWithLifecycle()
+    LaunchedEffect(playbackError, deviceOnline) {
+        if (playbackError == null || !isStreamed || !deviceOnline) return@LaunchedEffect
+        var wait = 2_000L
+        repeat(5) {
+            delay(wait)
+            player.prepare()
+            player.play()
+            wait = (wait * 2).coerceAtMost(15_000L)
+        }
+    }
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
