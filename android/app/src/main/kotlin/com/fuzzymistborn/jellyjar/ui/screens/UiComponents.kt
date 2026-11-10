@@ -10,6 +10,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -257,34 +259,55 @@ fun UnwatchedCountBadge(count: Int, modifier: Modifier = Modifier) {
     }
 }
 
+// True when the window is taller than it is wide (phone, or a tablet held upright).
+@Composable
+fun isPortraitWindow(): Boolean {
+    val config = androidx.compose.ui.platform.LocalConfiguration.current
+    return config.screenHeightDp > config.screenWidthDp
+}
+
 // Full-screen backdrop art, evenly dimmed (plus vignette and a short fade into the background at
 // the very bottom) so content scrolling over it stays legible anywhere on screen. Shared by the
 // Detail and Season screens — replaced backdrops that faded to black partway down and left the
 // rest of the screen as dead space.
 //
-// In a portrait window (taller than wide) a 16:9 backdrop cropped to fill the screen is a
-// heavily zoomed sliver of the image, so [portraitImageUrl] — a 2:3 poster, which matches that
-// shape — is used instead when given, softly blurred so it reads as atmosphere rather than a
-// second copy of the hero poster.
+// In a portrait window a 16:9 backdrop cropped to fill the screen is a heavily zoomed sliver of
+// the image, so [portraitImageUrl] — a 2:3 poster, which matches that shape — is shown instead,
+// softly blurred so it reads as atmosphere rather than a second copy of the hero poster. Pass
+// the same URL/[portraitCacheKey] the poster is already loaded with elsewhere (the library grid,
+// the hero) so it's a cache hit, including offline. If the poster fails to load (an item with
+// no Primary image, or nothing cached offline) this falls back to [imageUrl].
 @Composable
-fun DimmedBackdrop(imageUrl: String?, portraitImageUrl: String? = null) {
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val usePoster = maxHeight > maxWidth && !portraitImageUrl.isNullOrBlank()
-        val url = if (usePoster) portraitImageUrl else imageUrl
-        if (!url.isNullOrBlank()) {
-            coil.compose.AsyncImage(
-                model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
-                    .data(url)
-                    .crossfade(300)
-                    .build(),
-                contentDescription = null,
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                alignment = Alignment.TopCenter,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .then(if (usePoster) Modifier.blur(16.dp) else Modifier),
-            )
-        }
+fun DimmedBackdrop(
+    imageUrl: String?,
+    portraitImageUrl: String? = null,
+    portraitCacheKey: String? = null,
+) {
+    var posterFailed by androidx.compose.runtime.remember(portraitImageUrl) {
+        androidx.compose.runtime.mutableStateOf(false)
+    }
+    val usePoster = isPortraitWindow() && !portraitImageUrl.isNullOrBlank() && !posterFailed
+    val url = if (usePoster) portraitImageUrl else imageUrl
+    if (!url.isNullOrBlank()) {
+        coil.compose.AsyncImage(
+            model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
+                .data(url)
+                .apply {
+                    if (usePoster && portraitCacheKey != null) {
+                        memoryCacheKey(portraitCacheKey)
+                        diskCacheKey(portraitCacheKey)
+                    }
+                }
+                .crossfade(300)
+                .build(),
+            contentDescription = null,
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            alignment = Alignment.TopCenter,
+            onError = { if (usePoster) posterFailed = true },
+            modifier = Modifier
+                .fillMaxSize()
+                .then(if (usePoster) Modifier.blur(16.dp) else Modifier),
+        )
     }
     Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)))
     Box(modifier = Modifier.fillMaxSize().background(vignetteScrim()))

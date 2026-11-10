@@ -46,9 +46,19 @@ fun SeasonScreen(
         }
     }
 
-    // The series' colour, from the same backdrop URL the series Detail screen uses — usually a
-    // cache hit, so the Season screen matches the series it was opened from.
-    val accent = rememberDynamicAccentColor(viewModel.backdropUrl().ifBlank { null })
+    // Same URL as the hero poster, so the portrait background is a cache hit. Null for a
+    // synthetic offline season whose series is synthetic too (nothing fetchable).
+    val seasonPosterUrl = viewModel.posterItemId(seasonId, seriesId)?.let { viewModel.posterUrl(it) }
+
+    // Accent from the art actually behind the content: the season poster in portrait, the
+    // series backdrop in landscape (the same URL the series Detail screen uses, so the colours
+    // match there). Portrait falls back to the backdrop when the poster is missing or fails.
+    val backdropUrl = viewModel.backdropUrl().ifBlank { null }
+    val portrait = isPortraitWindow()
+    val accent = rememberDynamicAccentColor(
+        imageUrl = if (portrait) seasonPosterUrl ?: backdropUrl else backdropUrl,
+        fallbackImageUrl = if (portrait && seasonPosterUrl != null) backdropUrl else null,
+    )
 
     // "Next up": the first unwatched episode, else the first episode.
     val nextEpisode = remember(visibleEpisodes) {
@@ -61,9 +71,7 @@ fun SeasonScreen(
         // as the background instead of a zoomed-in crop of the 16:9 series backdrop.
         DimmedBackdrop(
             imageUrl = viewModel.backdropUrl(),
-            portraitImageUrl = viewModel.backgroundPosterUrl(
-                if (seasonId.startsWith("offline-season-")) seriesId else seasonId,
-            ),
+            portraitImageUrl = seasonPosterUrl,
         )
 
         LazyColumn(
@@ -93,7 +101,7 @@ fun SeasonScreen(
                         // A synthetic offline season has no fetchable art — use the series'
                         // poster, the same fallback the Detail screen's seasons row uses.
                         PosterImage(
-                            imageUrl = viewModel.posterUrl(if (seasonId.startsWith("offline-season-")) seriesId else seasonId),
+                            imageUrl = seasonPosterUrl ?: "",
                             contentDescription = state.seasonName,
                             modifier = Modifier.width(if (isWide) 160.dp else 110.dp),
                         )

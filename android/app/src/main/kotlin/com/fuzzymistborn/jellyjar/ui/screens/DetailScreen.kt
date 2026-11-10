@@ -71,19 +71,28 @@ fun DetailScreen(
         // Backdrop — episodes use the series' art. Full-screen and evenly dimmed at every
         // width; content scrolls over it. Portrait windows use the poster instead (see
         // DimmedBackdrop).
-        val backdropItemId = state.item?.let { if (it.type == "Episode") it.seriesId ?: it.id else it.id }
+        // The poster uses the library grid's cache key, so it's usually already cached — offline
+        // included.
+        val artItemId = state.item?.let { if (it.type == "Episode") it.seriesId ?: it.id else it.id }
+        val backdropUrl = artItemId?.let { viewModel.backdropUrl(it) }
+        val posterUrl = artItemId?.let { viewModel.posterUrl(it) }
+        val posterCacheKey = artItemId?.let { "poster_$it" }
         DimmedBackdrop(
-            imageUrl = backdropItemId?.let { viewModel.backdropUrl(it) },
-            portraitImageUrl = backdropItemId?.let { viewModel.backgroundPosterUrl(it) },
+            imageUrl = backdropUrl,
+            portraitImageUrl = posterUrl,
+            portraitCacheKey = posterCacheKey,
         )
 
         val item = state.item
 
-        // Per-title accent extracted from the backdrop art (falls back to the theme's default
-        // blue while loading or if extraction fails) so primary actions/chips read as "this
-        // title's color" instead of always the same fixed blue.
+        // Per-title accent extracted from the art actually behind the content (poster in
+        // portrait, backdrop in landscape; the other one if that fails) so primary actions/chips
+        // read as "this title's color" and match the background. Falls back to the theme blue.
+        val portrait = isPortraitWindow()
         val accentColor = rememberDynamicAccentColor(
-            imageUrl = item?.let { viewModel.backdropUrl(if (it.type == "Episode") it.seriesId ?: it.id else it.id) },
+            imageUrl = if (portrait) posterUrl else backdropUrl,
+            cacheKey = if (portrait) posterCacheKey else null,
+            fallbackImageUrl = if (portrait) backdropUrl else null,
         )
 
         val actions = DetailActions(

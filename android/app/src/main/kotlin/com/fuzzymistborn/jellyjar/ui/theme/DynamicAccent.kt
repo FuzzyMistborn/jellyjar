@@ -30,7 +30,14 @@ import kotlinx.coroutines.withContext
 private val accentColorCache = android.util.LruCache<String, Color>(50)
 
 @Composable
-fun rememberDynamicAccentColor(imageUrl: String?, fallback: Color = Primary): Color {
+fun rememberDynamicAccentColor(
+    imageUrl: String?,
+    fallback: Color = Primary,
+    // Coil cache key [imageUrl] was loaded under elsewhere, so extraction can reuse it (offline too).
+    cacheKey: String? = null,
+    // Tried when [imageUrl] can't be loaded or yields no usable colour.
+    fallbackImageUrl: String? = null,
+): Color {
     val cached = imageUrl?.let { accentColorCache.get(it) }
     var accent by remember(imageUrl) { mutableStateOf(cached ?: fallback) }
     val context = LocalContext.current
@@ -44,10 +51,11 @@ fun rememberDynamicAccentColor(imageUrl: String?, fallback: Color = Primary): Co
             accent = it
             return@LaunchedEffect
         }
-        val extracted = withContext(Dispatchers.IO) {
+        suspend fun extractFrom(url: String, key: String?): Color? = withContext(Dispatchers.IO) {
             runCatching {
                 val request = ImageRequest.Builder(context)
-                    .data(imageUrl)
+                    .data(url)
+                    .apply { key?.let { memoryCacheKey(it); diskCacheKey(it) } }
                     .allowHardware(false) // Palette needs a software bitmap
                     .build()
                 val result = context.imageLoader.execute(request)
@@ -55,6 +63,8 @@ fun rememberDynamicAccentColor(imageUrl: String?, fallback: Color = Primary): Co
                 extractAccentColor(bitmap)
             }.getOrNull()
         }
+        val extracted = extractFrom(imageUrl, cacheKey)
+            ?: fallbackImageUrl?.takeIf { it.isNotBlank() }?.let { extractFrom(it, null) }
         val resolved = extracted ?: fallback
         if (extracted != null) accentColorCache.put(imageUrl, resolved)
         accent = resolved
@@ -82,6 +92,9 @@ private fun extractAccentColor(bitmap: Bitmap): Color? {
     // (readableContentColor in ActionButtons.kt).
     val hsl = FloatArray(3)
     ColorUtils.colorToHSL(swatch.rgb, hsl)
+    // A near-grey swatch (black-and-white film, desaturated art) has no real hue — HSL reports
+    // 0, i.e. red — so boosting its saturation would invent a red accent. Use the theme colour.
+    if (hsl[1] < 0.15f) return null
     hsl[1] = hsl[1].coerceAtLeast(0.45f)
     hsl[2] = hsl[2].coerceIn(0.45f, 0.65f)
     return Color(ColorUtils.HSLToColor(hsl))
