@@ -7,8 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -68,14 +67,15 @@ fun DetailScreen(
     val coroutineScope = rememberCoroutineScope()
 
     // Tall/narrow (phone-style portrait) windows size the backdrop off its own 16:9 aspect ratio
-    // instead of a fraction of screen height — on a very tall display, 65% of screen height is far
+    // instead of a fraction of screen height — on a very tall display, a height fraction is far
     // taller than a 16:9 image actually renders at that width, so the image ends abruptly partway
     // down and leaves a dead gap of plain gradient before the title/poster content below. Wide
-    // (two-pane tablet) windows keep the original height-fraction sizing, which was tuned for
-    // normal tablet aspect ratios and doesn't have this problem.
+    // (landscape tablet) windows fill the whole screen with the backdrop, evenly dimmed, and the
+    // content scrolls over it — fading to black two-thirds of the way down left the lower half
+    // of a landscape tablet as dead space.
     val isWideScreen = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 840
     val backdropModifier = if (isWideScreen) {
-        Modifier.fillMaxWidth().fillMaxHeight(0.65f)
+        Modifier.fillMaxSize()
     } else {
         Modifier.fillMaxWidth().aspectRatio(16f / 9f)
     }
@@ -91,20 +91,29 @@ fun DetailScreen(
                     .crossfade(300)
                     .build(),
                 contentDescription = null,
-                contentScale = ContentScale.FillWidth,
+                contentScale = if (isWideScreen) ContentScale.Crop else ContentScale.FillWidth,
                 alignment = Alignment.TopCenter,
                 modifier = backdropModifier.clip(RectangleShape),
             )
         }
 
-        // Gradient fade to background — same scrimStop/backdropHeight ratio as SeasonScreen's
-        // hero (0.25/0.45), scaled to this screen's taller 0.65f backdrop so both screens shade
-        // by the same proportion instead of Detail reading lighter/darker than Season. On narrow
-        // windows the scrim is confined to the same aspect-ratio box as the backdrop above it
+        // Wide: an even dim over the whole backdrop (plus vignette and a short fade at the very
+        // bottom) so the hero and info panel stay legible wherever they scroll to. Narrow: a
+        // gradient fade to background confined to the same aspect-ratio box as the backdrop
         // (rather than the full screen) so it doesn't keep darkening well past where the image
         // itself has already ended.
         if (isWideScreen) {
-            Box(modifier = Modifier.fillMaxSize().background(heroBackdropScrim(scrimStop = 0.36f, solidStop = 0.65f)))
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)))
+            Box(modifier = Modifier.fillMaxSize().background(vignetteScrim()))
+            Box(
+                modifier = Modifier.fillMaxSize().background(
+                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        0.75f to Color.Transparent,
+                        1f to Background,
+                    ),
+                ),
+            )
         } else {
             Box(modifier = backdropModifier.background(heroBackdropScrim(scrimStop = 0.36f, solidStop = 0.65f)))
         }
@@ -127,13 +136,12 @@ fun DetailScreen(
         )
 
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            // Tablet landscape and up gets a real two-pane layout instead of the phone's single
-            // stacked column — a fixed poster/title/actions pane alongside independently
-            // scrolling overview + seasons content.
-            val isTwoPane = maxWidth >= 840.dp
+            // Tablet landscape and up gets a hero (large artwork + title + actions) above a
+            // full-width info panel, instead of the phone's single stacked column.
+            val isLandscapeLayout = maxWidth >= 840.dp
 
-            if (item != null && isTwoPane) {
-                DetailTwoPaneContent(
+            if (item != null && isLandscapeLayout) {
+                DetailLandscapeContent(
                     item = item,
                     state = state,
                     viewModel = viewModel,
@@ -141,6 +149,8 @@ fun DetailScreen(
                     onBack = onBack,
                     actions = actions,
                     coroutineScope = coroutineScope,
+                    heroHeight = (maxHeight * 0.42f).coerceIn(220.dp, 340.dp),
+                    contentWidth = maxWidth - 80.dp,
                     sharedTransitionScope = sharedTransitionScope,
                     animatedVisibilityScope = animatedVisibilityScope,
                 )
@@ -276,7 +286,9 @@ private fun DetailStackedContent(
                     }
                     val textColumn = @Composable {
                         Column(modifier = Modifier.fillMaxWidth()) {
-                            TitleAndMetaRow(item, accentColor)
+                            TitleBlock(item)
+                            Spacer(Modifier.height(Spacing.sm))
+                            MetaRow(item, accentColor)
                             if (!item.mediaSources.isNullOrEmpty() && !state.kidModeEnabled) {
                                 Spacer(Modifier.height(Spacing.sm))
                                 TechSpecRow(item.mediaSources, accentColor)
@@ -321,11 +333,13 @@ private fun DetailStackedContent(
     }
 }
 
-// Tablet-landscape layout (>=840dp): a fixed left pane (poster, title, metadata, tech specs,
-// actions) beside a right pane that scrolls its own overview + seasons content independently —
-// the actions stay visible without following the user down through a long overview/season list.
+// Tablet-landscape layout (>=840dp): one scrolling column over the full-screen backdrop —
+// a hero row (large artwork beside a big title, with the actions anchored to the artwork's
+// bottom edge), then a full-width translucent info panel (date/runtime/rating/age rating, tech
+// specs, overview), then seasons for a series. Replaced a 300dp sidebar + separate scrolling
+// pane that squeezed everything into the top-left and left the lower half of the screen empty.
 @Composable
-private fun DetailTwoPaneContent(
+private fun DetailLandscapeContent(
     item: JellyfinItem,
     state: DetailState,
     viewModel: DetailViewModel,
@@ -333,6 +347,8 @@ private fun DetailTwoPaneContent(
     onBack: () -> Unit,
     actions: DetailActions,
     coroutineScope: kotlinx.coroutines.CoroutineScope,
+    heroHeight: androidx.compose.ui.unit.Dp,
+    contentWidth: androidx.compose.ui.unit.Dp,
     sharedTransitionScope: androidx.compose.animation.SharedTransitionScope? = null,
     animatedVisibilityScope: androidx.compose.animation.AnimatedContentScope? = null,
 ) {
@@ -344,63 +360,115 @@ private fun DetailTwoPaneContent(
                 .padding(horizontal = Spacing.sm, vertical = 4.dp),
         ) {}
 
-        Spacer(Modifier.height(Spacing.sm))
-
-        Row(modifier = Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier
-                    .width(300.dp)
-                    .verticalScroll(rememberScrollState())
-                    .padding(start = 32.dp, end = Spacing.lg),
-            ) {
-                PosterImage(
-                    imageUrl = state.download?.thumbnailUri ?: viewModel.posterUrl(item.id),
-                    contentDescription = item.name,
-                    aspectRatio = if (item.type == "Episode") 16f / 9f else 2f / 3f,
-                    modifier = detailPosterModifier(
-                        Modifier.fillMaxWidth().widthIn(max = if (item.type == "Episode") 260.dp else 120.dp),
-                        item.id, sharedTransitionScope, animatedVisibilityScope,
-                    ),
-                )
-                Spacer(Modifier.height(Spacing.xs))
-                TitleAndMetaRow(item, accentColor, compact = true)
-                if (!item.mediaSources.isNullOrEmpty() && !state.kidModeEnabled) {
-                    Spacer(Modifier.height(Spacing.xs))
-                    TechSpecRow(item.mediaSources, accentColor)
-                }
-                Spacer(Modifier.height(Spacing.sm))
-                if (item.type != "Series") {
-                    ActionButtonsSection(item, state, viewModel, accentColor, actions, coroutineScope, compact = true)
-                }
-                Spacer(Modifier.height(Spacing.lg))
-            }
-
-            LazyColumn(
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-                contentPadding = PaddingValues(end = 32.dp, bottom = 40.dp),
-            ) {
-                if (item.overview != null) {
-                    item(key = "overview") {
-                        Box(modifier = Modifier.padding(start = Spacing.lg, top = Spacing.xs)) {
-                            OverviewBlock(item, isWide = true, accentColor = accentColor)
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = Spacing.sm, bottom = 40.dp),
+        ) {
+            item(key = "hero") {
+                Row(
+                    modifier = Modifier
+                        .padding(horizontal = 40.dp)
+                        .fillMaxWidth()
+                        .height(heroHeight),
+                ) {
+                    // Artwork fills the hero height, but never more than half the content width —
+                    // a 16:9 episode still at full height would otherwise squeeze the title
+                    // column on narrower landscape tablets.
+                    val aspect = if (item.type == "Episode") 16f / 9f else 2f / 3f
+                    val artworkWidth = minOf(heroHeight * aspect, contentWidth * 0.5f)
+                    PosterImage(
+                        imageUrl = state.download?.thumbnailUri ?: viewModel.posterUrl(item.id),
+                        contentDescription = item.name,
+                        aspectRatio = aspect,
+                        modifier = detailPosterModifier(
+                            Modifier.width(artworkWidth),
+                            item.id, sharedTransitionScope, animatedVisibilityScope,
+                        ),
+                    )
+                    Spacer(Modifier.width(32.dp))
+                    BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                        // Play + Favorite/Played + Download need ~520dp on one row; narrower
+                        // columns stack them on two.
+                        val fitsOneRow = maxWidth >= 520.dp
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            TitleBlock(item, maxTitleLines = 2)
+                            Spacer(Modifier.weight(1f))
+                            if (item.type != "Series") {
+                                ActionButtonsSection(
+                                    item, state, viewModel, accentColor, actions, coroutineScope,
+                                    singleRow = fitsOneRow,
+                                )
+                            }
                         }
                     }
                 }
-                if (item.type == "Series" && state.seasons.isNotEmpty()) {
-                    item(key = "seasons_header") {
-                        SeasonsSection(item, state, viewModel, actions)
-                    }
+            }
+
+            item(key = "info") {
+                InfoPanel(
+                    item = item,
+                    accentColor = accentColor,
+                    showTechSpecs = !state.kidModeEnabled,
+                    modifier = Modifier.padding(horizontal = 40.dp, vertical = Spacing.xl),
+                )
+            }
+
+            if (item.type == "Series" && state.seasons.isNotEmpty()) {
+                item(key = "seasons_header") {
+                    SeasonsSection(item, state, viewModel, actions)
                 }
             }
         }
     }
 }
 
+// Translucent, per-title-tinted card carrying the metadata row, tech specs and the full
+// overview. Black base for contrast over any backdrop, accent wash on top so it picks up the
+// title's colour.
 @Composable
-private fun TitleAndMetaRow(item: JellyfinItem, accentColor: Color, compact: Boolean = false) {
-    // Episodes: "Series · SxxExx · Episode Name" is too long for the displayMedium heading style
-    // to wrap gracefully in a narrow column (pushes buttons below the fold on tablet). Split it
-    // into a small eyebrow line (series + episode code) and just the episode name as the heading.
+private fun InfoPanel(
+    item: JellyfinItem,
+    accentColor: Color,
+    showTechSpecs: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val hasTechSpecs = showTechSpecs && !item.mediaSources.isNullOrEmpty()
+    val hasMeta = item.premiereDate != null || item.year != null || item.runtimeMinutes != null ||
+        item.communityRating != null || item.officialRating != null
+    if (!hasMeta && item.overview == null && !hasTechSpecs) return
+
+    val shape = RoundedCornerShape(Radius.lg)
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(Color.Black.copy(alpha = 0.45f), shape)
+            .background(accentColor.copy(alpha = 0.18f), shape)
+            .border(1.dp, Color.White.copy(alpha = 0.08f), shape)
+            .padding(horizontal = Spacing.xl, vertical = Spacing.lg),
+    ) {
+        if (hasMeta) {
+            MetaRow(item, accentColor, large = true)
+        }
+        if (hasTechSpecs) {
+            Spacer(Modifier.height(Spacing.md))
+            TechSpecRow(item.mediaSources!!, accentColor)
+        }
+        item.overview?.let { overview ->
+            if (hasMeta || hasTechSpecs) Spacer(Modifier.height(Spacing.md))
+            Text(
+                text = overview,
+                style = MaterialTheme.typography.bodyLarge,
+                color = OnSurface.copy(alpha = 0.9f),
+            )
+        }
+    }
+}
+
+// Episodes: "Series · SxxExx · Episode Name" is too long for the displayMedium heading style
+// to wrap gracefully — split it into a small eyebrow line (series + episode code) and just the
+// episode name as the heading.
+@Composable
+private fun TitleBlock(item: JellyfinItem, maxTitleLines: Int = Int.MAX_VALUE) {
     if (item.type == "Episode" && item.seriesName != null) {
         Text(
             text = "${item.seriesName} · S${item.parentIndexNumber?.toString()?.padStart(2, '0')}E${item.indexNumber?.toString()?.padStart(2, '0')}",
@@ -409,14 +477,10 @@ private fun TitleAndMetaRow(item: JellyfinItem, accentColor: Color, compact: Boo
         )
         Spacer(Modifier.height(4.dp))
     }
-    // A long movie title wraps to multiple lines at displayMedium in the narrower two-pane
-    // sidebar, pushing the action buttons below the fold — drop to a smaller heading there.
-    // Subtle text shadow as a legibility backstop where the title overlaps the still-fading
-    // edge of the backdrop (heroBackdropScrim's gradient doesn't fully solidify until partway
-    // down) — negligible over the flat background further down, cheap insurance either way.
+    // Subtle text shadow as a legibility backstop where the title sits over backdrop art.
     Text(
         text = if (item.type == "Episode") item.name else item.displayTitle,
-        style = (if (compact) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.displayMedium).copy(
+        style = MaterialTheme.typography.displayMedium.copy(
             shadow = androidx.compose.ui.graphics.Shadow(
                 color = Color.Black.copy(alpha = 0.4f),
                 offset = androidx.compose.ui.geometry.Offset(0f, 2f),
@@ -424,18 +488,31 @@ private fun TitleAndMetaRow(item: JellyfinItem, accentColor: Color, compact: Boo
             ),
         ),
         color = OnSurface,
+        maxLines = maxTitleLines,
+        overflow = TextOverflow.Ellipsis,
     )
-    Spacer(Modifier.height(Spacing.sm))
+}
+
+private val premiereDateFormat: java.time.format.DateTimeFormatter =
+    java.time.format.DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.LONG)
+
+// Year/air date · runtime · ★ rating · age-rating badge. Episodes show their full air date when
+// the server has one ("March 17, 2020") — a bare year says little within a series.
+@Composable
+private fun MetaRow(item: JellyfinItem, accentColor: Color, large: Boolean = false) {
+    val textStyle = if (large) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium
+    val textColor = if (large) OnSurface.copy(alpha = 0.85f) else OnSurfaceMuted
+    val dateLabel = item.premiereDate
+        ?.takeIf { item.type == "Episode" }
+        ?.let { runCatching { java.time.LocalDate.parse(it.take(10)).format(premiereDateFormat) }.getOrNull() }
+        ?: item.year?.toString()
+
     Row(
         horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        item.year?.let {
-            Text(it.toString(), style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
-        }
-        item.runtimeMinutes?.let {
-            Text("${it}m", style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
-        }
+        dateLabel?.let { Text(it, style = textStyle, color = textColor) }
+        item.runtimeMinutes?.let { Text("${it}m", style = textStyle, color = textColor) }
         item.communityRating?.let {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
@@ -443,8 +520,18 @@ private fun TitleAndMetaRow(item: JellyfinItem, accentColor: Color, compact: Boo
                     tint = accentColor, modifier = Modifier.size(IconSize.sm),
                 )
                 Spacer(Modifier.width(4.dp))
-                Text("${"%.1f".format(it)}", style = MaterialTheme.typography.bodyMedium, color = OnSurfaceMuted)
+                Text("%.1f".format(it), style = textStyle, color = textColor)
             }
+        }
+        item.officialRating?.takeIf { it.isNotBlank() }?.let { rating ->
+            Text(
+                text = rating,
+                style = MaterialTheme.typography.labelMedium,
+                color = textColor,
+                modifier = Modifier
+                    .border(1.dp, textColor.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            )
         }
     }
 }
@@ -496,7 +583,7 @@ private fun ActionButtonsSection(
     accentColor: Color,
     actions: DetailActions,
     coroutineScope: kotlinx.coroutines.CoroutineScope,
-    compact: Boolean = false,
+    singleRow: Boolean = false,
 ) {
     val dl = state.download
     val offlinePositionMs = dl?.playbackPositionMs ?: 0L
@@ -531,7 +618,7 @@ private fun ActionButtonsSection(
 
     val playRow: @Composable RowScope.() -> Unit = {
         if (hasPosition && resumeAction != null) {
-            PrimaryActionButton("Resume", Icons.Default.PlayArrow, resumeAction, accentColor = accentColor, compact = compact)
+            PrimaryActionButton("Resume", Icons.Default.PlayArrow, resumeAction, accentColor = accentColor)
         }
         if (playFromStartAction != null) {
             val isSecondary = hasPosition && resumeAction != null
@@ -540,15 +627,14 @@ private fun ActionButtonsSection(
                     icon = Icons.Default.PlayArrow,
                     onClick = playFromStartAction,
                     text = "Play",
-                    compact = compact,
                 )
             } else {
-                PrimaryActionButton("Play", Icons.Default.PlayArrow, playFromStartAction, accentColor = accentColor, compact = compact)
+                PrimaryActionButton("Play", Icons.Default.PlayArrow, playFromStartAction, accentColor = accentColor)
             }
         }
     }
 
-    if (!compact) {
+    if (!singleRow) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
@@ -557,16 +643,14 @@ private fun ActionButtonsSection(
         Spacer(Modifier.height(Spacing.sm))
     }
 
-    // On the two-pane tablet layout (compact=true) the play button(s) and the status icons share
-    // one row instead of stacking on two — the left pane is a fixed-width column with limited
-    // vertical room, and a second row here was routinely pushed out of view, requiring a scroll
-    // just to reach Favorite/Played/Download. Non-compact layouts keep the original two-row split,
-    // where there's room to spare and the extra weight of a full-width row reads better.
+    // The landscape hero (singleRow=true) puts the play button(s) and the status icons on one
+    // row anchored to the artwork's bottom edge — it has width to spare but a fixed height.
+    // Stacked layouts keep the two-row split.
     Row(
-        horizontalArrangement = Arrangement.spacedBy(if (compact) Spacing.xs else Spacing.md),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (compact) playRow()
+        if (singleRow) playRow()
         IconButton(onClick = { viewModel.toggleFavorite() }) {
             Icon(
                 if (state.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
@@ -581,10 +665,6 @@ private fun ActionButtonsSection(
                 tint = if (state.isPlayed) accentColor else OnSurfaceMuted,
             )
         }
-        // Compact (two-pane sidebar) drops the label on the status button — Play/Resume still
-        // carries a shortened label, but a column this narrow can't also fit "Download"/"Remove"
-        // text without truncating to an ellipsis; the icon alone (plus contentDescription for
-        // accessibility) reads fine next to the Favorite/Played icons it already sits beside.
         // Kid Mode hides the whole download control — queueing, progress, remove and retry alike.
         // Play/Resume and the Favorite/Played icons above stay: they're harmless and useful.
         when {
@@ -592,8 +672,7 @@ private fun ActionButtonsSection(
             dl == null && state.isOnline -> SecondaryActionButton(
                 icon = Icons.Default.Download,
                 onClick = actions.onShowPresetDialog,
-                text = if (compact) null else "Download",
-                compact = compact,
+                text = "Download",
             )
             dl != null && dl.status in listOf(
                 DownloadStatus.QUEUED.name,
@@ -605,24 +684,21 @@ private fun ActionButtonsSection(
                 SecondaryActionButton(
                     icon = Icons.Default.Delete,
                     onClick = actions.onShowDeleteConfirm,
-                    text = if (compact) null else "Remove",
+                    text = "Remove",
                     contentColor = Error,
-                    compact = compact,
                 )
             dl?.status == DownloadStatus.FAILED.name -> {
                 if (state.isOnline) {
                     SecondaryActionButton(
                         icon = Icons.Default.Refresh,
                         onClick = { viewModel.retryDownload(item.id) },
-                        text = if (compact) null else "Retry",
-                        compact = compact,
+                        text = "Retry",
                     )
                 }
                 SecondaryActionButton(
                     icon = Icons.Default.Delete,
                     onClick = actions.onShowDeleteConfirm,
                     contentColor = Error,
-                    compact = compact,
                 )
             }
             else -> {}

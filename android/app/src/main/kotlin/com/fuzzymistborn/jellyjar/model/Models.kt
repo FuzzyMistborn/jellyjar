@@ -25,6 +25,10 @@ data class JellyfinItem(
     @SerializedName("Genres") val genres: List<String>? = null,
     // mediaSourceId → (width → tile info); present when the server has generated trickplay images
     @SerializedName("Trickplay") val trickplay: Map<String, Map<String, TrickplayInfo>>? = null,
+    // Age rating ("TV-Y", "PG-13") and ISO-8601 air/release date — base fields, returned without
+    // being listed in Fields.
+    @SerializedName("OfficialRating") val officialRating: String? = null,
+    @SerializedName("PremiereDate") val premiereDate: String? = null,
 ) {
     val runtimeMinutes: Int?
         get() = runTimeTicks?.let { (it / 600_000_000).toInt() }
