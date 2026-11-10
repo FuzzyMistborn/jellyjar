@@ -884,6 +884,11 @@ class DetailViewModel @Inject constructor(
     fun posterUrl(itemId: String) =
         JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId)
 
+    // Full-screen portrait background — the default 400px poster would look soft stretched to
+    // a whole screen.
+    fun backgroundPosterUrl(itemId: String) =
+        JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId, maxWidth = 1080)
+
     fun thumbnailUrl(itemId: String) =
         JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId, maxWidth = 500)
 }
@@ -1772,6 +1777,11 @@ class SeasonViewModel @Inject constructor(
 
     fun posterUrl(itemId: String) =
         JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId)
+
+    // Full-screen portrait background — the default 400px poster would look soft stretched to
+    // a whole screen.
+    fun backgroundPosterUrl(itemId: String) =
+        JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId, maxWidth = 1080)
 
     fun thumbnailUrl(itemId: String) =
         JellyfinImageHelper.primaryImageUrl(_state.value.jellyfinUrl, itemId, maxWidth = 500)

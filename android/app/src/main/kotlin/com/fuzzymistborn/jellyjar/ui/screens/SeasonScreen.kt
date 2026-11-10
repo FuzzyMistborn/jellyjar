@@ -57,7 +57,14 @@ fun SeasonScreen(
 
     Box(modifier = Modifier.fillMaxSize().background(BackgroundGradient)) {
 
-        DimmedBackdrop(viewModel.backdropUrl())
+        // Portrait windows show the season poster (series poster for a synthetic offline season)
+        // as the background instead of a zoomed-in crop of the 16:9 series backdrop.
+        DimmedBackdrop(
+            imageUrl = viewModel.backdropUrl(),
+            portraitImageUrl = viewModel.backgroundPosterUrl(
+                if (seasonId.startsWith("offline-season-")) seriesId else seasonId,
+            ),
+        )
 
         LazyColumn(
             state = rememberLazyListState(),

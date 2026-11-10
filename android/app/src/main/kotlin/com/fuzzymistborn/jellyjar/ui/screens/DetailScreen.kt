@@ -68,10 +68,13 @@ fun DetailScreen(
 
     Box(modifier = Modifier.fillMaxSize().background(BackgroundGradient)) {
 
-        // Backdrop — episodes use the series backdrop. Full-screen and evenly dimmed at every
-        // width; content scrolls over it.
+        // Backdrop — episodes use the series' art. Full-screen and evenly dimmed at every
+        // width; content scrolls over it. Portrait windows use the poster instead (see
+        // DimmedBackdrop).
+        val backdropItemId = state.item?.let { if (it.type == "Episode") it.seriesId ?: it.id else it.id }
         DimmedBackdrop(
-            state.item?.let { viewModel.backdropUrl(if (it.type == "Episode") it.seriesId ?: it.id else it.id) },
+            imageUrl = backdropItemId?.let { viewModel.backdropUrl(it) },
+            portraitImageUrl = backdropItemId?.let { viewModel.backgroundPosterUrl(it) },
         )
 
         val item = state.item

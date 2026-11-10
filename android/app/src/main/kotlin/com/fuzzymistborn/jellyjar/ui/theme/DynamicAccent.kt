@@ -76,10 +76,13 @@ private fun extractAccentColor(bitmap: Bitmap): Color? {
 
     // Guard against near-black/near-white or muddy swatches reading poorly as a button fill on
     // the app's dark background — nudge lightness/saturation into a legible range rather than
-    // rejecting the whole title's color outright.
+    // rejecting the whole title's color outright. The lightness ceiling was 0.75 with a 0.35
+    // saturation floor, which let pale pastel-grey accents through: a washed-out Play button
+    // that blended into bright backdrops. Buttons also pick their label colour by contrast
+    // (readableContentColor in ActionButtons.kt).
     val hsl = FloatArray(3)
     ColorUtils.colorToHSL(swatch.rgb, hsl)
-    hsl[1] = hsl[1].coerceAtLeast(0.35f)
-    hsl[2] = hsl[2].coerceIn(0.45f, 0.75f)
+    hsl[1] = hsl[1].coerceAtLeast(0.45f)
+    hsl[2] = hsl[2].coerceIn(0.45f, 0.65f)
     return Color(ColorUtils.HSLToColor(hsl))
 }

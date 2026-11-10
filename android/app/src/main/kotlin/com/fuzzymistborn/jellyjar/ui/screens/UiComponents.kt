@@ -13,6 +13,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -260,19 +261,30 @@ fun UnwatchedCountBadge(count: Int, modifier: Modifier = Modifier) {
 // the very bottom) so content scrolling over it stays legible anywhere on screen. Shared by the
 // Detail and Season screens — replaced backdrops that faded to black partway down and left the
 // rest of the screen as dead space.
+//
+// In a portrait window (taller than wide) a 16:9 backdrop cropped to fill the screen is a
+// heavily zoomed sliver of the image, so [portraitImageUrl] — a 2:3 poster, which matches that
+// shape — is used instead when given, softly blurred so it reads as atmosphere rather than a
+// second copy of the hero poster.
 @Composable
-fun DimmedBackdrop(imageUrl: String?) {
-    if (!imageUrl.isNullOrBlank()) {
-        coil.compose.AsyncImage(
-            model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
-                .data(imageUrl)
-                .crossfade(300)
-                .build(),
-            contentDescription = null,
-            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-            alignment = Alignment.TopCenter,
-            modifier = Modifier.fillMaxSize(),
-        )
+fun DimmedBackdrop(imageUrl: String?, portraitImageUrl: String? = null) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val usePoster = maxHeight > maxWidth && !portraitImageUrl.isNullOrBlank()
+        val url = if (usePoster) portraitImageUrl else imageUrl
+        if (!url.isNullOrBlank()) {
+            coil.compose.AsyncImage(
+                model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
+                    .data(url)
+                    .crossfade(300)
+                    .build(),
+                contentDescription = null,
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                alignment = Alignment.TopCenter,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(if (usePoster) Modifier.blur(16.dp) else Modifier),
+            )
+        }
     }
     Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)))
     Box(modifier = Modifier.fillMaxSize().background(vignetteScrim()))
