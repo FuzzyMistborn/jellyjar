@@ -511,7 +511,7 @@ private fun SeriesOverview(item: JellyfinItem, accentColor: Color, maxLines: Int
         overflow = TextOverflow.Ellipsis,
         onTextLayout = { result -> if (!expanded) overflows = result.hasVisualOverflow },
         // A readable line length, and it keeps the text off the brightest part of a wide backdrop.
-        modifier = Modifier.widthIn(max = 640.dp).clickable { expanded = !expanded },
+        modifier = Modifier.widthIn(max = 640.dp).clickable(enabled = overflows || expanded) { expanded = !expanded },
     )
     if (overflows || expanded) {
         Text(

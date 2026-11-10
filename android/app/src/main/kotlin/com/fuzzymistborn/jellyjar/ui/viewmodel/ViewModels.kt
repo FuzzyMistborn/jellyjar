@@ -759,7 +759,19 @@ class DetailViewModel @Inject constructor(
     }
 
     private fun loadNextUp(seriesId: String) = viewModelScope.launch {
-        jellyfinRepo.getNextUp(seriesId).onSuccess { ep -> _state.update { it.copy(nextUp = ep) } }
+        jellyfinRepo.getNextUp(seriesId).onSuccess { ep ->
+            // Next Up is empty for a series nobody has started, which left it with no Play button.
+            // Fall back to its first episode, skipping Specials (season 0) when there's a real season.
+            val first = ep ?: run {
+                val seasons = jellyfinRepo.getItems(parentId = seriesId, types = "Season")
+                    .getOrNull()?.Items.orEmpty()
+                val season = seasons.firstOrNull { (it.indexNumber ?: 0) > 0 } ?: seasons.firstOrNull()
+                season?.let {
+                    jellyfinRepo.getItems(parentId = it.id, types = "Episode", limit = 1).getOrNull()?.Items?.firstOrNull()
+                }
+            }
+            _state.update { it.copy(nextUp = first) }
+        }
     }
 
     private fun loadSeasons(seriesId: String) = viewModelScope.launch {
