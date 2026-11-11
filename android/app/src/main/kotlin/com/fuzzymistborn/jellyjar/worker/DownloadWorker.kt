@@ -38,6 +38,9 @@ class DownloadWorker @AssistedInject constructor(
         const val CHANNEL_ID = "jellyjar_downloads"
         const val NOTIFICATION_GROUP = "jellyjar_downloads_group"
 
+        // Fixed id for the group summary — there is only ever one.
+        private const val SUMMARY_NOTIFICATION_ID = 3
+
         const val MAX_RETRY_ATTEMPTS = 5
 
         // Encodes are limited by the queue manager, but copies to the device are not, and they
@@ -196,7 +199,27 @@ class DownloadWorker @AssistedInject constructor(
             .setAutoCancel(true)
             .setGroup(NOTIFICATION_GROUP)
             .build()
-        NotificationManagerCompat.from(context).notify(resultNotificationId(jobId), notification)
+        val manager = NotificationManagerCompat.from(context)
+        manager.notify(resultNotificationId(jobId), notification)
+
+        // Without a summary of our own Android invents one for the group, and tapping *that*
+        // just resumes the app and dismisses every child instead of opening Downloads. This
+        // one carries the same open-Downloads intent, and the system drops it once its last
+        // child is gone.
+        val summary = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setContentTitle("Downloads")
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    context, SUMMARY_NOTIFICATION_ID, openIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+            )
+            .setAutoCancel(true)
+            .setGroup(NOTIFICATION_GROUP)
+            .setGroupSummary(true)
+            .build()
+        manager.notify(SUMMARY_NOTIFICATION_ID, summary)
     }
 
     private fun createForegroundInfo(

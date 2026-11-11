@@ -1249,6 +1249,10 @@ class DownloadRepository @Inject constructor(
         }
         entity.thumbnailPath?.let { File(it).delete() }
         downloadDao.delete(entity)
+        // The local resume point belonged to the offline copy; left behind it would make a later
+        // stream or re-download "Resume" from a spot the user may have long since finished. Only
+        // for a finished download — a failed/queued row never had offline playback of its own.
+        if (entity.status == DownloadStatus.COMPLETE.name) playbackPositionDao.delete(jellyfinId)
     }
 }
 

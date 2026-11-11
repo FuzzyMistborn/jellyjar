@@ -68,6 +68,9 @@ data class LibraryState(
     // Up to 4 thumbnails from completed downloads, shown as a mosaic on the home grid's
     // Downloads tile so it reads as artwork-first like every other tile, not a flat icon card.
     val downloadThumbnails: List<String> = emptyList(),
+    // Local artwork for the offline-only synthetic library tiles (library id → file:// URI). The
+    // server has no image under those ids, so without this the tiles render as plain black.
+    val offlineLibraryArt: Map<String, String> = emptyMap(),
 ) {
     val hasMore: Boolean get() = items.size < totalCount
 
@@ -263,6 +266,15 @@ class LibraryViewModel @Inject constructor(
                             .sortedByDescending { d -> d.addedAt }
                             .mapNotNull { d -> d.thumbnailUri }
                             .take(4),
+                        offlineLibraryArt = buildMap {
+                            val recent = downloads
+                                .filter { d -> d.status == DownloadStatus.COMPLETE.name && d.thumbnailUri != null }
+                                .sortedByDescending { d -> d.addedAt }
+                            recent.firstOrNull { d -> d.type == "Movie" }?.thumbnailUri
+                                ?.let { put("offline_movies", it) }
+                            recent.firstOrNull { d -> d.type == "Episode" }?.thumbnailUri
+                                ?.let { put("offline_tv", it) }
+                        },
                     )
                 }
             }
@@ -1519,10 +1531,7 @@ class DownloadsViewModel @Inject constructor(
 
                 val completed = all.filter { d -> d.status == com.fuzzymistborn.jellyjar.model.DownloadStatus.COMPLETE.name }
                 val totalMb = completed.sumOf { it.sizeBytes } / (1024 * 1024)
-                val watched = completed.filter { d ->
-                    val runtimeMs = (d.runtimeMinutes ?: 0).toLong() * 60_000L
-                    runtimeMs > 0 && d.playbackPositionMs >= runtimeMs * 0.8
-                }
+                val watched = completed.filter { it.isWatched }
                 val watchedMb = watched.sumOf { it.sizeBytes } / (1024 * 1024)
                 val stats = if (watched.isNotEmpty()) StorageStats(totalMb, watchedMb, watched.size, watched) else null
 
@@ -1635,10 +1644,7 @@ class StorageViewModel @Inject constructor(
             downloadRepo.completedDownloads.collect { completed ->
                 val movies = completed.filter { it.type == "Movie" }
                 val episodes = completed.filter { it.type == "Episode" }
-                val watched = completed.filter { d ->
-                    val runtimeMs = (d.runtimeMinutes ?: 0).toLong() * 60_000L
-                    runtimeMs > 0 && d.playbackPositionMs >= runtimeMs * 0.8
-                }
+                val watched = completed.filter { it.isWatched }
                 val info = downloadRepo.getDeviceStorageInfo()
                 _state.update {
                     it.copy(

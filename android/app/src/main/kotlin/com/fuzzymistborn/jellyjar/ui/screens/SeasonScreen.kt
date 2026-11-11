@@ -41,6 +41,20 @@ fun SeasonScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
 
+    // Removing a finished offline copy asks first, like Downloads and Detail. A failed or queued
+    // row has no file behind it, so its trash button stays a one-tap clear.
+    var pendingDeleteId by remember { mutableStateOf<String?>(null) }
+    val requestDelete: (String) -> Unit = { id ->
+        if (state.episodeDownloads[id]?.status == DownloadStatus.COMPLETE.name) pendingDeleteId = id
+        else viewModel.deleteDownload(id)
+    }
+    pendingDeleteId?.let { id ->
+        DeleteConfirmDialog(
+            onConfirm = { viewModel.deleteDownload(id) },
+            onDismiss = { pendingDeleteId = null },
+        )
+    }
+
     val visibleEpisodes = remember(state.episodes, state.episodeDownloads, state.isOnline) {
         if (state.isOnline) state.episodes
         else state.episodes.filter { ep ->
@@ -279,7 +293,7 @@ fun SeasonScreen(
                                         if (preset == "retry") viewModel.retryEpisodeDownload(episode.id)
                                         else viewModel.queueEpisodeDownload(episode, preset)
                                     },
-                                    onDeleteClick = { viewModel.deleteDownload(episode.id) },
+                                    onDeleteClick = { requestDelete(episode.id) },
                                     onPlayOfflineClick = onPlayClick,
                                 )
                             }
@@ -306,7 +320,7 @@ fun SeasonScreen(
                                 if (preset == "retry") viewModel.retryEpisodeDownload(episode.id)
                                 else viewModel.queueEpisodeDownload(episode, preset)
                             },
-                            onDeleteClick = { viewModel.deleteDownload(episode.id) },
+                            onDeleteClick = { requestDelete(episode.id) },
                             onPlayOfflineClick = onPlayClick,
                             modifier = Modifier.padding(horizontal = 32.dp).padding(bottom = 10.dp),
                             accentColor = accent,

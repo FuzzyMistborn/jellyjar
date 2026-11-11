@@ -8,6 +8,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -22,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -702,6 +704,7 @@ fun AdminScreen(
         ) {
             var newPin by remember { mutableStateOf("") }
             var pinVisible by remember { mutableStateOf(false) }
+            val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
 
             OutlinedTextField(
                 value = newPin,
@@ -709,7 +712,13 @@ fun AdminScreen(
                 label = { Text("New PIN") },
                 placeholder = { Text("Leave blank to disable", color = OnSurfaceMuted) },
                 visualTransformation = if (pinVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
+                // The pad's ✓ saves, but only a typed PIN — an empty ✓ must not clear the PIN.
+                // A custom action replaces the default "close the keyboard", so do that here.
+                keyboardActions = KeyboardActions(onDone = {
+                    if (newPin.isNotEmpty()) { viewModel.savePin(newPin); newPin = "" }
+                    keyboard?.hide()
+                }),
                 trailingIcon = {
                     IconButton(onClick = { pinVisible = !pinVisible }) {
                         Icon(

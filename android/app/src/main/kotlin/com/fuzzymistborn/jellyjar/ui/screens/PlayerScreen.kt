@@ -547,11 +547,15 @@ fun PlayerScreen(
     // A source failure (stream dropped, file gone) leaves ExoPlayer idle and paused; without this
     // the screen just sits there with no hint why.
     var playbackError by remember { mutableStateOf<String?>(null) }
+    // A decoder failure (this device can't decode the codec/profile/resolution) is not a dropped
+    // stream — retrying the same stream can never help, so it skips the auto-retry below and
+    // instead steps down to a transcode (see the effect after applyResolution).
+    var decoderError by remember { mutableStateOf(false) }
     // A dropped stream retries itself, backing off, once the device is online again — a kid
     // shouldn't need a grown-up to tap Retry after the Wi-Fi blips.
     val deviceOnline by viewModel.isOnline.collectAsStateWithLifecycle()
     LaunchedEffect(playbackError, deviceOnline) {
-        if (playbackError == null || !isStreamed || !deviceOnline) return@LaunchedEffect
+        if (playbackError == null || !isStreamed || !deviceOnline || decoderError) return@LaunchedEffect
         var wait = 2_000L
         repeat(5) {
             delay(wait)
@@ -563,10 +567,20 @@ fun PlayerScreen(
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                playbackError = if (isStreamed) "Playback stopped. Check your connection." else "Couldn't play this file."
+                decoderError = error.errorCode in
+                    androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED..
+                    androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
+                playbackError = when {
+                    decoderError -> "This device can't play this video."
+                    isStreamed -> "Playback stopped. Check your connection."
+                    else -> "Couldn't play this file."
+                }
             }
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_READY) playbackError = null
+                if (playbackState == Player.STATE_READY) {
+                    playbackError = null
+                    decoderError = false
+                }
             }
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
                 videoFormat = player.videoFormat
@@ -630,6 +644,11 @@ fun PlayerScreen(
                     )
                     controllerAutoShow = true
                     controllerHideOnTouch = true
+                    // Each title is a one-item timeline, so Media3's next button could never
+                    // enable — it just sat greyed out beside the seek buttons. Moving on to the
+                    // next episode goes through the Up Next card, which honours Auto-play and the
+                    // Kid Mode limits.
+                    setShowNextButton(false)
                     setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
                         controlsVisible = visibility == android.view.View.VISIBLE
                     })
@@ -950,25 +969,52 @@ fun PlayerScreen(
         }
     }
 
-    if (showTrackSheet) {
-        // Reloads the stream after any server-side change (quality or track), keeping position
-        // and play/pause state, and re-attaching whatever subtitles the new stream reports.
-        fun applyResolution(
-            resolution: com.fuzzymistborn.jellyjar.data.repository.StreamResolution,
-        ) {
-            val resumeMs = player.currentPosition
-            val wasPlaying = player.playWhenReady
-            player.setMediaItem(buildMediaItem(resolution.url, resolution.externalSubtitles))
-            player.prepare()
-            if (resumeMs > 0) player.seekTo(resumeMs)
-            player.playWhenReady = wasPlaying
-            streamResolution = resolution
-            subtitlesAttached = true
-            playbackDiagnostics = resolution.diagnostics
-            selectedAudioIndex = resolution.selectedAudioIndex
-            selectedSubtitleIndex = resolution.selectedSubtitleIndex
-        }
+    // Reloads the stream after any server-side change (quality or track), keeping position
+    // and play/pause state, and re-attaching whatever subtitles the new stream reports.
+    fun applyResolution(
+        resolution: com.fuzzymistborn.jellyjar.data.repository.StreamResolution,
+    ) {
+        val resumeMs = player.currentPosition
+        val wasPlaying = player.playWhenReady
+        player.setMediaItem(buildMediaItem(resolution.url, resolution.externalSubtitles))
+        player.prepare()
+        if (resumeMs > 0) player.seekTo(resumeMs)
+        player.playWhenReady = wasPlaying
+        streamResolution = resolution
+        subtitlesAttached = true
+        playbackDiagnostics = resolution.diagnostics
+        selectedAudioIndex = resolution.selectedAudioIndex
+        selectedSubtitleIndex = resolution.selectedSubtitleIndex
+    }
 
+    // Direct play of a file this device's decoder can't handle (e.g. 4K HEVC 10-bit on a tablet
+    // without a hardware decoder for it) fails the same way every time. Re-negotiate one quality
+    // step down — which makes the server transcode — and keep going until there's nowhere lower.
+    LaunchedEffect(decoderError) {
+        if (!decoderError || !isStreamed || jellyfinId == null) return@LaunchedEffect
+        val lower = when (currentQuality) {
+            com.fuzzymistborn.jellyjar.model.PlaybackQuality.MEDIUM_720P -> null
+            com.fuzzymistborn.jellyjar.model.PlaybackQuality.HIGH_1080P ->
+                com.fuzzymistborn.jellyjar.model.PlaybackQuality.MEDIUM_720P
+            else -> com.fuzzymistborn.jellyjar.model.PlaybackQuality.HIGH_1080P
+        } ?: return@LaunchedEffect
+        playbackError = "Trying a lower quality…"
+        qualityChanging = true
+        runCatching {
+            viewModel.changeStreamQuality(jellyfinId, lower, selectedAudioIndex, selectedSubtitleIndex)
+        }.onSuccess { resolution ->
+            applyResolution(resolution)
+            currentQuality = lower
+            decoderError = false
+            playbackError = null
+        }.onFailure {
+            if (it is kotlinx.coroutines.CancellationException) throw it
+            playbackError = "This device can't play this video."
+        }
+        qualityChanging = false
+    }
+
+    if (showTrackSheet) {
         PlayerSettingsSheet(
             player = player,
             quality = if (isStreamed) currentQuality else null,

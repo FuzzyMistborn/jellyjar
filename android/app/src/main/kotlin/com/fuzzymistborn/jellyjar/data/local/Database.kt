@@ -48,6 +48,14 @@ data class DownloadEntity(
     // thumbnailPath is a bare filesystem path (see DownloadRepository.saveThumbnailLocally); Coil
     // only resolves recognized URI schemes, so callers need the `file://` form to load it locally.
     val thumbnailUri: String? get() = thumbnailPath?.let { "file://$it" }
+
+    // Watched = the server/local `played` flag, or nearly all of it seen. A title played to the
+    // end has its position reset to 0 and only `played` set, so the position alone misses it.
+    val isWatched: Boolean get() {
+        if (played) return true
+        val runtimeMs = (runtimeMinutes ?: 0).toLong() * 60_000L
+        return runtimeMs > 0 && playbackPositionMs >= runtimeMs * 0.8
+    }
 }
 
 @Entity(tableName = "cached_items")
