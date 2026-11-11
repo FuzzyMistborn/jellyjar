@@ -5,26 +5,35 @@ transcoded local copies.
 
 ## Screenshots
 
+<img src="screenshots/jellyjar/homescreen.jpg" width="100%" alt="Home screen with Continue Watching, Recently Added and library tiles">
+
 <table>
 <tr>
 <td width="50%">
 
-**Home**
-<img src="screenshots/jellyjar/homescreen.jpg" width="100%">
+**Movie Detail** — play, favorite, mark watched or download
+<img src="screenshots/jellyjar/movie-detail.jpg" width="100%">
 
 </td>
 <td width="50%">
 
-**Movies**
-<img src="screenshots/jellyjar/movies.jpg" width="100%">
+**Season Detail** — per-episode play and download, plus a Play/Resume button for the next episode
+<img src="screenshots/jellyjar/tvshow-seasondetail.jpg" width="100%">
 
 </td>
 </tr>
+</table>
+
+<details>
+<summary><b>Browsing</b> — library grids, series and episode pages</summary>
+<br>
+
+<table>
 <tr>
 <td width="50%">
 
-**Movie Detail**
-<img src="screenshots/jellyjar/movie-detail.jpg" width="100%">
+**Movies** — server-side search, sort and genre filters
+<img src="screenshots/jellyjar/movies.jpg" width="100%">
 
 </td>
 <td width="50%">
@@ -43,35 +52,30 @@ transcoded local copies.
 </td>
 <td width="50%">
 
-**Season Detail**
-<img src="screenshots/jellyjar/tvshow-seasondetail.jpg" width="100%">
-
-</td>
-</tr>
-<tr>
-<td width="50%">
-
 **Episode Detail**
 <img src="screenshots/jellyjar/tvshow-episodedetail.jpg" width="100%">
 
 </td>
-<td width="50%">
-
-**Storage Management**
-<img src="screenshots/jellyjar/storage.jpg" width="100%">
-
-</td>
 </tr>
+</table>
+
+</details>
+
+<details>
+<summary><b>Settings</b> — connection, downloads, playback and Kid Mode</summary>
+<br>
+
+<table>
 <tr>
 <td width="50%">
 
-**Settings — Jellyfin Connection**
+**Jellyfin Connection**
 <img src="screenshots/jellyjar/settings.jpg" width="100%">
 
 </td>
 <td width="50%">
 
-**Settings — Downloads & Home Screen**
+**Downloads & Home Screen**
 <img src="screenshots/jellyjar/settings2.jpg" width="100%">
 
 </td>
@@ -79,8 +83,28 @@ transcoded local copies.
 <tr>
 <td width="50%">
 
-**Settings — Playback & PIN**
+**Playback & Kid Mode**
 <img src="screenshots/jellyjar/settings3.jpg" width="100%">
+
+</td>
+<td width="50%">
+
+</td>
+</tr>
+</table>
+
+</details>
+
+<details>
+<summary><b>Storage and Press</b></summary>
+<br>
+
+<table>
+<tr>
+<td width="50%">
+
+**Storage Management**
+<img src="screenshots/jellyjar/storage.jpg" width="100%">
 
 </td>
 <td width="50%">
@@ -91,6 +115,8 @@ transcoded local copies.
 </td>
 </tr>
 </table>
+
+</details>
 
 ## Architecture
 
