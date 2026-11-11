@@ -104,6 +104,7 @@ class LibraryViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val networkMonitor: NetworkMonitor,
     private val favoriteRepo: com.fuzzymistborn.jellyjar.data.repository.FavoriteRepository,
+    private val playbackSync: com.fuzzymistborn.jellyjar.data.repository.PlaybackSyncRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(LibraryState())
@@ -161,6 +162,13 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             networkMonitor.authExpired.collect { expired ->
                 _state.update { it.copy(authExpired = expired) }
+            }
+        }
+        // The home rows are only fetched by loadLibrary(), and this ViewModel outlives a trip to
+        // the player, so Continue Watching stayed stale until a pull-to-refresh or relaunch.
+        viewModelScope.launch {
+            playbackSync.reported.collect {
+                if (_state.value.jellyfinAvailable && libraryJob?.isActive != true) loadHomeRows()
             }
         }
         viewModelScope.launch {
