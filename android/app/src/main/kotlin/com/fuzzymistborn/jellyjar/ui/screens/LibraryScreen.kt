@@ -317,6 +317,7 @@ fun LibraryScreen(
                         favoriteItems = state.favoriteItems,
                         downloadStatuses = state.downloadStatuses,
                         downloadThumbnails = state.downloadThumbnails,
+                        offlineLibraryArt = state.offlineLibraryArt,
                         showContinueWatching = state.showContinueWatching,
                         showRecentlyAdded = state.showRecentlyAdded,
                         showMyList = state.showMyList,
@@ -382,6 +383,7 @@ private fun HomeScreen(
     favoriteItems: List<JellyfinItem>,
     downloadStatuses: Map<String, String>,
     downloadThumbnails: List<String>,
+    offlineLibraryArt: Map<String, String>,
     showContinueWatching: Boolean,
     showRecentlyAdded: Boolean,
     showMyList: Boolean,
@@ -507,7 +509,12 @@ private fun HomeScreen(
 
         if (libraries.isNotEmpty()) {
             items(libraries, key = { it.id }) { lib ->
-                LibraryTile(library = lib, jellyfinUrl = jellyfinUrl, onClick = { onLibraryClick(lib) })
+                LibraryTile(
+                    library = lib,
+                    jellyfinUrl = jellyfinUrl,
+                    localArt = offlineLibraryArt[lib.id],
+                    onClick = { onLibraryClick(lib) },
+                )
             }
         }
         item {
@@ -657,7 +664,7 @@ private fun SetupPrompt(onSetUp: () -> Unit) {
 }
 
 @Composable
-private fun LibraryTile(library: JellyfinLibrary, jellyfinUrl: String, onClick: () -> Unit) {
+private fun LibraryTile(library: JellyfinLibrary, jellyfinUrl: String, localArt: String?, onClick: () -> Unit) {
     val libraryId = library.id
     var usePrimary by remember { mutableStateOf(false) }
 
@@ -672,7 +679,7 @@ private fun LibraryTile(library: JellyfinLibrary, jellyfinUrl: String, onClick: 
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(
-                    if (usePrimary)
+                    localArt ?: if (usePrimary)
                         "$jellyfinUrl/Items/$libraryId/Images/Primary?fillWidth=600&quality=85"
                     else
                         "$jellyfinUrl/Items/$libraryId/Images/Backdrop/0?fillWidth=600&quality=85"
@@ -945,8 +952,19 @@ private fun MediaCard(
         Spacer(Modifier.height(Spacing.sm))
         Text(text = item.name, style = MaterialTheme.typography.titleMedium,
             color = OnSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        item.year?.let {
-            Text(text = it.toString(), style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+        // An episode's own year says little, and in a mixed list (global search) its bare title
+        // looks like a same-named movie — name the series and episode number instead.
+        val seriesName = item.seriesName
+        val subtitle = if (item.type == "Episode" && seriesName != null) {
+            val season = item.parentIndexNumber
+            val episode = item.indexNumber
+            if (season != null && episode != null) {
+                "$seriesName · S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}"
+            } else seriesName
+        } else item.year?.toString()
+        subtitle?.let {
+            Text(text = it, style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
