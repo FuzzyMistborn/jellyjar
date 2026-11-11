@@ -416,58 +416,87 @@ fun AdminScreen(
 
         // ── Downloads ─────────────────────────────────────────────────────────
         SettingsCard(title = "Downloads", icon = Icons.Default.Download) {
-            val context = androidx.compose.ui.platform.LocalContext.current
             val folderPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
                 contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree(),
-            ) { uri ->
-                if (uri != null) {
-                    context.contentResolver.takePersistableUriPermission(
-                        uri,
-                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                            android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-                    )
-                    viewModel.setDownloadPath(uri.toString())
+            ) { uri -> if (uri != null) viewModel.addDownloadFolder(uri) }
+
+            // One row per download folder, in priority order: downloads fill the first folder
+            // that is mounted and has room, then spill to the next.
+            state.folderStorage.forEachIndexed { index, folder ->
+                val info = folder.info
+                Surface(
+                    color = Background,
+                    shape = RoundedCornerShape(Radius.sm),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(start = Spacing.md, top = Spacing.xs, bottom = Spacing.xs),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                if (info.label.contains("SD", ignoreCase = true)) Icons.Default.SdStorage
+                                else Icons.Default.FolderOpen,
+                                contentDescription = null,
+                                tint = if (info.available) Primary else OnSurfaceMuted,
+                                modifier = Modifier.size(IconSize.md),
+                            )
+                            Column {
+                                Text(
+                                    "${index + 1}. ${info.label}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = OnSurface,
+                                )
+                                fun gb(bytes: Long) = "%.1f GB".format(bytes / 1_073_741_824.0)
+                                Text(
+                                    if (info.available) {
+                                        "${gb(info.freeBytes)} free of ${gb(info.totalBytes)} · " +
+                                            "${folder.downloadCount} download(s), ${gb(folder.usedByJellyJarBytes)}"
+                                    } else {
+                                        "Not available — insert the card or re-add the folder"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (info.available) OnSurfaceMuted else MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
+                        if (state.folderStorage.size > 1) {
+                            IconButton(
+                                onClick = { viewModel.moveDownloadFolder(info.uri, -1) },
+                                enabled = index > 0,
+                            ) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Higher priority") }
+                            IconButton(
+                                onClick = { viewModel.moveDownloadFolder(info.uri, 1) },
+                                enabled = index < state.folderStorage.lastIndex,
+                            ) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Lower priority") }
+                        }
+                        IconButton(onClick = { viewModel.removeDownloadFolder(info.uri) }) {
+                            Icon(Icons.Default.Close, contentDescription = "Remove folder")
+                        }
+                    }
                 }
             }
 
-            // Folder row
-            Surface(
-                color = Background,
-                shape = RoundedCornerShape(Radius.sm),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Row(
-                    modifier = Modifier.padding(Spacing.md),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(
-                        modifier = Modifier.weight(1f),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Default.FolderOpen, contentDescription = null,
-                            tint = Primary, modifier = Modifier.size(IconSize.md))
-                        Column {
-                            Text("Download Folder", style = MaterialTheme.typography.bodyMedium, color = OnSurface)
-                            if (state.downloadPath.isNotBlank()) {
-                                val displayPath = remember(state.downloadPath) {
-                                    runCatching {
-                                        android.net.Uri.parse(state.downloadPath).lastPathSegment
-                                            ?.replace("primary:", "/storage/emulated/0/")
-                                            ?: state.downloadPath
-                                    }.getOrDefault(state.downloadPath)
-                                }
-                                Text(displayPath, style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
-                            } else {
-                                Text("Not set", style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
-                            }
-                        }
-                    }
-                    TextButton(onClick = { folderPickerLauncher.launch(null) }) {
-                        Text(if (state.downloadPath.isBlank()) "Choose" else "Change")
-                    }
-                }
+            state.folderError?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            if (state.folderStorage.size > 1) {
+                Text(
+                    "Downloads go to the first folder with room, then the next. A series stays together " +
+                        "when it can.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OnSurfaceMuted,
+                )
+            }
+            TextButton(onClick = { folderPickerLauncher.launch(null) }) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(IconSize.sm))
+                Spacer(Modifier.width(Spacing.sm))
+                Text(if (state.folderStorage.isEmpty()) "Choose Download Folder" else "Add Folder")
             }
 
             state.storageInfo?.let {

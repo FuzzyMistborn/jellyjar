@@ -44,6 +44,11 @@ data class DownloadEntity(
     // OutputTracks JSON from the finished Press job — which tracks are forced/default, since
     // the player can't read that from the MP4. Null for downloads made before this existed.
     val tracksJson: String? = null,
+    // The download folder (SAF tree URI) this file lives in. While the row is not yet COMPLETE it
+    // is instead the folder the user asked for ("Save to…"); null then means "pick for me". Null
+    // on a COMPLETE row = written before multiple folders existed — DownloadStorage.rootOf()
+    // works it out from localUri.
+    val storageRoot: String? = null,
 ) {
     // thumbnailPath is a bare filesystem path (see DownloadRepository.saveThumbnailLocally); Coil
     // only resolves recognized URI schemes, so callers need the `file://` form to load it locally.
@@ -157,6 +162,30 @@ interface DownloadDao {
 
     @Query("SELECT COALESCE(SUM(sizeBytes), 0) FROM downloads WHERE status = 'COMPLETE'")
     suspend fun totalCompletedBytes(): Long
+
+    // Where this series already has files, so a show stays on one volume when it can.
+    @Query("""
+        SELECT storageRoot FROM downloads
+        WHERE status = 'COMPLETE' AND seriesName = :seriesName AND storageRoot IS NOT NULL
+        ORDER BY addedAt DESC LIMIT 1
+    """)
+    suspend fun latestRootForSeries(seriesName: String): String?
+
+    @Query("UPDATE downloads SET storageRoot = :root WHERE jellyfinId = :id")
+    suspend fun updateStorageRoot(id: String, root: String?)
+
+    // Repoints a finished download after a move without rewriting the rest of the row, which may
+    // have changed (played flag, position, thumbnail) while the file was being copied.
+    @Query("UPDATE downloads SET localPath = :path, localUri = :uri, storageRoot = :root WHERE jellyfinId = :id")
+    // Returns the rows changed: 0 means the download was deleted while it was being moved.
+    suspend fun updateLocation(id: String, path: String, uri: String?, root: String?): Int
+
+    // Downloads that haven't finished and may still write a file: queued, encoding or copying.
+    @Query("SELECT * FROM downloads WHERE status IN ('QUEUED', 'TRANSCODING', 'DOWNLOADING')")
+    suspend fun activeRows(): List<DownloadEntity>
+
+    @Query("SELECT * FROM downloads WHERE status = 'COMPLETE' AND localUri IS NOT NULL")
+    suspend fun completedWithUri(): List<DownloadEntity>
 
     @Query("SELECT * FROM downloads WHERE status = 'QUEUED' ORDER BY queuePosition ASC, addedAt ASC")
     suspend fun queuedInOrder(): List<DownloadEntity>
@@ -295,7 +324,7 @@ interface CachedItemDao {
         DownloadEntity::class, CachedItemEntity::class, PlaybackPositionEntity::class,
         FavoriteEntity::class, PendingPlaybackSync::class,
     ],
-    version = 11,
+    version = 12,
     // Exported to app/schemas (see room.schemaLocation in build.gradle.kts) so a real migration
     // can be written and reviewed once the app is distributed — see the destructive-migration
     // note in AppModule.
@@ -329,5 +358,12 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
 val MIGRATION_10_11 = object : Migration(10, 11) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE `downloads` ADD COLUMN `tracksJson` TEXT")
+    }
+}
+
+// Adds DownloadEntity.storageRoot (nullable TEXT, like tracksJson above).
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `downloads` ADD COLUMN `storageRoot` TEXT")
     }
 }

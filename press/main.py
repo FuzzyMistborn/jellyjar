@@ -468,6 +468,9 @@ class JobStatus(BaseModel):
     # What's actually in the finished file, in file order (see probe_output_tracks). Set once the
     # job is complete; None for jobs completed before this existed or if the probe failed.
     tracks: Optional[dict] = None
+    # Size of the finished file, so a client can pick a destination with room before it starts
+    # copying (the download response may arrive without a Content-Length behind a proxy).
+    size_bytes: Optional[int] = None
 
 
 PROBE_TIMEOUT_SECONDS = 30
@@ -1681,7 +1684,13 @@ def _queue_position(job_id: str) -> Optional[int]:
 
 
 def _to_job_status(job: dict) -> JobStatus:
-    return JobStatus(**job, queue_position=_queue_position(job["job_id"]))
+    size = None
+    if job.get("status") == "complete" and job.get("output_path"):
+        try:
+            size = os.path.getsize(job["output_path"])
+        except OSError:
+            pass
+    return JobStatus(**job, queue_position=_queue_position(job["job_id"]), size_bytes=size)
 
 
 @app.get("/jobs/{job_id}", response_model=JobStatus)

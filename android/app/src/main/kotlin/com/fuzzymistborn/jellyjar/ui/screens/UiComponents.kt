@@ -9,6 +9,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -143,19 +144,50 @@ fun DeleteConfirmDialog(
     onDismiss = onDismiss,
 )
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PresetPickerDialog(
     onPresetSelected: (String) -> Unit,
     onDismiss: () -> Unit,
+    // With more than one download folder and onPresetAndFolderSelected set, the dialog also offers
+    // a "Save to" choice (Automatic, or one folder) and reports it instead of calling
+    // onPresetSelected.
+    folders: List<com.fuzzymistborn.jellyjar.data.repository.FolderInfo> = emptyList(),
+    onPresetAndFolderSelected: ((preset: String, folder: String?) -> Unit)? = null,
 ) {
+    var chosenFolder by remember { mutableStateOf<String?>(null) }
+    val askFolder = folders.size > 1 && onPresetAndFolderSelected != null
+    // The card can be ejected while the dialog is open; don't submit a folder that just vanished.
+    val effectiveFolder = chosenFolder?.takeIf { uri -> folders.any { it.uri == uri && it.available } }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Choose Quality", style = MaterialTheme.typography.titleLarge, color = OnSurface) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                if (askFolder) {
+                    Text("Save to", style = MaterialTheme.typography.labelMedium, color = OnSurfaceMuted)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                        FilterChip(
+                            selected = effectiveFolder == null,
+                            onClick = { chosenFolder = null },
+                            label = { Text("Automatic") },
+                        )
+                        folders.forEach { folder ->
+                            FilterChip(
+                                selected = effectiveFolder == folder.uri,
+                                onClick = { chosenFolder = folder.uri },
+                                enabled = folder.available,
+                                label = { Text(folder.label) },
+                            )
+                        }
+                    }
+                }
                 listOf("1080p" to "Full HD · ~4GB/hr", "720p" to "HD · ~2GB/hr").forEach { (preset, desc) ->
                     OutlinedButton(
-                        onClick = { onPresetSelected(preset) },
+                        onClick = {
+                            if (askFolder) onPresetAndFolderSelected!!(preset, effectiveFolder)
+                            else onPresetSelected(preset)
+                        },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Column(modifier = Modifier.weight(1f)) {

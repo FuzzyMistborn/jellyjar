@@ -3,7 +3,6 @@ package com.fuzzymistborn.jellyjar.data.repository
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
-import android.os.StatFs
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -35,12 +34,16 @@ import com.fuzzymistborn.jellyjar.data.local.PendingPlaybackSyncDao
 import com.fuzzymistborn.jellyjar.model.*
 import com.fuzzymistborn.jellyjar.worker.DownloadWorker
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -664,6 +667,10 @@ private fun documentUriToFilePath(uri: Uri): String? = runCatching {
 
 data class DeviceStorageInfo(val usedByJellyJarBytes: Long, val freeBytes: Long, val totalBytes: Long)
 
+data class StorageSnapshot(val device: DeviceStorageInfo, val folders: List<FolderStorage>)
+
+data class FolderStorage(val info: FolderInfo, val usedByJellyJarBytes: Long, val downloadCount: Int)
+
 // ─── Download Repository ──────────────────────────────────────────────────────
 
 @Singleton
@@ -674,6 +681,7 @@ class DownloadRepository @Inject constructor(
     private val playbackPositionDao: PlaybackPositionDao,
     private val settings: SettingsRepository,
     private val jellyfinRepo: JellyfinRepository,
+    private val storage: DownloadStorage,
     @param:ApplicationContext private val context: Context,
 ) {
     val downloads: Flow<List<DownloadEntity>> = downloadDao.observeAll().distinctUntilChanged()
@@ -685,7 +693,31 @@ class DownloadRepository @Inject constructor(
         private const val MIN_FREE_SPACE_BYTES = 500L * 1024 * 1024
 
         private const val COPY_BUFFER_BYTES = 256 * 1024
+
+        // Headroom beyond the file itself when choosing a folder at copy time.
+        private const val COPY_MARGIN_BYTES = 64L * 1024 * 1024
+
+        // Space required in a folder when Press doesn't report the file's size.
+        private const val UNKNOWN_SIZE_RESERVE_BYTES = 4L * 1024 * 1024 * 1024
+
+        // Encodes are limited by the queue manager, but copies to the device are not, and they
+        // overlap the next encode. Downloads and moves share one permit: two simultaneous copies
+        // would just split the bandwidth (or the card's write speed).
+        val copyPermit = kotlinx.coroutines.sync.Semaphore(1)
     }
+
+    // Moves outlive the screen that started them: a copy cancelled with a ViewModel would leave a
+    // half-written file behind.
+    private val moveScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+    // In-flight moves by download id: a second tap is ignored, and deleting the download cancels
+    // its move (and waits for the partial copy to be cleaned up) before removing anything.
+    private val moveJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+    // Folders a download ran out of space in, by download id — see pickDestination().
+    private val outOfSpace = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
+    private val _movingIds = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
+    val movingIds: kotlinx.coroutines.flow.StateFlow<Set<String>> = _movingIds
+    private val _moveErrors = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val moveErrors: kotlinx.coroutines.flow.SharedFlow<String> = _moveErrors
 
     private suspend fun shimService(): ShimApiService {
         val url = settings.currentSnapshot().shimUrl
@@ -704,6 +736,8 @@ class DownloadRepository @Inject constructor(
         item: JellyfinItem,
         preset: String,
         mediaSourcePath: String,
+        // "Save to…": a configured download folder to use instead of the automatic choice.
+        targetFolder: String? = null,
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             // A duplicate tap (or re-queue while already in flight) must not clobber a row whose
@@ -720,7 +754,7 @@ class DownloadRepository @Inject constructor(
                 }
             }
             requireDownloadFolder()
-            checkFreeSpace(preset, item.runtimeMinutes)
+            checkFreeSpace(preset, item.runtimeMinutes, targetFolder)
             // Capture intro/credits markers now so the skip button works offline later
             val segments = runCatching { jellyfinRepo.getSkipSegments(item.id) }.getOrDefault(emptyList())
             // Cache the parent series now so the offline "TV Shows" library tile can resolve it by
@@ -752,6 +786,7 @@ class DownloadRepository @Inject constructor(
                 mediaSourcePath = mediaSourcePath,
                 queuePosition = downloadDao.maxQueuePosition() + 1,
                 segmentsJson = segments.takeIf { it.isNotEmpty() }?.let { com.google.gson.Gson().toJson(it) },
+                storageRoot = targetFolder,
             )
             downloadDao.upsert(entity)
         }
@@ -940,15 +975,97 @@ class DownloadRepository @Inject constructor(
         }
     }
 
+    // Opens the output stream for relativePath (subfolders allowed) under a download folder.
+    // Returns the stream, the path to record, and the document URI (null for a plain path).
+    // allowExisting = false refuses a same-named file instead of truncating it.
+    private fun openDestination(
+        destinationDir: String,
+        relativePath: String,
+        allowExisting: Boolean = true,
+    ): Triple<java.io.OutputStream, String, String?> {
+        val pathSegments = relativePath.split("/").filter { it.isNotBlank() }
+        val filename = pathSegments.lastOrNull() ?: relativePath
+        val subFolders = pathSegments.dropLast(1)
+
+        return if (destinationDir.startsWith("content://")) {
+            val treeUri = Uri.parse(destinationDir)
+            var dir = DocumentFile.fromTreeUri(context, treeUri)
+                ?: error("Cannot open tree URI: $destinationDir")
+            for (folder in subFolders) {
+                dir = dir.findFile(folder)?.takeIf { it.isDirectory }
+                    ?: dir.createDirectory(folder)
+                    ?: error("Cannot create folder '$folder' in: $destinationDir")
+            }
+            val existing = dir.findFile(filename)
+            check(existing == null || allowExisting) { "A file named $filename already exists in that folder" }
+            val doc = existing
+                ?: dir.createFile("video/mp4", filename)
+                ?: error("Cannot create file in: $destinationDir")
+            // "wt" truncates an existing file — findFile() can return one left by an
+            // interrupted attempt; plain "w" would leave stale trailing bytes if the new
+            // write is shorter, corrupting the MP4.
+            val stream = try {
+                context.contentResolver.openOutputStream(doc.uri, "wt")
+                    ?: error("Cannot open output stream for: ${doc.uri}")
+            } catch (e: Throwable) {
+                // Don't leave the empty document we just created behind.
+                if (existing == null) doc.delete()
+                throw e
+            }
+            // Convert the document URI to a real file path so ExoPlayer/File() can read it
+            // directly. Only works for the "primary" (internal shared) storage volume —
+            // SD cards and other document providers have no stable filesystem path.
+            // ExoPlayer can still play the content:// URI directly (ContentDataSource), so
+            // fall back to that string instead of failing the whole download.
+            val filePath = documentUriToFilePath(doc.uri) ?: doc.uri.toString()
+            Triple(stream, filePath, doc.uri.toString())
+        } else {
+            val destFile = File(destinationDir, relativePath)
+            destFile.parentFile?.mkdirs()
+            Triple(destFile.outputStream() as java.io.OutputStream, destFile.absolutePath, null)
+        }
+    }
+
+    // Picks the download folder for a file of sizeBytes (<= 0 = unknown). See chooseFolder().
+    private suspend fun pickDestination(entity: DownloadEntity, sizeBytes: Long): String {
+        val folders = settings.currentSnapshot().downloadFolders
+        check(folders.isNotEmpty()) { "No download folder set — pick one in Settings → Downloads" }
+        val unknownSize = sizeBytes <= 0
+        // An unknown size is assumed to be a feature-length file, not the bare minimum, so it
+        // isn't sent to a folder that only just clears the floor.
+        val required = if (unknownSize) UNKNOWN_SIZE_RESERVE_BYTES else sizeBytes + COPY_MARGIN_BYTES
+        val preferred = entity.seriesName?.takeIf { entity.type == "Episode" }
+            ?.let { downloadDao.latestRootForSeries(it) }
+        val requested = entity.storageRoot?.takeIf { it in folders }
+        // A folder this download already ran out of space in is skipped on the next attempt, so
+        // a retry spills over to another folder instead of failing the same way.
+        val full = outOfSpace[entity.jellyfinId].orEmpty()
+        val candidates = storage.candidates(folders).map { if (it.uri in full) it.copy(available = false) else it }
+        val choice = chooseFolder(candidates, required, preferred, requested)
+            ?: if (unknownSize) {
+                // Nothing clears the reserve: take whichever has the most room, above the floor.
+                chooseFolder(candidates.sortedByDescending { it.freeBytes }, MIN_FREE_SPACE_BYTES, null, requested)
+            } else null
+        return choice ?: error(
+            when {
+                requested != null -> "The folder chosen for this download is unavailable or full"
+                candidates.none { it.available } -> "No download folder is available — insert the SD card or check Settings → Downloads"
+                else -> "Not enough storage in any download folder"
+            }
+        )
+    }
+
     suspend fun downloadFile(
         jobId: String,
-        destinationDir: String,
-        // A path relative to destinationDir — may include subfolders (e.g. the Jellyfin-style
+        // A path relative to the chosen download folder — may include subfolders (e.g. the Jellyfin-style
         // "TV Shows/Series/Season 01/file.mp4" produced by downloadRelativePath()), or just a
         // bare filename for callers that don't need nesting.
         relativePath: String,
         expectedSha256: String? = null,
         tracksJson: String? = null,
+        // The finished file's size as Press reports it; used to pick a folder when the response
+        // has no Content-Length. -1 = unknown.
+        sizeHint: Long = -1L,
     ): Result<String> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -959,69 +1076,55 @@ class DownloadRepository @Inject constructor(
 
                 val responseBody = shimService().downloadFile(jobId)
                 val totalBytes = responseBody.contentLength()
+                // Chosen here rather than at queue time: the file's real size is known now, and
+                // another copy may have used up the space (or the card been ejected) since.
+                val destinationDir = try {
+                    pickDestination(entity, if (totalBytes > 0) totalBytes else sizeHint)
+                } catch (e: Throwable) {
+                    responseBody.close()
+                    throw e
+                }
                 var downloadedBytes = 0L
                 var lastReportedProgressInt = -1
 
-                val pathSegments = relativePath.split("/").filter { it.isNotBlank() }
-                val filename = pathSegments.lastOrNull() ?: relativePath
-                val subFolders = pathSegments.dropLast(1)
-
-                val (outputStream, savedPath, savedUri) = if (destinationDir.startsWith("content://")) {
-                    val treeUri = Uri.parse(destinationDir)
-                    var dir = DocumentFile.fromTreeUri(context, treeUri)
-                        ?: error("Cannot open tree URI: $destinationDir")
-                    for (folder in subFolders) {
-                        dir = dir.findFile(folder)?.takeIf { it.isDirectory }
-                            ?: dir.createDirectory(folder)
-                            ?: error("Cannot create folder '$folder' in: $destinationDir")
-                    }
-                    val doc = dir.findFile(filename)
-                        ?: dir.createFile("video/mp4", filename)
-                        ?: error("Cannot create file in: $destinationDir")
-                    // "wt" truncates an existing file — findFile() can return one left by an
-                    // interrupted attempt; plain "w" would leave stale trailing bytes if the new
-                    // write is shorter, corrupting the MP4.
-                    val stream = context.contentResolver.openOutputStream(doc.uri, "wt")
-                        ?: error("Cannot open output stream for: ${doc.uri}")
-                    // Convert the document URI to a real file path so ExoPlayer/File() can read it
-                    // directly. Only works for the "primary" (internal shared) storage volume —
-                    // SD cards and other document providers have no stable filesystem path.
-                    // ExoPlayer can still play the content:// URI directly (ContentDataSource), so
-                    // fall back to that string instead of failing the whole download.
-                    val filePath = documentUriToFilePath(doc.uri) ?: doc.uri.toString()
-                    Triple(stream, filePath, doc.uri.toString())
-                } else {
-                    val dir = destinationDir.ifBlank { context.filesDir.absolutePath }
-                    val destFile = File(dir, relativePath)
-                    destFile.parentFile?.mkdirs()
-                    Triple(destFile.outputStream() as java.io.OutputStream, destFile.absolutePath, null)
-                }
+                val (outputStream, savedPath, savedUri) = openDestination(destinationDir, relativePath)
 
                 // Hashing as the bytes arrive replaces a second full read of the saved file, which
                 // on a content:// destination is slow enough to double the transfer time.
                 val digest = expectedSha256?.let { java.security.MessageDigest.getInstance("SHA-256") }
                 // 8 KB writes into a scoped-storage (FUSE) file are syscall-bound and cap well
                 // below what Wi-Fi delivers; large writes through a buffer don't.
-                java.io.BufferedOutputStream(outputStream, COPY_BUFFER_BYTES).use { output ->
-                    responseBody.byteStream().use { input ->
-                        val buffer = ByteArray(COPY_BUFFER_BYTES)
-                        var bytesRead: Int
-                        while (input.read(buffer).also { bytesRead = it } != -1) {
-                            output.write(buffer, 0, bytesRead)
-                            digest?.update(buffer, 0, bytesRead)
-                            downloadedBytes += bytesRead
-                            if (totalBytes > 0) {
-                                val progress = (downloadedBytes.toFloat() / totalBytes) * 100f
-                                val progressInt = progress.toInt()
-                                if (progressInt != lastReportedProgressInt) {
-                                    lastReportedProgressInt = progressInt
-                                    downloadDao.updateProgress(
-                                        entity.jellyfinId, progress, DownloadStatus.DOWNLOADING.name
-                                    )
+                try {
+                    java.io.BufferedOutputStream(outputStream, COPY_BUFFER_BYTES).use { output ->
+                        responseBody.byteStream().use { input ->
+                            val buffer = ByteArray(COPY_BUFFER_BYTES)
+                            var bytesRead: Int
+                            while (input.read(buffer).also { bytesRead = it } != -1) {
+                                output.write(buffer, 0, bytesRead)
+                                digest?.update(buffer, 0, bytesRead)
+                                downloadedBytes += bytesRead
+                                if (totalBytes > 0) {
+                                    val progress = (downloadedBytes.toFloat() / totalBytes) * 100f
+                                    val progressInt = progress.toInt()
+                                    if (progressInt != lastReportedProgressInt) {
+                                        lastReportedProgressInt = progressInt
+                                        downloadDao.updateProgress(
+                                            entity.jellyfinId, progress, DownloadStatus.DOWNLOADING.name
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
+                } catch (e: Throwable) {
+                    // Don't leave a truncated MP4 behind (it counts against free space and no row
+                    // points at it), and if the folder filled up, avoid it on the next attempt.
+                    deleteSavedOutput(savedPath, savedUri)
+                    if (isOutOfSpace(e)) {
+                        outOfSpace.getOrPut(entity.jellyfinId) { java.util.concurrent.ConcurrentHashMap.newKeySet() }
+                            .add(destinationDir)
+                    }
+                    throw e
                 }
 
                 if (totalBytes > 0 && downloadedBytes != totalBytes) {
@@ -1049,10 +1152,12 @@ class DownloadRepository @Inject constructor(
                     saveThumbnailLocally(entity.jellyfinId)
                 }.getOrNull()
 
+                outOfSpace.remove(entity.jellyfinId)
                 downloadDao.upsert(
                     entity.copy(
                         localPath = savedPath,
                         localUri = savedUri,
+                        storageRoot = destinationDir,
                         status = DownloadStatus.COMPLETE.name,
                         progress = 100f,
                         sizeBytes = downloadedBytes,
@@ -1064,15 +1169,130 @@ class DownloadRepository @Inject constructor(
             }
         }
 
-    // savedPath is a real filesystem path except on non-"primary" storage (SD cards, other
-    // document providers), where documentUriToFilePath() can't resolve one and savedPath is the
-    // content:// URI itself. Deleting goes through whichever one applies.
+    // A file written through SAF belongs to the storage provider, not this app, so File.delete()
+    // on its real path (which documentUriToFilePath() resolves on the primary volume) silently
+    // fails. Whenever there is a document URI, delete through that.
     private fun deleteSavedOutput(savedPath: String, savedUri: String?) {
-        if (savedUri != null && savedPath == savedUri) {
+        if (savedUri != null) {
             DocumentFile.fromSingleUri(context, Uri.parse(savedUri))?.delete()
         } else {
             File(savedPath).delete()
         }
+    }
+
+    private fun isOutOfSpace(e: Throwable): Boolean =
+        generateSequence(e) { it.cause }.any {
+            (it is android.system.ErrnoException && it.errno == android.system.OsConstants.ENOSPC) ||
+                it.message?.contains("ENOSPC") == true ||
+                it.message?.contains("No space left", ignoreCase = true) == true
+        }
+
+    // Starts moving a finished download to another configured folder. Returns immediately;
+    // progress is movingIds, failures and warnings arrive on moveErrors. A second request for a
+    // download that is already moving is ignored.
+    fun startMove(jellyfinId: String, targetFolder: String) {
+        val job = moveScope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            try {
+                moveDownload(jellyfinId, targetFolder)
+                    .onSuccess { warning -> warning?.let { _moveErrors.tryEmit(it) } }
+                    .onFailure {
+                        // A cancelled move is not a failed one; let the scope see the cancellation.
+                        if (it is kotlinx.coroutines.CancellationException) throw it
+                        android.util.Log.w("DownloadRepository", "Move failed for $jellyfinId: ${it.message}", it)
+                        _moveErrors.tryEmit(it.message ?: "Couldn't move the download")
+                    }
+            } finally {
+                moveJobs.remove(jellyfinId)
+                _movingIds.update { it - jellyfinId }
+            }
+        }
+        if (moveJobs.putIfAbsent(jellyfinId, job) != null) {
+            job.cancel()
+            return
+        }
+        _movingIds.update { it + jellyfinId }
+        job.start()
+    }
+
+    // Copies the file into targetFolder, repoints the row, then deletes the original. A failure
+    // (or cancellation) at any point deletes the partial copy and leaves the original untouched.
+    // The result is a warning when the move worked but the original couldn't be removed.
+    private suspend fun moveDownload(jellyfinId: String, targetFolder: String): Result<String?> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val entity = downloadDao.findById(jellyfinId) ?: error("Download no longer exists")
+                check(entity.status == DownloadStatus.COMPLETE.name) { "Only finished downloads can be moved" }
+                val sourceUri = entity.localUri ?: error("This download can't be moved")
+                val folders = settings.currentSnapshot().downloadFolders
+                check(targetFolder in folders) { "That folder is no longer a download folder" }
+                // Already in (or inside) the target tree. Copying would resolve to the same
+                // document, and opening it for writing would truncate the original.
+                if (storage.rootOf(entity, folders) == targetFolder || storage.treeContains(targetFolder, sourceUri)) {
+                    return@runCatching null
+                }
+
+                val sourceDoc = DocumentFile.fromSingleUri(context, Uri.parse(sourceUri))
+                    ?.takeIf { it.exists() } ?: error("The original file isn't available — is the SD card inserted?")
+                val size = sourceDoc.length()
+                val target = storage.info(targetFolder)
+                check(target.available) { "${target.label} isn't available" }
+                check(target.freeBytes > size + COPY_MARGIN_BYTES) { "Not enough free space on ${target.label}" }
+
+                val sourceLabel = storage.rootOf(entity, folders)?.let { storage.info(it).label } ?: "the original folder"
+                val relativePath = downloadRelativePath(entity, sourceDoc.name ?: File(entity.localPath).name)
+                copyPermit.acquire()
+                var saved: Triple<java.io.OutputStream, String, String?>? = null
+                var finished = false
+                try {
+                    // Open the source first so a failure here creates nothing in the target.
+                    val sourceStream = context.contentResolver.openInputStream(Uri.parse(sourceUri))
+                        ?: error("Cannot open the original file")
+                    val (output, savedPath, savedUri) = try {
+                        openDestination(targetFolder, relativePath, allowExisting = false)
+                    } catch (e: Throwable) {
+                        sourceStream.close()
+                        throw e
+                    }.also { saved = it }
+                    sourceStream.use { input ->
+                        java.io.BufferedOutputStream(output, COPY_BUFFER_BYTES).use { out ->
+                            val buffer = ByteArray(COPY_BUFFER_BYTES)
+                            var read: Int
+                            while (input.read(buffer).also { read = it } != -1) {
+                                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                                out.write(buffer, 0, read)
+                            }
+                        }
+                    }
+                    val written = savedUri?.let { DocumentFile.fromSingleUri(context, Uri.parse(it))?.length() }
+                        ?: File(savedPath).length()
+                    check(written == size) { "Copy incomplete: wrote $written of $size bytes" }
+                    // Zero rows changed = the download was deleted while we copied; the copy is
+                    // then an orphan and the finally block removes it.
+                    check(downloadDao.updateLocation(jellyfinId, savedPath, savedUri, targetFolder) > 0) {
+                        "Download was deleted during the move"
+                    }
+                    finished = true
+                } finally {
+                    if (!finished) saved?.let { deleteSavedOutput(it.second, it.third) }
+                    copyPermit.release()
+                }
+                if (sourceDoc.delete()) null
+                else {
+                    android.util.Log.w("DownloadRepository", "Moved $jellyfinId but could not delete the original at $sourceUri")
+                    "Moved, but the original couldn't be deleted from $sourceLabel — remove it there to free the space"
+                }
+            }
+        }
+
+    // Why a finished download can't be read right now (its SD card is out, or the folder grant is
+    // gone), or null if its storage is fine — so the player can say that instead of a bare
+    // "couldn't play this file".
+    suspend fun storageUnavailableReason(jellyfinId: String): String? = withContext(Dispatchers.IO) {
+        val entity = downloadDao.findById(jellyfinId) ?: return@withContext null
+        val root = storage.rootOf(entity, settings.currentSnapshot().downloadFolders) ?: return@withContext null
+        val info = storage.info(root)
+        if (info.available) null
+        else "This download is stored on ${info.label}, which isn't available. Insert the card and try again."
     }
 
     suspend fun markFailed(shimJobId: String) = withContext(Dispatchers.IO) {
@@ -1088,21 +1308,53 @@ class DownloadRepository @Inject constructor(
         downloadDao.findByShimJobId(shimJobId)
     }
 
-    suspend fun getDeviceStorageInfo(): DeviceStorageInfo = withContext(Dispatchers.IO) {
-        val downloadPath = settings.currentSnapshot().downloadPath
-        val resolvedPath = when {
-            downloadPath.startsWith("content://") ->
-                documentUriToFilePath(Uri.parse(downloadPath)) ?: Environment.getExternalStorageDirectory().absolutePath
-            downloadPath.isNotBlank() -> downloadPath
-            else -> context.filesDir.absolutePath
-        }
-        val statFs = runCatching { StatFs(resolvedPath) }
-            .getOrElse { StatFs(Environment.getExternalStorageDirectory().absolutePath) }
-        DeviceStorageInfo(
-            usedByJellyJarBytes = downloadDao.totalCompletedBytes(),
-            freeBytes = statFs.availableBytes,
-            totalBytes = statFs.totalBytes,
+    // Free/total across every reachable folder (a volume counted once even if two folders live on
+    // it) plus per-folder figures in priority order, from one read of the folders and downloads so
+    // the two can't disagree. Zeros when no folder is configured or none is reachable.
+    suspend fun getStorageSnapshot(): StorageSnapshot = withContext(Dispatchers.IO) {
+        val folders = settings.currentSnapshot().downloadFolders
+        val infos = folders.map { storage.info(it) }
+        val completed = downloadDao.observeCompleted().first()
+        val reachable = infos.filter { it.available }.distinctBy { it.volumeKey }
+        // Only files that are actually on a reachable volume count against its space.
+        val gone = infos.filterNot { it.available }.map { it.uri }.toSet()
+        val device = DeviceStorageInfo(
+            usedByJellyJarBytes = completed.filterNot { storage.rootOf(it, folders) in gone }.sumOf { it.sizeBytes },
+            freeBytes = reachable.sumOf { it.freeBytes },
+            totalBytes = reachable.sumOf { it.totalBytes },
         )
+        val perFolder = infos.map { info ->
+            val mine = completed.filter { storage.rootOf(it, folders) == info.uri }
+            FolderStorage(info, mine.sumOf { it.sizeBytes }, mine.size)
+        }
+        StorageSnapshot(device, perFolder)
+    }
+
+    // How many downloads depend on a folder, for deciding whether it can be removed: finished
+    // files in it; downloads still queued, encoding or copying that asked for it or that will be
+    // routed automatically (they might pick it, and removal would release the grant under them);
+    // and — for the first folder, which is where the single pre-multi-folder folder was migrated
+    // to — finished rows whose location was never recorded. Failed downloads hold no file and
+    // don't count.
+    suspend fun downloadsUsingFolder(folder: String): Int = withContext(Dispatchers.IO) {
+        val folders = settings.currentSnapshot().downloadFolders
+        val completed = downloadDao.observeCompleted().first()
+        val inFolder = completed.count { storage.rootOf(it, folders) == folder }
+        val unplaced = if (folders.firstOrNull() == folder) {
+            completed.count { storage.rootOf(it, folders) == null }
+        } else 0
+        val active = downloadDao.activeRows().count { it.storageRoot == null || it.storageRoot == folder }
+        inFolder + unplaced + active
+    }
+
+    // Stamps pre-multi-folder rows with the folder they live in, so per-series folder affinity
+    // and per-folder usage don't depend on URI matching forever.
+    suspend fun backfillStorageRoots() = withContext(Dispatchers.IO) {
+        val folders = settings.currentSnapshot().downloadFolders
+        if (folders.isEmpty()) return@withContext
+        downloadDao.completedWithUri().filter { it.storageRoot == null }.forEach { row ->
+            storage.rootOf(row, folders)?.let { downloadDao.updateStorageRoot(row.jellyfinId, it) }
+        }
     }
 
     // getDeviceStorageInfo()/downloadFile() both silently fall back to internal or external
@@ -1110,16 +1362,24 @@ class DownloadRepository @Inject constructor(
     // to run all the way through Press and then land somewhere the user never chose. Fail at
     // queue time instead, where the screen can surface it.
     private suspend fun requireDownloadFolder() {
-        check(settings.currentSnapshot().downloadPath.isNotBlank()) {
+        check(settings.currentSnapshot().downloadFolders.isNotEmpty()) {
             "No download folder set — pick one in Settings → Downloads"
         }
     }
 
     // Estimates transcode output size from the preset's configured bitrates and the source
     // runtime, then requires a safety margin of free space beyond that before allowing the
-    // download to start. Falls back to a flat minimum when the estimate can't be computed.
-    private suspend fun checkFreeSpace(preset: String, runtimeMinutes: Int?) {
-        val freeBytes = getDeviceStorageInfo().freeBytes
+    // download to start. A file goes to one folder, so what matters is the roomiest reachable
+    // one (or the requested one). Falls back to a flat minimum when the estimate can't be computed.
+    private suspend fun checkFreeSpace(preset: String, runtimeMinutes: Int?, targetFolder: String? = null) {
+        val folders = settings.currentSnapshot().downloadFolders
+        val candidates = storage.candidates(folders)
+            .let { all -> if (targetFolder != null && targetFolder in folders) all.filter { it.uri == targetFolder } else all }
+            .filter { it.available }
+        check(candidates.isNotEmpty()) {
+            "No download folder is available — insert the SD card or check Settings → Downloads"
+        }
+        val freeBytes = candidates.maxOf { it.freeBytes }
         val estimate = estimateOutputBytes(preset, runtimeMinutes)
         val required = estimate?.let { (it * 1.15).toLong() } ?: MIN_FREE_SPACE_BYTES
         check(freeBytes > required) {
@@ -1150,10 +1410,16 @@ class DownloadRepository @Inject constructor(
     suspend fun retryTranscode(entity: DownloadEntity): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             requireDownloadFolder()
-            checkFreeSpace(entity.preset, entity.runtimeMinutes)
+            // The user may have freed space since the folder filled up.
+            outOfSpace.remove(entity.jellyfinId)
+            val effectiveRoot = entity.storageRoot?.takeIf { storage.info(it).available }
+            checkFreeSpace(entity.preset, entity.runtimeMinutes, effectiveRoot)
             if (entity.mediaSourcePath == null) error("No source path saved for retry")
             downloadDao.upsert(
                 entity.copy(
+                    // A "Save to" request survives a retry only while that folder is still usable;
+                    // otherwise every retry would fail against it with no way to change it.
+                    storageRoot = effectiveRoot,
                     status = DownloadStatus.QUEUED.name,
                     progress = 0f,
                     shimJobId = null,
@@ -1208,6 +1474,10 @@ class DownloadRepository @Inject constructor(
     }
 
     suspend fun deleteDownload(jellyfinId: String) = withContext(Dispatchers.IO) {
+        // A move in progress would finish into a row that is about to disappear. Stop it and wait
+        // for its partial copy to be removed before touching anything.
+        moveJobs[jellyfinId]?.cancelAndJoin()
+        outOfSpace.remove(jellyfinId)
         val entity = downloadDao.findById(jellyfinId) ?: return@withContext
         WorkManager.getInstance(context).cancelUniqueWork("download_$jellyfinId")
         if (entity.status != DownloadStatus.COMPLETE.name && entity.shimJobId != null) {
@@ -1220,7 +1490,7 @@ class DownloadRepository @Inject constructor(
             }
         }
         if (entity.localPath.isNotBlank()) {
-            val downloadPath = settings.currentSnapshot().downloadPath
+            val folders = settings.currentSnapshot().downloadFolders
             val deleted = when {
                 // The document URI recorded at download time: unambiguous, and unaffected by the
                 // file being renamed or the user re-picking a different download folder.
@@ -1228,12 +1498,14 @@ class DownloadRepository @Inject constructor(
                     DocumentFile.fromSingleUri(context, Uri.parse(entity.localUri))?.delete() == true
 
                 // Rows written before localUri existed: fall back to re-finding by name under the
-                // currently-configured tree. File.delete() has no permission on a SAF file.
-                downloadPath.startsWith("content://") -> {
+                // currently-configured trees. File.delete() has no permission on a SAF file.
+                folders.any { it.startsWith("content://") } -> {
                     val filename = File(entity.localPath).name
-                    DocumentFile.fromTreeUri(context, Uri.parse(downloadPath))
-                        ?.findFile(filename)
-                        ?.delete() == true
+                    folders.filter { it.startsWith("content://") }.any { tree ->
+                        DocumentFile.fromTreeUri(context, Uri.parse(tree))
+                            ?.findFile(filename)
+                            ?.delete() == true
+                    }
                 }
 
                 else -> File(entity.localPath).delete()

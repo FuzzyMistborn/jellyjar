@@ -54,6 +54,8 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+
     // Core
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

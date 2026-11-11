@@ -160,6 +160,11 @@ fun DetailScreen(
                 viewModel.queueDownload(preset)
             },
             onDismiss = { showPresetDialog = false },
+            folders = state.downloadFolders,
+            onPresetAndFolderSelected = { preset, folder ->
+                showPresetDialog = false
+                viewModel.queueDownload(preset, folder)
+            },
         )
     }
 

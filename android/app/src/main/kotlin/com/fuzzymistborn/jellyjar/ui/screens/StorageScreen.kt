@@ -59,7 +59,14 @@ fun StorageScreen(
                     movieBytes = state.movieBytes,
                     episodeCount = state.episodeCount,
                     episodeBytes = state.episodeBytes,
+                    // With several folders the combined bar would mix volumes and files that are
+                    // out of reach; each folder gets its own bar below instead.
+                    showDeviceBar = state.folders.size <= 1,
                 )
+            }
+
+            if (state.folders.size > 1) {
+                items(state.folders, key = { it.info.uri }) { folder -> FolderStorageCard(folder) }
             }
 
             item {
@@ -162,12 +169,13 @@ private fun StorageSummaryCard(
     movieBytes: Long,
     episodeCount: Int,
     episodeBytes: Long,
+    showDeviceBar: Boolean,
 ) {
     Surface(color = SurfaceVariant, shape = RoundedCornerShape(Radius.md), modifier = Modifier.padding(top = Spacing.sm)) {
         Column(modifier = Modifier.padding(Spacing.lg), verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
             // Device storage bar: JellyJar downloads · everything else · free
             val otherBytes = (deviceTotalBytes - freeBytes - usedBytes).coerceAtLeast(0)
-            Row(
+            if (showDeviceBar) Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(10.dp)
@@ -181,16 +189,52 @@ private fun StorageSummaryCard(
                 Box(Modifier.weight(otherWeight).fillMaxHeight().background(OnSurfaceMuted.copy(alpha = 0.5f)))
                 Box(Modifier.weight(freeWeight).fillMaxHeight().background(Background))
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.lg)) {
-                LegendDot(Primary, "JellyJar ${formatBytes(usedBytes)}")
-                LegendDot(OnSurfaceMuted.copy(alpha = 0.5f), "Other ${formatBytes(otherBytes)}")
-                LegendDot(Background, "Free ${formatBytes(freeBytes)}")
+            if (showDeviceBar) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.lg)) {
+                    LegendDot(Primary, "JellyJar ${formatBytes(usedBytes)}")
+                    LegendDot(OnSurfaceMuted.copy(alpha = 0.5f), "Other ${formatBytes(otherBytes)}")
+                    LegendDot(Background, "Free ${formatBytes(freeBytes)}")
+                }
+                HorizontalDivider(color = Background)
             }
-            HorizontalDivider(color = Background)
             SummaryRow(Icons.Default.Movie, "Movies", "$movieCount · ${formatBytes(movieBytes)}")
             SummaryRow(Icons.Default.Tv, "Episodes", "$episodeCount · ${formatBytes(episodeBytes)}")
             SummaryRow(Icons.Default.Storage, "Total downloaded", formatBytes(usedBytes))
             SummaryRow(Icons.Default.SdStorage, "Free on device", formatBytes(freeBytes))
+        }
+    }
+}
+
+// One download folder: its own used/other/free bar, or a notice when its storage is out.
+@Composable
+private fun FolderStorageCard(folder: com.fuzzymistborn.jellyjar.data.repository.FolderStorage) {
+    val info = folder.info
+    Surface(color = SurfaceVariant, shape = RoundedCornerShape(Radius.md)) {
+        Column(modifier = Modifier.padding(Spacing.lg), verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.SdStorage, contentDescription = null, tint = Primary, modifier = Modifier.size(IconSize.md))
+                Text(info.label, style = MaterialTheme.typography.titleSmall, color = OnSurface)
+            }
+            if (!info.available) {
+                Text(
+                    "Not available — ${folder.downloadCount} download(s) here can't be played until it's back",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Error,
+                )
+            } else {
+                val other = (info.totalBytes - info.freeBytes - folder.usedByJellyJarBytes).coerceAtLeast(0)
+                val total = info.totalBytes.coerceAtLeast(1)
+                Row(modifier = Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp))) {
+                    Box(Modifier.weight((folder.usedByJellyJarBytes.toFloat() / total).coerceAtLeast(0.001f)).fillMaxHeight().background(Primary))
+                    Box(Modifier.weight((other.toFloat() / total).coerceAtLeast(0.001f)).fillMaxHeight().background(OnSurfaceMuted.copy(alpha = 0.5f)))
+                    Box(Modifier.weight((info.freeBytes.toFloat() / total).coerceAtLeast(0.001f)).fillMaxHeight().background(Background))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.lg)) {
+                    LegendDot(Primary, "JellyJar ${formatBytes(folder.usedByJellyJarBytes)} (${folder.downloadCount})")
+                    LegendDot(OnSurfaceMuted.copy(alpha = 0.5f), "Other ${formatBytes(other)}")
+                    LegendDot(Background, "Free ${formatBytes(info.freeBytes)}")
+                }
+            }
         }
     }
 }
