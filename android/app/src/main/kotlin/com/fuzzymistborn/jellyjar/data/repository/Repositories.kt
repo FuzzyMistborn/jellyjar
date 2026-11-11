@@ -37,6 +37,9 @@ import com.fuzzymistborn.jellyjar.worker.DownloadWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -1299,10 +1302,17 @@ class PlaybackSyncRepository @Inject constructor(
 ) {
     private val flushMutex = kotlinx.coroutines.sync.Mutex()
 
+    // Fires once a stop/finish report has settled (sent, or queued for later), so the home rows
+    // can refetch Continue Watching. The report runs detached from the player screen, so a
+    // refetch triggered by returning to the home screen could beat it to the server.
+    private val _reported = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val reported: SharedFlow<Unit> = _reported.asSharedFlow()
+
     suspend fun recordStopped(itemId: String, positionMs: Long, mediaSourceId: String? = null) {
         val at = System.currentTimeMillis()
         val ok = jellyfinRepo.reportPlaybackStopped(itemId, positionMs, mediaSourceId).isSuccess
         settle(itemId, ok, positionMs = positionMs, played = false, at = at)
+        _reported.tryEmit(Unit)
     }
 
     suspend fun recordFinished(itemId: String, mediaSourceId: String? = null) {
@@ -1310,6 +1320,7 @@ class PlaybackSyncRepository @Inject constructor(
         jellyfinRepo.reportPlaybackStopped(itemId, 0L, mediaSourceId)
         val ok = jellyfinRepo.markPlayed(itemId).isSuccess
         settle(itemId, ok, positionMs = 0L, played = true, at = at)
+        _reported.tryEmit(Unit)
     }
 
     suspend fun pendingIds(): Set<String> = withContext(Dispatchers.IO) { pendingDao.pendingIds().toSet() }
