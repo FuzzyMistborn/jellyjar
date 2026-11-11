@@ -8,6 +8,7 @@ import com.fuzzymistborn.jellyjar.api.ShimApiService
 import com.fuzzymistborn.jellyjar.data.local.JellyJarDatabase
 import com.fuzzymistborn.jellyjar.data.local.MIGRATION_9_10
 import com.fuzzymistborn.jellyjar.data.local.MIGRATION_10_11
+import com.fuzzymistborn.jellyjar.data.local.MIGRATION_11_12
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -34,7 +35,7 @@ object AppModule {
             // app/schemas (see room.schemaLocation in build.gradle.kts) exist to make that possible.
             // Explicit migrations registered here take precedence over the fallback, so additive
             // bumps like 9→10 no longer cost the user their downloads.
-            .addMigrations(MIGRATION_9_10, MIGRATION_10_11)
+            .addMigrations(MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
 

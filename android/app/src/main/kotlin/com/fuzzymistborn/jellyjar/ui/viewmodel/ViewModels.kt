@@ -638,6 +638,8 @@ class LibraryViewModel @Inject constructor(
 // ─── Detail ViewModel ─────────────────────────────────────────────────────────
 
 data class DetailState(
+    // Download folders for the "Save to" choice in the quality dialog.
+    val downloadFolders: List<com.fuzzymistborn.jellyjar.data.repository.FolderInfo> = emptyList(),
     val item: JellyfinItem? = null,
     val download: DownloadEntity? = null,
     val episodeDownloads: Map<String, DownloadEntity> = emptyMap(),
@@ -675,6 +677,7 @@ class DetailViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val networkMonitor: NetworkMonitor,
     private val favoriteRepo: com.fuzzymistborn.jellyjar.data.repository.FavoriteRepository,
+    private val storage: com.fuzzymistborn.jellyjar.data.repository.DownloadStorage,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(DetailState())
@@ -700,6 +703,9 @@ class DetailViewModel @Inject constructor(
             settings.settings.map { it.kidModeEnabled }.distinctUntilChanged().collect { kidMode ->
                 _state.update { it.copy(kidModeEnabled = kidMode) }
             }
+        }
+        viewModelScope.launch {
+            storage.folderInfos.collect { infos -> _state.update { it.copy(downloadFolders = infos) } }
         }
         viewModelScope.launch {
             networkMonitor.reconnected.collect {
@@ -936,10 +942,11 @@ class DetailViewModel @Inject constructor(
             .onFailure { loadOfflineEpisodes() }
     }
 
-    fun queueDownload(preset: String) = viewModelScope.launch {
+    // targetFolder = the "Save to" choice; null lets the app pick (priority order, series together).
+    fun queueDownload(preset: String, targetFolder: String? = null) = viewModelScope.launch {
         val item = _state.value.item ?: return@launch
         val mediaPath = item.mediaSources.richestAudioSource()?.path ?: return@launch
-        downloadRepo.queueTranscode(item, preset, mediaPath).onFailure {
+        downloadRepo.queueTranscode(item, preset, mediaPath, targetFolder).onFailure {
             _state.update { s -> s.copy(downloadError = "Couldn't start download: ${it.message ?: "unknown error"}") }
         }
     }
@@ -1012,7 +1019,9 @@ data class AdminState(
     val username: String = "",
     val password: String = "",
     val shimUrl: String = "",
-    val downloadPath: String = "",
+    // Configured download folders in priority order, with live space/availability.
+    val folderStorage: List<com.fuzzymistborn.jellyjar.data.repository.FolderStorage> = emptyList(),
+    val folderError: String? = null,
     val isPinEnabled: Boolean = false,
     val settingsLoaded: Boolean = false,
     val hasCredentials: Boolean = false,
@@ -1060,6 +1069,7 @@ class AdminViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val jellyfinRepo: JellyfinRepository,
     private val downloadRepo: DownloadRepository,
+    private val storage: com.fuzzymistborn.jellyjar.data.repository.DownloadStorage,
     private val shimApi: com.fuzzymistborn.jellyjar.api.ShimApiService,
     private val okHttpClient: okhttp3.OkHttpClient,
     private val discoveryService: com.fuzzymistborn.jellyjar.util.JellyfinDiscoveryService,
@@ -1084,7 +1094,6 @@ class AdminViewModel @Inject constructor(
                     it.copy(
                         jellyfinUrl = if (jellyfinUrlDirty) it.jellyfinUrl else s.jellyfinUrl,
                         shimUrl = if (shimUrlDirty) it.shimUrl else s.shimUrl,
-                        downloadPath = s.downloadPath,
                         isPinEnabled = s.isPinEnabled,
                         hasCredentials = hasCredentials,
                         jellyfinUserName = s.jellyfinUserName,
@@ -1118,6 +1127,8 @@ class AdminViewModel @Inject constructor(
                 _state.update { it.copy(screenTimeUsedTodayMs = usedToday) }
             }
         }
+        // An SD card being inserted or ejected changes what each folder can hold.
+        viewModelScope.launch { storage.unavailableFolders.collect { refreshStorageInfo() } }
         viewModelScope.launch {
             downloadRepo.downloads.collect { downloads ->
                 _state.update {
@@ -1159,9 +1170,63 @@ class AdminViewModel @Inject constructor(
         _state.update { it.copy(shimUrl = url) }
         viewModelScope.launch { settings.saveShimUrl(url) }
     }
-    fun setDownloadPath(v: String) {
-        _state.update { it.copy(downloadPath = v) }
-        viewModelScope.launch { settings.saveDownloadPath(v) }
+    fun addDownloadFolder(uri: android.net.Uri) {
+        viewModelScope.launch {
+            val folders = settings.currentSnapshot().downloadFolders
+            val added = uri.toString()
+            if (added !in folders) {
+                // A folder inside (or around) another configured one would make "which folder is
+                // this download in" ambiguous.
+                val overlap = folders.firstOrNull { storage.treesOverlap(it, added) }
+                if (overlap != null) {
+                    _state.update {
+                        it.copy(folderError = "That folder overlaps one that's already a download folder. Pick a separate location.")
+                    }
+                    return@launch
+                }
+                val granted = runCatching { storage.takeGrant(uri) }
+                if (granted.isFailure) {
+                    _state.update { it.copy(folderError = "Couldn't get access to that folder. Try picking it again.") }
+                    return@launch
+                }
+                settings.saveDownloadFolders(folders + added)
+            }
+            _state.update { it.copy(folderError = null) }
+            downloadRepo.backfillStorageRoots()
+            refreshStorageInfo()
+        }
+    }
+
+    fun removeDownloadFolder(uri: String) {
+        viewModelScope.launch {
+            val row = _state.value.folderStorage.firstOrNull { it.info.uri == uri }
+            val using = downloadRepo.downloadsUsingFolder(uri)
+            if (using > 0) {
+                // The grant is the only thing that lets the app read these files back, and
+                // queued downloads that asked for this folder would silently go elsewhere.
+                _state.update {
+                    it.copy(folderError = "$using download(s) are stored in or headed for ${row?.info?.label ?: "this folder"}. " +
+                        "Move, delete or wait for them before removing it.")
+                }
+                return@launch
+            }
+            settings.saveDownloadFolders(settings.currentSnapshot().downloadFolders - uri)
+            storage.releaseGrant(uri)
+            _state.update { it.copy(folderError = null) }
+            refreshStorageInfo()
+        }
+    }
+
+    fun moveDownloadFolder(uri: String, delta: Int) {
+        viewModelScope.launch {
+            val folders = settings.currentSnapshot().downloadFolders.toMutableList()
+            val from = folders.indexOf(uri)
+            val to = from + delta
+            if (from < 0 || to !in folders.indices) return@launch
+            folders.add(to, folders.removeAt(from))
+            settings.saveDownloadFolders(folders)
+            refreshStorageInfo()
+        }
     }
 
     fun authenticate() = viewModelScope.launch {
@@ -1444,8 +1509,13 @@ class AdminViewModel @Inject constructor(
     }
 
     private suspend fun refreshStorageInfo() {
-        val info = downloadRepo.getDeviceStorageInfo()
-        _state.update { it.copy(storageInfo = formatStorageInfo(info)) }
+        val (info, folders) = downloadRepo.getStorageSnapshot()
+        _state.update {
+            it.copy(
+                folderStorage = folders,
+                storageInfo = if (info.totalBytes > 0) formatStorageInfo(info) else null,
+            )
+        }
     }
 
     private fun formatStorageInfo(info: com.fuzzymistborn.jellyjar.data.repository.DeviceStorageInfo): String {
@@ -1474,12 +1544,29 @@ data class DownloadsState(
     val etaByJellyfinId: Map<String, Int?> = emptyMap(),
     val downloadError: String? = null,
     val kidModeEnabled: Boolean = false,
+    // Configured download folders (priority order) — the targets of "Move to…".
+    val folders: List<com.fuzzymistborn.jellyjar.data.repository.FolderInfo> = emptyList(),
+    // Completed downloads whose storage is out right now (SD card ejected).
+    val unavailableIds: Set<String> = emptySet(),
+    // Folder each completed download lives in, for the "where" label.
+    val folderLabelById: Map<String, String> = emptyMap(),
+    // Folder URI each completed download lives in (for excluding it from the Move targets).
+    val folderRootById: Map<String, String> = emptyMap(),
+    val movingIds: Set<String> = emptySet(),
+)
+
+private data class DownloadFolderView(
+    val infos: List<com.fuzzymistborn.jellyjar.data.repository.FolderInfo>,
+    val unavailableIds: Set<String>,
+    val labelById: Map<String, String>,
+    val rootById: Map<String, String>,
 )
 
 @HiltViewModel
 class DownloadsViewModel @Inject constructor(
     private val downloadRepo: DownloadRepository,
     private val settings: SettingsRepository,
+    private val storage: com.fuzzymistborn.jellyjar.data.repository.DownloadStorage,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(DownloadsState())
@@ -1498,6 +1585,37 @@ class DownloadsViewModel @Inject constructor(
                     )
                 }
             }
+        }
+        // Which finished downloads sit on storage that isn't there right now, and where each lives.
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(storage.folderInfos, downloadRepo.completedDownloads) { infos, completed ->
+                val uris = infos.map { it.uri }
+                val unavailable = infos.filterNot { it.available }.map { it.uri }.toSet()
+                val labels = infos.associate { it.uri to it.label }
+                val labelById = completed.mapNotNull { d ->
+                    storage.rootOf(d, uris)?.let { root -> labels[root]?.let { d.jellyfinId to it } }
+                }.toMap()
+                val rootById = completed.mapNotNull { d -> storage.rootOf(d, uris)?.let { d.jellyfinId to it } }.toMap()
+                DownloadFolderView(
+                    infos,
+                    completed.filter { storage.isUnavailable(it, uris, unavailable) }.map { it.jellyfinId }.toSet(),
+                    labelById,
+                    rootById,
+                )
+            }.collect { v ->
+                _state.update {
+                    it.copy(
+                        folders = v.infos, unavailableIds = v.unavailableIds,
+                        folderLabelById = v.labelById, folderRootById = v.rootById,
+                    )
+                }
+            }
+        }
+        viewModelScope.launch {
+            downloadRepo.movingIds.collect { ids -> _state.update { it.copy(movingIds = ids) } }
+        }
+        viewModelScope.launch {
+            downloadRepo.moveErrors.collect { msg -> _state.update { it.copy(downloadError = msg) } }
         }
         viewModelScope.launch {
             downloadRepo.downloads.collect { all ->
@@ -1558,6 +1676,9 @@ class DownloadsViewModel @Inject constructor(
             }
         }
     }
+
+    fun moveDownload(jellyfinId: String, targetFolder: String) =
+        downloadRepo.startMove(jellyfinId, targetFolder)
 
     fun cancelDownload(jellyfinId: String) = viewModelScope.launch {
         downloadRepo.deleteDownload(jellyfinId)
@@ -1628,6 +1749,7 @@ data class StorageState(
     val totalBytes: Long = 0L,
     val freeBytes: Long = 0L,
     val deviceTotalBytes: Long = 0L,
+    val folders: List<com.fuzzymistborn.jellyjar.data.repository.FolderStorage> = emptyList(),
     val watchedItems: List<DownloadEntity> = emptyList(),
     val watchedBytes: Long = 0L,
 ) {
@@ -1642,20 +1764,25 @@ data class StorageState(
 @HiltViewModel
 class StorageViewModel @Inject constructor(
     private val downloadRepo: DownloadRepository,
+    private val storage: com.fuzzymistborn.jellyjar.data.repository.DownloadStorage,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(StorageState())
     val state: StateFlow<StorageState> = _state.asStateFlow()
 
     init {
+        // Re-read when a download changes or a volume's state does (a card ejected, a file copied
+        // in elsewhere) — one collector, so the two can't overwrite each other with stale data.
         viewModelScope.launch {
-            downloadRepo.completedDownloads.collect { completed ->
+            kotlinx.coroutines.flow.combine(downloadRepo.completedDownloads, storage.folderInfos) { completed, _ -> completed }
+                .collect { completed ->
                 val movies = completed.filter { it.type == "Movie" }
                 val episodes = completed.filter { it.type == "Episode" }
                 val watched = completed.filter { it.isWatched }
-                val info = downloadRepo.getDeviceStorageInfo()
+                val (info, folders) = downloadRepo.getStorageSnapshot()
                 _state.update {
                     it.copy(
+                        folders = folders,
                         items = completed,
                         movieCount = movies.size,
                         movieBytes = movies.sumOf { m -> m.sizeBytes },
@@ -1954,6 +2081,9 @@ class PlayerViewModel @Inject constructor(
     private val okHttpClient: okhttp3.OkHttpClient,
     private val networkMonitor: NetworkMonitor,
 ) : ViewModel() {
+
+    suspend fun storageUnavailableReason(jellyfinId: String): String? =
+        downloadRepo.storageUnavailableReason(jellyfinId)
 
     // Lets the player retry a dropped stream on its own once the device is back online.
     val isOnline: StateFlow<Boolean> get() = networkMonitor.isOnline

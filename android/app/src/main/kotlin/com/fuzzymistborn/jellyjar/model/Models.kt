@@ -167,6 +167,8 @@ data class TranscodeJob(
     // What's in the finished file (Press probes it on completion). Null from older Press
     // versions, and until the job is complete.
     val tracks: OutputTracks? = null,
+    // Size of the finished file; null from older Press versions.
+    val size_bytes: Long? = null,
 )
 
 // Audio and subtitle tracks of a Press output, in file order — so entry N is the Nth track of
@@ -223,7 +225,9 @@ data class AppSettings(
     // Blank = token predates per-install ids; JellyfinImageHelper then sends the legacy id.
     val jellyfinDeviceId: String = "",
     val shimUrl: String = "",
-    val downloadPath: String = "",
+    // Ordered by preference: downloads fill the first folder that is mounted and has room, then
+    // spill to the next. Each is a SAF tree URI (internal storage and SD card alike).
+    val downloadFolders: List<String> = emptyList(),
     val parentalPinHash: String = "",
     val isPinEnabled: Boolean = false,
     val episodeViewGrid: Boolean = false,

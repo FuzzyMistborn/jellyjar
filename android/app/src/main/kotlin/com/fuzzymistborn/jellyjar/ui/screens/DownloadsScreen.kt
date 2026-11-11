@@ -229,6 +229,15 @@ fun DownloadsScreen(
                                 onDelete = if (kidMode) null else {
                                     { pendingDeleteId = entity.jellyfinId }
                                 },
+                                folderLabel = state.folderLabelById[entity.jellyfinId]
+                                    ?.takeIf { state.folders.size > 1 },
+                                unavailable = entity.jellyfinId in state.unavailableIds,
+                                moving = entity.jellyfinId in state.movingIds,
+                                // Targets other than where it already is; none in Kid Mode.
+                                moveTargets = if (kidMode) emptyList() else state.folders.filter {
+                                    it.available && it.uri != state.folderRootById[entity.jellyfinId]
+                                },
+                                onMove = { folder -> viewModel.moveDownload(entity.jellyfinId, folder) },
                             )
                         }
                     }
@@ -519,6 +528,13 @@ private fun CompletedDownloadCard(
     onPlay: () -> Unit,
     // Null in Kid Mode — the row stays playable but loses its delete affordance.
     onDelete: (() -> Unit)?,
+    // Shown only when more than one download folder is configured.
+    folderLabel: String?,
+    // Its folder is out right now (SD card ejected): not playable, can't be moved.
+    unavailable: Boolean,
+    moving: Boolean,
+    moveTargets: List<com.fuzzymistborn.jellyjar.data.repository.FolderInfo>,
+    onMove: (String) -> Unit,
 ) {
     Surface(color = SurfaceVariant, shape = RoundedCornerShape(Radius.md)) {
         Row(
@@ -567,10 +583,18 @@ private fun CompletedDownloadCard(
                         Text(formatFileSize(entity.sizeBytes), style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
                     }
                 }
+                folderLabel?.let {
+                    Text(
+                        if (unavailable) "$it · not available" else it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (unavailable) Error else OnSurfaceMuted,
+                    )
+                }
                 Spacer(Modifier.height(Spacing.md))
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm), verticalAlignment = Alignment.CenterVertically) {
                     Button(
                         onClick = onPlay,
+                        enabled = !unavailable && !moving,
                         colors = ButtonDefaults.buttonColors(containerColor = Primary),
                         contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = Spacing.sm),
                     ) {
@@ -580,7 +604,32 @@ private fun CompletedDownloadCard(
                             modifier = Modifier.size(IconSize.sm),
                         )
                         Spacer(Modifier.width(4.dp))
-                        Text("Play Offline", style = MaterialTheme.typography.labelMedium)
+                        Text(
+                            if (unavailable) "Insert SD card" else "Play Offline",
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                    if (moving) {
+                        CircularProgressIndicator(modifier = Modifier.size(IconSize.md), strokeWidth = 2.dp)
+                        Text("Moving…", style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+                    } else if (!unavailable && moveTargets.isNotEmpty()) {
+                        var menuOpen by remember { mutableStateOf(false) }
+                        Box {
+                            OutlinedButton(
+                                onClick = { menuOpen = true },
+                                contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = Spacing.sm),
+                            ) {
+                                Icon(Icons.Default.DriveFileMove, contentDescription = "Move to…", modifier = Modifier.size(IconSize.sm))
+                            }
+                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                moveTargets.forEach { target ->
+                                    DropdownMenuItem(
+                                        text = { Text("Move to ${target.label}") },
+                                        onClick = { menuOpen = false; onMove(target.uri) },
+                                    )
+                                }
+                            }
+                        }
                     }
                     if (onDelete != null) {
                         OutlinedButton(

@@ -33,7 +33,10 @@ class SettingsRepository @Inject constructor(
         // DeviceId the stored token was issued to. Absent for tokens from before per-install ids.
         val JELLYFIN_DEVICE_ID = stringPreferencesKey("jellyfin_device_id")
         val SHIM_URL = stringPreferencesKey("shim_url")
+        // Legacy single folder; read only as a fallback until DOWNLOAD_FOLDERS is first written.
         val DOWNLOAD_PATH = stringPreferencesKey("download_path")
+        // JSON array of folder URIs, in priority order.
+        val DOWNLOAD_FOLDERS = stringPreferencesKey("download_folders")
         val PARENTAL_PIN_HASH = stringPreferencesKey("parental_pin_hash")
         val PIN_ENABLED = stringPreferencesKey("pin_enabled")
         val EPISODE_VIEW_GRID = booleanPreferencesKey("episode_view_grid")
@@ -71,7 +74,7 @@ class SettingsRepository @Inject constructor(
             jellyfinUserName = prefs[Keys.JELLYFIN_USER_NAME] ?: "",
             jellyfinDeviceId = prefs[Keys.JELLYFIN_DEVICE_ID] ?: "",
             shimUrl = prefs[Keys.SHIM_URL] ?: "",
-            downloadPath = prefs[Keys.DOWNLOAD_PATH] ?: "",
+            downloadFolders = downloadFoldersOf(prefs),
             parentalPinHash = prefs[Keys.PARENTAL_PIN_HASH] ?: "",
             isPinEnabled = prefs[Keys.PIN_ENABLED] == "true",
             episodeViewGrid = prefs[Keys.EPISODE_VIEW_GRID] ?: false,
@@ -136,9 +139,23 @@ class SettingsRepository @Inject constructor(
         }
     }
 
-    suspend fun saveDownloadPath(path: String) {
+    private fun downloadFoldersOf(prefs: androidx.datastore.preferences.core.Preferences): List<String> {
+        prefs[Keys.DOWNLOAD_FOLDERS]?.let { json ->
+            val parsed = runCatching {
+                com.google.gson.Gson().fromJson(json, Array<String>::class.java).filter { it.isNotBlank() }
+            }
+            parsed.onSuccess { return it }
+            // Unreadable list: say so, and fall through to the legacy single folder if there is one
+            // rather than reporting "no folder set".
+            android.util.Log.w("SettingsRepository", "Could not read download folders", parsed.exceptionOrNull())
+        }
+        return listOfNotNull(prefs[Keys.DOWNLOAD_PATH]?.takeIf { it.isNotBlank() })
+    }
+
+    suspend fun saveDownloadFolders(folders: List<String>) {
         context.dataStore.edit { prefs ->
-            prefs[Keys.DOWNLOAD_PATH] = path
+            prefs[Keys.DOWNLOAD_FOLDERS] = com.google.gson.Gson().toJson(folders.distinct())
+            prefs.remove(Keys.DOWNLOAD_PATH)
         }
     }
 

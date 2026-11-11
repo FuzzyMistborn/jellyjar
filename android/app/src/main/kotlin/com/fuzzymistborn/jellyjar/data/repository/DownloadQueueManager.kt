@@ -39,6 +39,12 @@ class DownloadQueueManager @Inject constructor(
     }
 
     fun start() {
+        // Rows written before multiple download folders existed don't record which folder holds
+        // them; stamp them once so per-folder usage and series grouping have it.
+        scope.launch {
+            runCatching { downloadRepo.backfillStorageRoots() }
+                .onFailure { android.util.Log.w("DownloadQueueManager", "backfillStorageRoots failed", it) }
+        }
         scope.launch {
             merge(
                 downloadRepo.downloads.map { },

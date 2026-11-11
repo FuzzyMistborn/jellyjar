@@ -564,6 +564,12 @@ fun PlayerScreen(
             wait = (wait * 2).coerceAtMost(15_000L)
         }
     }
+    // A local file that won't open is most often one on an ejected SD card — say so.
+    LaunchedEffect(playbackError) {
+        if (playbackError != null && !isStreamed && !decoderError && jellyfinId != null) {
+            viewModel.storageUnavailableReason(jellyfinId)?.let { playbackError = it }
+        }
+    }
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {

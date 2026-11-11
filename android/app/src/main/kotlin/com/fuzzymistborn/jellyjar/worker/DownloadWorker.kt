@@ -14,12 +14,10 @@ import com.fuzzymistborn.jellyjar.MainActivity
 import com.fuzzymistborn.jellyjar.data.repository.DownloadRepository
 import java.util.concurrent.TimeUnit
 import com.fuzzymistborn.jellyjar.data.repository.SettingsRepository
-import com.fuzzymistborn.jellyjar.data.repository.currentSnapshot
 import com.fuzzymistborn.jellyjar.model.TranscodeJob
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
 @HiltWorker
@@ -42,11 +40,6 @@ class DownloadWorker @AssistedInject constructor(
         private const val SUMMARY_NOTIFICATION_ID = 3
 
         const val MAX_RETRY_ATTEMPTS = 5
-
-        // Encodes are limited by the queue manager, but copies to the device are not, and they
-        // now overlap the next encode. Workers share a process, so one permit serialises them:
-        // two simultaneous copies would just split the Wi-Fi bandwidth.
-        private val copyPermit = Semaphore(1)
 
         // ForegroundInfo rejects id 0, and the terminal "complete/failed" notification has to
         // survive WorkManager tearing the progress notification down when doWork() returns —
@@ -77,7 +70,6 @@ class DownloadWorker @AssistedInject constructor(
     override suspend fun doWork(): Result {
         val jobId = inputData.getString(KEY_JOB_ID) ?: return Result.failure()
         val filename = inputData.getString(KEY_FILENAME) ?: return Result.failure()
-        val downloadPath = settings.currentSnapshot().downloadPath
         // Every concurrent worker used to post its progress under notification id 1, so with
         // maxConcurrentDownloads = 2 the two jobs overwrote each other's progress bar. Derive a
         // stable per-job id instead, and name the item so two simultaneous downloads are
@@ -155,9 +147,9 @@ class DownloadWorker @AssistedInject constructor(
 
         val tracksJson = job!!.tracks?.let { com.google.gson.Gson().toJson(it) }
         setForeground(createForegroundInfo(notificationId, itemTitle, "Waiting to download…", 0))
-        val copyResult = copyPermit.withPermit {
+        val copyResult = DownloadRepository.copyPermit.withPermit {
             setForeground(createForegroundInfo(notificationId, itemTitle, "Downloading…", 0))
-            downloadRepo.downloadFile(jobId, downloadPath, filename, job!!.output_sha256, tracksJson)
+            downloadRepo.downloadFile(jobId, filename, job!!.output_sha256, tracksJson, job!!.size_bytes ?: -1L)
         }
         copyResult.onFailure {
             android.util.Log.e("DownloadWorker", "Download failed: ${it.message}", it)
