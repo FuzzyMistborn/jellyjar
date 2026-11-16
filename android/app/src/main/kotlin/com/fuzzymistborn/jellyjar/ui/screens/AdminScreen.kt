@@ -54,6 +54,13 @@ fun PinGateScreen(
     var pin by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
 
+    val submit = {
+        viewModel.verifyPin(pin) { ok ->
+            if (ok) onUnlocked()
+            else { error = true; pin = "" }
+        }
+    }
+
     Box(
         modifier = Modifier.fillMaxSize().background(BackgroundGradient),
         contentAlignment = Alignment.Center,
@@ -76,7 +83,11 @@ fun PinGateScreen(
                 },
                 label = { Text("PIN") },
                 visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.NumberPassword,
+                    imeAction = androidx.compose.ui.text.input.ImeAction.Done,
+                ),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { submit() }),
                 isError = error,
                 supportingText = if (error) { { Text("Incorrect PIN") } } else null,
                 singleLine = true,
@@ -85,12 +96,7 @@ fun PinGateScreen(
             )
 
             Button(
-                onClick = {
-                    viewModel.verifyPin(pin) { ok ->
-                        if (ok) onUnlocked()
-                        else { error = true; pin = "" }
-                    }
-                },
+                onClick = { submit() },
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = Primary),
             ) {
