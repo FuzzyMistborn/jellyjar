@@ -1023,6 +1023,7 @@ data class AdminState(
     val folderStorage: List<com.fuzzymistborn.jellyjar.data.repository.FolderStorage> = emptyList(),
     val folderError: String? = null,
     val isPinEnabled: Boolean = false,
+    val adminPinGraceMinutes: Int = 5,
     val settingsLoaded: Boolean = false,
     val hasCredentials: Boolean = false,
     // Who the saved sign-in belongs to; blank until known (see checkJellyfinConnection).
@@ -1095,6 +1096,7 @@ class AdminViewModel @Inject constructor(
                         jellyfinUrl = if (jellyfinUrlDirty) it.jellyfinUrl else s.jellyfinUrl,
                         shimUrl = if (shimUrlDirty) it.shimUrl else s.shimUrl,
                         isPinEnabled = s.isPinEnabled,
+                        adminPinGraceMinutes = s.adminPinGraceMinutes,
                         hasCredentials = hasCredentials,
                         jellyfinUserName = s.jellyfinUserName,
                         settingsLoaded = true,
@@ -1416,8 +1418,20 @@ class AdminViewModel @Inject constructor(
 
     fun verifyPin(input: String, onResult: (Boolean) -> Unit) = viewModelScope.launch {
         val s = settings.settings.first()
-        onResult(if (!s.isPinEnabled) true else settings.verifyPin(input, s.parentalPinHash))
+        val ok = if (!s.isPinEnabled) true else settings.verifyPin(input, s.parentalPinHash)
+        if (ok) settings.markAdminUnlocked()
+        onResult(ok)
     }
+
+    fun isAdminGraceActive() = settings.isAdminGraceActive(_state.value.adminPinGraceMinutes)
+
+    fun setAdminPinGraceMinutes(v: Int) {
+        _state.update { it.copy(adminPinGraceMinutes = v) }
+        viewModelScope.launch { settings.saveAdminPinGraceMinutes(v) }
+    }
+
+    // Called when leaving Admin so the grace window counts from the last time it was in use.
+    fun markAdminUnlocked() = settings.markAdminUnlocked()
 
     fun setWifiOnly(v: Boolean) {
         _state.update { it.copy(wifiOnly = v) }
