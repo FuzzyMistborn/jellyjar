@@ -640,6 +640,7 @@ class LibraryViewModel @Inject constructor(
 data class DetailState(
     // Download folders for the "Save to" choice in the quality dialog.
     val downloadFolders: List<com.fuzzymistborn.jellyjar.data.repository.FolderInfo> = emptyList(),
+    val lastDownloadFolder: String? = null,
     val item: JellyfinItem? = null,
     val download: DownloadEntity? = null,
     val episodeDownloads: Map<String, DownloadEntity> = emptyMap(),
@@ -706,6 +707,11 @@ class DetailViewModel @Inject constructor(
         }
         viewModelScope.launch {
             storage.folderInfos.collect { infos -> _state.update { it.copy(downloadFolders = infos) } }
+        }
+        viewModelScope.launch {
+            settings.settings.map { it.lastDownloadFolder }.distinctUntilChanged().collect { folder ->
+                _state.update { it.copy(lastDownloadFolder = folder) }
+            }
         }
         viewModelScope.launch {
             networkMonitor.reconnected.collect {
@@ -800,14 +806,22 @@ class DetailViewModel @Inject constructor(
         _state.update { it.copy(streamPositionMs = downloadRepo.getPlaybackPosition(itemId)) }
     }
 
-    fun queueEpisodeDownload(episode: JellyfinItem, preset: String) = viewModelScope.launch {
+    // Remembers the dialog's "Save to" choice as the next default. Only when the dialog actually
+    // offered one (more than one folder), so a single-folder setup never overwrites it.
+    private fun rememberFolder(folder: String?) {
+        if (_state.value.downloadFolders.size > 1) viewModelScope.launch { settings.saveLastDownloadFolder(folder) }
+    }
+
+    fun queueEpisodeDownload(episode: JellyfinItem, preset: String, targetFolder: String? = null) = viewModelScope.launch {
+        rememberFolder(targetFolder)
         val mediaPath = episode.mediaSources.richestAudioSource()?.path ?: return@launch
-        downloadRepo.queueTranscode(episode, preset, mediaPath).onFailure {
+        downloadRepo.queueTranscode(episode, preset, mediaPath, targetFolder).onFailure {
             _state.update { s -> s.copy(downloadError = "Couldn't start download: ${it.message ?: "unknown error"}") }
         }
     }
 
-    fun queueSeasonDownload(seasonId: String, preset: String) = viewModelScope.launch {
+    fun queueSeasonDownload(seasonId: String, preset: String, targetFolder: String? = null) = viewModelScope.launch {
+        rememberFolder(targetFolder)
         // Show indeterminate progress while fetching episode list
         _state.update { it.copy(seasonDownloadProgress = it.seasonDownloadProgress + (seasonId to 0f)) }
         jellyfinRepo.getItems(parentId = seasonId, types = "Episode").onSuccess { response ->
@@ -815,7 +829,7 @@ class DetailViewModel @Inject constructor(
             var failCount = 0
             episodes.forEachIndexed { idx, episode ->
                 val mediaPath = episode.mediaSources.richestAudioSource()?.path ?: return@forEachIndexed
-                downloadRepo.queueTranscode(episode, preset, mediaPath).onFailure { failCount++ }
+                downloadRepo.queueTranscode(episode, preset, mediaPath, targetFolder).onFailure { failCount++ }
                 val progress = ((idx + 1).toFloat() / episodes.size) * 100f
                 _state.update { it.copy(seasonDownloadProgress = it.seasonDownloadProgress + (seasonId to progress)) }
             }
@@ -944,6 +958,7 @@ class DetailViewModel @Inject constructor(
 
     // targetFolder = the "Save to" choice; null lets the app pick (priority order, series together).
     fun queueDownload(preset: String, targetFolder: String? = null) = viewModelScope.launch {
+        rememberFolder(targetFolder)
         val item = _state.value.item ?: return@launch
         val mediaPath = item.mediaSources.richestAudioSource()?.path ?: return@launch
         downloadRepo.queueTranscode(item, preset, mediaPath, targetFolder).onFailure {
@@ -1859,6 +1874,9 @@ data class SeasonState(
     val jellyfinUrl: String = "",
     val jellyfinToken: String = "",
     val kidModeEnabled: Boolean = false,
+    // Download folders and the last-used one, for the dialog's "Save to" choice.
+    val downloadFolders: List<com.fuzzymistborn.jellyjar.data.repository.FolderInfo> = emptyList(),
+    val lastDownloadFolder: String? = null,
 ) {
     val canStream: Boolean get() = isOnline && (isWifi || streamOverCellular)
 }
@@ -1869,6 +1887,7 @@ class SeasonViewModel @Inject constructor(
     private val downloadRepo: DownloadRepository,
     private val settings: SettingsRepository,
     private val networkMonitor: NetworkMonitor,
+    private val storage: com.fuzzymistborn.jellyjar.data.repository.DownloadStorage,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SeasonState())
@@ -1876,6 +1895,14 @@ class SeasonViewModel @Inject constructor(
     private var loadJob: Job? = null
 
     init {
+        viewModelScope.launch {
+            storage.folderInfos.collect { infos -> _state.update { it.copy(downloadFolders = infos) } }
+        }
+        viewModelScope.launch {
+            settings.settings.map { it.lastDownloadFolder }.distinctUntilChanged().collect { folder ->
+                _state.update { it.copy(lastDownloadFolder = folder) }
+            }
+        }
         viewModelScope.launch {
             combine(
                 networkMonitor.isOnline,
@@ -1974,9 +2001,16 @@ class SeasonViewModel @Inject constructor(
         }
     }
 
-    fun queueEpisodeDownload(episode: JellyfinItem, preset: String) = viewModelScope.launch {
+    // Remembers the dialog's "Save to" choice as the next default. Only when the dialog actually
+    // offered one (more than one folder), so a single-folder setup never overwrites it.
+    private fun rememberFolder(folder: String?) {
+        if (_state.value.downloadFolders.size > 1) viewModelScope.launch { settings.saveLastDownloadFolder(folder) }
+    }
+
+    fun queueEpisodeDownload(episode: JellyfinItem, preset: String, targetFolder: String? = null) = viewModelScope.launch {
+        rememberFolder(targetFolder)
         val path = episode.mediaSources.richestAudioSource()?.path ?: return@launch
-        downloadRepo.queueTranscode(episode, preset, path).onFailure {
+        downloadRepo.queueTranscode(episode, preset, path, targetFolder).onFailure {
             _state.update { s -> s.copy(downloadError = "Couldn't start download: ${it.message ?: "unknown error"}") }
         }
     }
@@ -1994,7 +2028,8 @@ class SeasonViewModel @Inject constructor(
 
     fun clearDownloadError() = _state.update { it.copy(downloadError = null) }
 
-    fun downloadRemaining(preset: String) = viewModelScope.launch {
+    fun downloadRemaining(preset: String, targetFolder: String? = null) = viewModelScope.launch {
+        rememberFolder(targetFolder)
         val downloads = _state.value.episodeDownloads
         var failCount = 0
         _state.value.episodes
@@ -2004,7 +2039,7 @@ class SeasonViewModel @Inject constructor(
             }
             .forEach { ep ->
                 ep.mediaSources.richestAudioSource()?.path?.let { path ->
-                    downloadRepo.queueTranscode(ep, preset, path).onFailure { failCount++ }
+                    downloadRepo.queueTranscode(ep, preset, path, targetFolder).onFailure { failCount++ }
                 }
             }
         if (failCount > 0) _state.update { it.copy(downloadError = "$failCount episode(s) failed to queue") }
@@ -2013,7 +2048,8 @@ class SeasonViewModel @Inject constructor(
     // The next [n] not-yet-downloaded episodes counting from [fromEpisodeId] — the season's "next
     // up", the one its Play button offers. It used to count from E01, so on a half-watched season
     // "Next 5" fetched episodes already watched instead of the ones coming up.
-    fun downloadNextN(n: Int, preset: String, fromEpisodeId: String?) = viewModelScope.launch {
+    fun downloadNextN(n: Int, preset: String, fromEpisodeId: String?, targetFolder: String? = null) = viewModelScope.launch {
+        rememberFolder(targetFolder)
         val downloads = _state.value.episodeDownloads
         val episodes = _state.value.episodes
         val start = episodes.indexOfFirst { it.id == fromEpisodeId }.coerceAtLeast(0)
@@ -2026,7 +2062,7 @@ class SeasonViewModel @Inject constructor(
             .take(n)
             .forEach { ep ->
                 ep.mediaSources.richestAudioSource()?.path?.let { path ->
-                    downloadRepo.queueTranscode(ep, preset, path).onFailure { failCount++ }
+                    downloadRepo.queueTranscode(ep, preset, path, targetFolder).onFailure { failCount++ }
                 }
             }
         if (failCount > 0) _state.update { it.copy(downloadError = "$failCount episode(s) failed to queue") }

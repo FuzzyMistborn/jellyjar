@@ -59,6 +59,8 @@ class SettingsRepository @Inject constructor(
         val KID_MODE_ENABLED = booleanPreferencesKey("kid_mode_enabled")
         val EPISODE_STREAK_LIMIT = intPreferencesKey("episode_streak_limit")
         val DAILY_LIMIT_MINUTES = intPreferencesKey("daily_limit_minutes")
+        // Folder last picked in the download dialog; absent/blank = Automatic.
+        val LAST_DOWNLOAD_FOLDER = stringPreferencesKey("last_download_folder")
         // Today's screen-time usage. All four describe SCREEN_TIME_DATE only; the first write on
         // a new day resets them (see editScreenTime).
         val SCREEN_TIME_DATE = stringPreferencesKey("screen_time_date")
@@ -100,6 +102,7 @@ class SettingsRepository @Inject constructor(
             kidModeEnabled = prefs[Keys.KID_MODE_ENABLED] ?: false,
             episodeStreakLimit = prefs[Keys.EPISODE_STREAK_LIMIT] ?: 0,
             dailyLimitMinutes = prefs[Keys.DAILY_LIMIT_MINUTES] ?: 0,
+            lastDownloadFolder = prefs[Keys.LAST_DOWNLOAD_FOLDER]?.takeIf { it.isNotBlank() },
         )
     }
 
@@ -290,6 +293,10 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.WIFI_ONLY] = true
             prefs[Keys.STREAM_OVER_CELLULAR] = false
         }
+    }
+
+    suspend fun saveLastDownloadFolder(folder: String?) {
+        context.dataStore.edit { prefs -> prefs[Keys.LAST_DOWNLOAD_FOLDER] = folder.orEmpty() }
     }
 
     suspend fun saveEpisodeStreakLimit(limit: Int) {

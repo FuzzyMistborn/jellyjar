@@ -155,16 +155,13 @@ fun DetailScreen(
     // Preset selection dialog
     if (showPresetDialog) {
         PresetPickerDialog(
-            onPresetSelected = { preset ->
-                showPresetDialog = false
-                viewModel.queueDownload(preset)
-            },
-            onDismiss = { showPresetDialog = false },
-            folders = state.downloadFolders,
-            onPresetAndFolderSelected = { preset, folder ->
+            onSelected = { preset, folder ->
                 showPresetDialog = false
                 viewModel.queueDownload(preset, folder)
             },
+            onDismiss = { showPresetDialog = false },
+            folders = state.downloadFolders,
+            initialFolder = state.lastDownloadFolder,
         )
     }
 
@@ -1012,7 +1009,10 @@ internal fun EpisodeRow(
     kidMode: Boolean = false,
     onClick: () -> Unit,
     onStreamClick: ((startMs: Long) -> Unit)? = null,
-    onDownloadClick: (preset: String) -> Unit,
+    onDownloadClick: (preset: String, folder: String?) -> Unit,
+    // Download folders and the one used last, for the dialog's "Save to" choice.
+    folders: List<com.fuzzymistborn.jellyjar.data.repository.FolderInfo> = emptyList(),
+    initialFolder: String? = null,
     onDeleteClick: () -> Unit,
     onPlayOfflineClick: (path: String, jellyfinId: String, startMs: Long) -> Unit,
     modifier: Modifier = Modifier,
@@ -1089,7 +1089,7 @@ internal fun EpisodeRow(
                             if (isOnline) {
                                 CompactActionButton(
                                     icon = Icons.Default.Refresh,
-                                    onClick = { onDownloadClick("retry") },
+                                    onClick = { onDownloadClick("retry", null) },
                                     text = "Retry",
                                 )
                             }
@@ -1202,11 +1202,13 @@ internal fun EpisodeRow(
 
     if (showPresetDialog) {
         PresetPickerDialog(
-            onPresetSelected = { preset ->
+            onSelected = { preset, folder ->
                 showPresetDialog = false
-                onDownloadClick(preset)
+                onDownloadClick(preset, folder)
             },
             onDismiss = { showPresetDialog = false },
+            folders = folders,
+            initialFolder = initialFolder,
         )
     }
 }
@@ -1222,7 +1224,10 @@ internal fun EpisodeThumb(
     kidMode: Boolean = false,
     onClick: () -> Unit,
     onStreamClick: ((startMs: Long) -> Unit)? = null,
-    onDownloadClick: (preset: String) -> Unit,
+    onDownloadClick: (preset: String, folder: String?) -> Unit,
+    // Download folders and the one used last, for the dialog's "Save to" choice.
+    folders: List<com.fuzzymistborn.jellyjar.data.repository.FolderInfo> = emptyList(),
+    initialFolder: String? = null,
     onDeleteClick: () -> Unit,
     onPlayOfflineClick: (path: String, jellyfinId: String, startMs: Long) -> Unit,
 ) {
@@ -1373,7 +1378,7 @@ internal fun EpisodeThumb(
                     CompactActionButton(icon = Icons.Default.Delete, onClick = onDeleteClick, contentColor = Error)
                 download?.status == DownloadStatus.FAILED.name -> {
                     if (isOnline) {
-                        CompactActionButton(icon = Icons.Default.Refresh, onClick = { onDownloadClick("retry") })
+                        CompactActionButton(icon = Icons.Default.Refresh, onClick = { onDownloadClick("retry", null) })
                     }
                     CompactActionButton(icon = Icons.Default.Delete, onClick = onDeleteClick, contentColor = Error)
                 }
@@ -1384,11 +1389,13 @@ internal fun EpisodeThumb(
 
     if (showPresetDialog) {
         PresetPickerDialog(
-            onPresetSelected = { preset ->
+            onSelected = { preset, folder ->
                 showPresetDialog = false
-                onDownloadClick(preset)
+                onDownloadClick(preset, folder)
             },
             onDismiss = { showPresetDialog = false },
+            folders = folders,
+            initialFolder = initialFolder,
         )
     }
 }
