@@ -640,6 +640,7 @@ class LibraryViewModel @Inject constructor(
 data class DetailState(
     // Download folders for the "Save to" choice in the quality dialog.
     val downloadFolders: List<com.fuzzymistborn.jellyjar.data.repository.FolderInfo> = emptyList(),
+    val lastDownloadFolder: String? = null,
     val item: JellyfinItem? = null,
     val download: DownloadEntity? = null,
     val episodeDownloads: Map<String, DownloadEntity> = emptyMap(),
@@ -706,6 +707,11 @@ class DetailViewModel @Inject constructor(
         }
         viewModelScope.launch {
             storage.folderInfos.collect { infos -> _state.update { it.copy(downloadFolders = infos) } }
+        }
+        viewModelScope.launch {
+            settings.settings.map { it.lastDownloadFolder }.distinctUntilChanged().collect { folder ->
+                _state.update { it.copy(lastDownloadFolder = folder) }
+            }
         }
         viewModelScope.launch {
             networkMonitor.reconnected.collect {
@@ -800,18 +806,26 @@ class DetailViewModel @Inject constructor(
         _state.update { it.copy(streamPositionMs = downloadRepo.getPlaybackPosition(itemId)) }
     }
 
-    fun queueEpisodeDownload(episode: JellyfinItem, preset: String) = viewModelScope.launch {
+    // Remembers the dialog's "Save to" choice as the next default. Only when the dialog actually
+    // offered one (more than one folder), so a single-folder setup never overwrites it.
+    private fun rememberFolder(folder: String?) {
+        if (_state.value.downloadFolders.size > 1) viewModelScope.launch { settings.saveLastDownloadFolder(folder) }
+    }
+
+    fun queueEpisodeDownload(episode: JellyfinItem, preset: String, targetFolder: String? = null) = viewModelScope.launch {
+        rememberFolder(targetFolder)
         val mediaPath = episode.mediaSources.richestAudioSource()?.path ?: return@launch
-        downloadRepo.queueTranscode(episode, preset, mediaPath).onFailure {
+        downloadRepo.queueTranscode(episode, preset, mediaPath, targetFolder).onFailure {
             _state.update { s -> s.copy(downloadError = "Couldn't start download: ${it.message ?: "unknown error"}") }
         }
     }
 
-    fun queueSeasonDownload(seasonId: String, preset: String) = viewModelScope.launch {
+    fun queueSeasonDownload(seasonId: String, preset: String, targetFolder: String? = null) = viewModelScope.launch {
+        rememberFolder(targetFolder)
         // Show indeterminate progress while fetching episode list
         _state.update { it.copy(seasonDownloadProgress = it.seasonDownloadProgress + (seasonId to 0f)) }
         jellyfinRepo.getItems(parentId = seasonId, types = "Episode").onSuccess { response ->
-            val result = downloadRepo.queueEpisodes(response.Items, preset) { done, total ->
+            val result = downloadRepo.queueEpisodes(response.Items, preset, targetFolder) { done, total ->
                 val progress = (done.toFloat() / total) * 100f
                 _state.update { it.copy(seasonDownloadProgress = it.seasonDownloadProgress + (seasonId to progress)) }
             }
@@ -940,6 +954,7 @@ class DetailViewModel @Inject constructor(
 
     // targetFolder = the "Save to" choice; null lets the app pick (priority order, series together).
     fun queueDownload(preset: String, targetFolder: String? = null) = viewModelScope.launch {
+        rememberFolder(targetFolder)
         val item = _state.value.item ?: return@launch
         val mediaPath = item.mediaSources.richestAudioSource()?.path ?: return@launch
         downloadRepo.queueTranscode(item, preset, mediaPath, targetFolder).onFailure {
@@ -1019,10 +1034,14 @@ data class AdminState(
     val folderStorage: List<com.fuzzymistborn.jellyjar.data.repository.FolderStorage> = emptyList(),
     val folderError: String? = null,
     val isPinEnabled: Boolean = false,
+    val adminPinGraceMinutes: Int = 5,
     val settingsLoaded: Boolean = false,
     val hasCredentials: Boolean = false,
     // Who the saved sign-in belongs to; blank until known (see checkJellyfinConnection).
     val jellyfinUserName: String = "",
+    // Avatar URL for the signed-in user; blank until signed in. A user with no picture 404s and
+    // the Admin header falls back to the generic icon.
+    val jellyfinAvatarUrl: String = "",
     val isAuthenticated: Boolean = false,
     val isAuthenticating: Boolean = false,
     val isCheckingConnection: Boolean = false,
@@ -1091,8 +1110,11 @@ class AdminViewModel @Inject constructor(
                         jellyfinUrl = if (jellyfinUrlDirty) it.jellyfinUrl else s.jellyfinUrl,
                         shimUrl = if (shimUrlDirty) it.shimUrl else s.shimUrl,
                         isPinEnabled = s.isPinEnabled,
+                        adminPinGraceMinutes = s.adminPinGraceMinutes,
                         hasCredentials = hasCredentials,
                         jellyfinUserName = s.jellyfinUserName,
+                        jellyfinAvatarUrl = if (hasCredentials && s.jellyfinUserId.isNotBlank())
+                            JellyfinImageHelper.userAvatarUrl(s.jellyfinUrl, s.jellyfinUserId) else "",
                         settingsLoaded = true,
                         wifiOnly = s.wifiOnly,
                         streamOverCellular = s.streamOverCellular,
@@ -1412,8 +1434,20 @@ class AdminViewModel @Inject constructor(
 
     fun verifyPin(input: String, onResult: (Boolean) -> Unit) = viewModelScope.launch {
         val s = settings.settings.first()
-        onResult(if (!s.isPinEnabled) true else settings.verifyPin(input, s.parentalPinHash))
+        val ok = if (!s.isPinEnabled) true else settings.verifyPin(input, s.parentalPinHash)
+        if (ok) settings.markAdminUnlocked()
+        onResult(ok)
     }
+
+    fun isAdminGraceActive() = settings.isAdminGraceActive(_state.value.adminPinGraceMinutes)
+
+    fun setAdminPinGraceMinutes(v: Int) {
+        _state.update { it.copy(adminPinGraceMinutes = v) }
+        viewModelScope.launch { settings.saveAdminPinGraceMinutes(v) }
+    }
+
+    // Called when leaving Admin so the grace window counts from the last time it was in use.
+    fun markAdminUnlocked() = settings.markAdminUnlocked()
 
     fun setWifiOnly(v: Boolean) {
         _state.update { it.copy(wifiOnly = v) }
@@ -1836,6 +1870,9 @@ data class SeasonState(
     val jellyfinUrl: String = "",
     val jellyfinToken: String = "",
     val kidModeEnabled: Boolean = false,
+    // Download folders and the last-used one, for the dialog's "Save to" choice.
+    val downloadFolders: List<com.fuzzymistborn.jellyjar.data.repository.FolderInfo> = emptyList(),
+    val lastDownloadFolder: String? = null,
 ) {
     val canStream: Boolean get() = isOnline && (isWifi || streamOverCellular)
 }
@@ -1846,6 +1883,7 @@ class SeasonViewModel @Inject constructor(
     private val downloadRepo: DownloadRepository,
     private val settings: SettingsRepository,
     private val networkMonitor: NetworkMonitor,
+    private val storage: com.fuzzymistborn.jellyjar.data.repository.DownloadStorage,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SeasonState())
@@ -1853,6 +1891,14 @@ class SeasonViewModel @Inject constructor(
     private var loadJob: Job? = null
 
     init {
+        viewModelScope.launch {
+            storage.folderInfos.collect { infos -> _state.update { it.copy(downloadFolders = infos) } }
+        }
+        viewModelScope.launch {
+            settings.settings.map { it.lastDownloadFolder }.distinctUntilChanged().collect { folder ->
+                _state.update { it.copy(lastDownloadFolder = folder) }
+            }
+        }
         viewModelScope.launch {
             combine(
                 networkMonitor.isOnline,
@@ -1951,9 +1997,16 @@ class SeasonViewModel @Inject constructor(
         }
     }
 
-    fun queueEpisodeDownload(episode: JellyfinItem, preset: String) = viewModelScope.launch {
+    // Remembers the dialog's "Save to" choice as the next default. Only when the dialog actually
+    // offered one (more than one folder), so a single-folder setup never overwrites it.
+    private fun rememberFolder(folder: String?) {
+        if (_state.value.downloadFolders.size > 1) viewModelScope.launch { settings.saveLastDownloadFolder(folder) }
+    }
+
+    fun queueEpisodeDownload(episode: JellyfinItem, preset: String, targetFolder: String? = null) = viewModelScope.launch {
+        rememberFolder(targetFolder)
         val path = episode.mediaSources.richestAudioSource()?.path ?: return@launch
-        downloadRepo.queueTranscode(episode, preset, path).onFailure {
+        downloadRepo.queueTranscode(episode, preset, path, targetFolder).onFailure {
             _state.update { s -> s.copy(downloadError = "Couldn't start download: ${it.message ?: "unknown error"}") }
         }
     }
@@ -1971,7 +2024,8 @@ class SeasonViewModel @Inject constructor(
 
     fun clearDownloadError() = _state.update { it.copy(downloadError = null) }
 
-    fun downloadRemaining(preset: String) = viewModelScope.launch {
+    fun downloadRemaining(preset: String, targetFolder: String? = null) = viewModelScope.launch {
+        rememberFolder(targetFolder)
         val downloads = _state.value.episodeDownloads
         val result = downloadRepo.queueEpisodes(
             _state.value.episodes.filter { ep ->
@@ -1979,6 +2033,7 @@ class SeasonViewModel @Inject constructor(
                 dl == null || dl.status == DownloadStatus.FAILED.name
             },
             preset,
+            targetFolder,
         )
         result.errorMessage()?.let { msg -> _state.update { it.copy(downloadError = msg) } }
     }
@@ -1986,7 +2041,8 @@ class SeasonViewModel @Inject constructor(
     // The next [n] not-yet-downloaded episodes counting from [fromEpisodeId] — the season's "next
     // up", the one its Play button offers. It used to count from E01, so on a half-watched season
     // "Next 5" fetched episodes already watched instead of the ones coming up.
-    fun downloadNextN(n: Int, preset: String, fromEpisodeId: String?) = viewModelScope.launch {
+    fun downloadNextN(n: Int, preset: String, fromEpisodeId: String?, targetFolder: String? = null) = viewModelScope.launch {
+        rememberFolder(targetFolder)
         val downloads = _state.value.episodeDownloads
         val episodes = _state.value.episodes
         val start = episodes.indexOfFirst { it.id == fromEpisodeId }.coerceAtLeast(0)
@@ -1998,6 +2054,7 @@ class SeasonViewModel @Inject constructor(
                 }
                 .take(n),
             preset,
+            targetFolder,
         )
         result.errorMessage()?.let { msg -> _state.update { it.copy(downloadError = msg) } }
     }

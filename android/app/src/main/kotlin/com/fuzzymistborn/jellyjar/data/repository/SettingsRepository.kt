@@ -39,6 +39,7 @@ class SettingsRepository @Inject constructor(
         val DOWNLOAD_FOLDERS = stringPreferencesKey("download_folders")
         val PARENTAL_PIN_HASH = stringPreferencesKey("parental_pin_hash")
         val PIN_ENABLED = stringPreferencesKey("pin_enabled")
+        val ADMIN_PIN_GRACE_MINUTES = intPreferencesKey("admin_pin_grace_minutes")
         val EPISODE_VIEW_GRID = booleanPreferencesKey("episode_view_grid")
         val WIFI_ONLY = booleanPreferencesKey("wifi_only")
         val STREAM_OVER_CELLULAR = booleanPreferencesKey("stream_over_cellular")
@@ -58,6 +59,8 @@ class SettingsRepository @Inject constructor(
         val KID_MODE_ENABLED = booleanPreferencesKey("kid_mode_enabled")
         val EPISODE_STREAK_LIMIT = intPreferencesKey("episode_streak_limit")
         val DAILY_LIMIT_MINUTES = intPreferencesKey("daily_limit_minutes")
+        // Folder last picked in the download dialog; absent/blank = Automatic.
+        val LAST_DOWNLOAD_FOLDER = stringPreferencesKey("last_download_folder")
         // Today's screen-time usage. All four describe SCREEN_TIME_DATE only; the first write on
         // a new day resets them (see editScreenTime).
         val SCREEN_TIME_DATE = stringPreferencesKey("screen_time_date")
@@ -77,6 +80,7 @@ class SettingsRepository @Inject constructor(
             downloadFolders = downloadFoldersOf(prefs),
             parentalPinHash = prefs[Keys.PARENTAL_PIN_HASH] ?: "",
             isPinEnabled = prefs[Keys.PIN_ENABLED] == "true",
+            adminPinGraceMinutes = prefs[Keys.ADMIN_PIN_GRACE_MINUTES] ?: 5,
             episodeViewGrid = prefs[Keys.EPISODE_VIEW_GRID] ?: false,
             wifiOnly = prefs[Keys.WIFI_ONLY] ?: false,
             streamOverCellular = prefs[Keys.STREAM_OVER_CELLULAR] ?: false,
@@ -98,6 +102,7 @@ class SettingsRepository @Inject constructor(
             kidModeEnabled = prefs[Keys.KID_MODE_ENABLED] ?: false,
             episodeStreakLimit = prefs[Keys.EPISODE_STREAK_LIMIT] ?: 0,
             dailyLimitMinutes = prefs[Keys.DAILY_LIMIT_MINUTES] ?: 0,
+            lastDownloadFolder = prefs[Keys.LAST_DOWNLOAD_FOLDER]?.takeIf { it.isNotBlank() },
         )
     }
 
@@ -164,6 +169,21 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.PARENTAL_PIN_HASH] = hashPin(pin)
             prefs[Keys.PIN_ENABLED] = "true"
         }
+    }
+
+    // Re-entering Admin within this window of the last unlock skips the PIN. Kept in memory on
+    // purpose (a process restart re-locks) and on the monotonic clock, so changing the device
+    // time can't extend it.
+    @Volatile private var adminUnlockedAt = 0L
+
+    fun markAdminUnlocked() { adminUnlockedAt = android.os.SystemClock.elapsedRealtime() }
+
+    fun isAdminGraceActive(graceMinutes: Int): Boolean =
+        graceMinutes > 0 && adminUnlockedAt != 0L &&
+            android.os.SystemClock.elapsedRealtime() - adminUnlockedAt < graceMinutes * 60_000L
+
+    suspend fun saveAdminPinGraceMinutes(minutes: Int) {
+        context.dataStore.edit { prefs -> prefs[Keys.ADMIN_PIN_GRACE_MINUTES] = minutes.coerceAtLeast(0) }
     }
 
     suspend fun clearPin() {
@@ -273,6 +293,10 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.WIFI_ONLY] = true
             prefs[Keys.STREAM_OVER_CELLULAR] = false
         }
+    }
+
+    suspend fun saveLastDownloadFolder(folder: String?) {
+        context.dataStore.edit { prefs -> prefs[Keys.LAST_DOWNLOAD_FOLDER] = folder.orEmpty() }
     }
 
     suspend fun saveEpisodeStreakLimit(limit: Int) {

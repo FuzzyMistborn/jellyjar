@@ -228,8 +228,12 @@ data class AppSettings(
     // Ordered by preference: downloads fill the first folder that is mounted and has room, then
     // spill to the next. Each is a SAF tree URI (internal storage and SD card alike).
     val downloadFolders: List<String> = emptyList(),
+    // The "Save to" choice last used in the download dialog (null = Automatic); it is the default next time.
+    val lastDownloadFolder: String? = null,
     val parentalPinHash: String = "",
     val isPinEnabled: Boolean = false,
+    // Minutes after leaving Admin during which re-entering skips the PIN; 0 = always ask.
+    val adminPinGraceMinutes: Int = 5,
     val episodeViewGrid: Boolean = false,
     val wifiOnly: Boolean = false,
     val streamOverCellular: Boolean = false,

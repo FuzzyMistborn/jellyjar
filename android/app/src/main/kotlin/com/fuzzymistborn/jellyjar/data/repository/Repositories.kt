@@ -91,6 +91,9 @@ data class StreamResolution(
     val selectedSubtitleIndex: Int? = null,
 )
 
+// 32-char ids + commas: 100 of them is ~3.4 KB of query string.
+private const val IDS_PER_REQUEST = 100
+
 @Singleton
 class JellyfinRepository @Inject constructor(
     private val api: JellyfinApiService,
@@ -226,12 +229,16 @@ class JellyfinRepository @Inject constructor(
             if (ids.isEmpty()) return@runCatching emptyList()
             val s = settings.currentSnapshot()
             val service = buildJellyfinRetrofit(s.jellyfinUrl).create(JellyfinApiService::class.java)
-            service.getItems(
-                userId = s.jellyfinUserId,
-                authHeader = JellyfinImageHelper.authHeader(s),
-                ids = ids.joinToString(","),
-                limit = ids.size,
-            ).Items
+            // Ids go in the query string, so one call per chunk keeps the URL under the 8 KB
+            // limit most reverse proxies enforce (HTTP 414) however many files Press holds.
+            ids.chunked(IDS_PER_REQUEST).flatMap { chunk ->
+                service.getItems(
+                    userId = s.jellyfinUserId,
+                    authHeader = JellyfinImageHelper.authHeader(s),
+                    ids = chunk.joinToString(","),
+                    limit = chunk.size,
+                ).Items
+            }
         }
     }
 
@@ -826,6 +833,8 @@ class DownloadRepository @Inject constructor(
     suspend fun queueEpisodes(
         episodes: List<JellyfinItem>,
         preset: String,
+        // "Save to…": applied to every episode in the batch.
+        targetFolder: String? = null,
         onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
     ): QueueBatchResult = queueScope.async {
         var queued = 0
@@ -835,7 +844,7 @@ class DownloadRepository @Inject constructor(
             val path = episode.mediaSources.richestAudioSource()?.path
             if (path == null) {
                 noSource += episode.displayTitle
-            } else if (queueTranscode(episode, preset, path).isSuccess) {
+            } else if (queueTranscode(episode, preset, path, targetFolder).isSuccess) {
                 queued++
             } else {
                 failed += episode.displayTitle
