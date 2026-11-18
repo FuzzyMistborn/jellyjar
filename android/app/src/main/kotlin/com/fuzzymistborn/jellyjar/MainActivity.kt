@@ -14,6 +14,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
@@ -83,6 +86,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        hideStatusBar()
         requestNotificationPermissionIfNeeded()
         openDownloads.value = intent?.getBooleanExtra(EXTRA_OPEN_DOWNLOADS, false) == true
         setContent {
@@ -90,6 +94,21 @@ class MainActivity : ComponentActivity() {
                 JellyJarNavHost(openDownloads = openDownloads)
             }
         }
+    }
+
+    // The status bar stays hidden everywhere and only slides in on a swipe down from the top.
+    // Insets read as zero while it's hidden, so every screen's statusBarsPadding() collapses and
+    // the transient bar overlays the content without relaying it out. Focus changes (dialogs,
+    // the notification shade, the keyboard) can leave the bar showing, so re-hide on regaining it.
+    private fun hideStatusBar() {
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.statusBars())
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideStatusBar()
     }
 
     override fun onNewIntent(intent: Intent) {

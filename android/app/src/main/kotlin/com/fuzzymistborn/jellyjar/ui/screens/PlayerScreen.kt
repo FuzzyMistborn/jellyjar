@@ -130,7 +130,9 @@ fun PlayerScreen(
         // FLAG_KEEP_SCREEN_ON is set and cleared by the idle dim timer further down; it's only
         // cleaned up here.
         onDispose {
-            controller.show(WindowInsetsCompat.Type.systemBars())
+            // Back to the app-wide state: navigation bar returns, status bar stays hidden
+            // (swipe to reveal), see MainActivity.hideStatusBar().
+            controller.show(WindowInsetsCompat.Type.navigationBars())
             // WindowInsetsControllerCompat.show() doesn't always trigger an immediate
             // relayout, so the next screen's statusBarsPadding() can read a stale (zero)
             // inset for one frame and render its header under the status bar. Forcing a
