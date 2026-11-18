@@ -34,6 +34,7 @@ import com.fuzzymistborn.jellyjar.data.local.PendingPlaybackSyncDao
 import com.fuzzymistborn.jellyjar.model.*
 import com.fuzzymistborn.jellyjar.worker.DownloadWorker
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -700,6 +701,8 @@ class DownloadRepository @Inject constructor(
         // Headroom beyond the file itself when choosing a folder at copy time.
         private const val COPY_MARGIN_BYTES = 64L * 1024 * 1024
 
+        private const val PRESET_CACHE_MS = 60_000L
+
         // Space required in a folder when Press doesn't report the file's size.
         private const val UNKNOWN_SIZE_RESERVE_BYTES = 4L * 1024 * 1024 * 1024
 
@@ -712,6 +715,7 @@ class DownloadRepository @Inject constructor(
     // Moves outlive the screen that started them: a copy cancelled with a ViewModel would leave a
     // half-written file behind.
     private val moveScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+    private val queueScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
     // In-flight moves by download id: a second tap is ignored, and deleting the download cancels
     // its move (and waits for the partial copy to be cleaned up) before removing anything.
     private val moveJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
@@ -794,6 +798,52 @@ class DownloadRepository @Inject constructor(
             downloadDao.upsert(entity)
         }
     }
+
+    // What happened to a batch of episodes handed to queueEpisodes(): titles, so the caller can say
+    // which ones need attention instead of just how many.
+    data class QueueBatchResult(
+        val queued: Int,
+        val noSource: List<String>,
+        val failed: List<String>,
+    ) {
+        // Null when everything was queued (or was already queued).
+        fun errorMessage(): String? {
+            if (noSource.isEmpty() && failed.isEmpty()) return null
+            fun names(list: List<String>) =
+                if (list.size <= 3) list.joinToString() else list.take(3).joinToString() + " and ${list.size - 3} more"
+            return buildList {
+                if (failed.isNotEmpty()) add("Couldn't queue ${names(failed)}")
+                if (noSource.isNotEmpty()) add("No source file reported for ${names(noSource)}")
+            }.joinToString(". ")
+        }
+    }
+
+    // Queues several episodes (a season, "next 5", "download remaining"). Runs in the repository's
+    // own scope: queueTranscode() makes several network calls per episode, so a season takes long
+    // enough that leaving the screen cancelled the caller's ViewModel mid-loop — the remaining
+    // episodes never got a row and left no trace. The caller still awaits the result, but being
+    // cancelled no longer stops the work.
+    suspend fun queueEpisodes(
+        episodes: List<JellyfinItem>,
+        preset: String,
+        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+    ): QueueBatchResult = queueScope.async {
+        var queued = 0
+        val noSource = mutableListOf<String>()
+        val failed = mutableListOf<String>()
+        episodes.forEachIndexed { idx, episode ->
+            val path = episode.mediaSources.richestAudioSource()?.path
+            if (path == null) {
+                noSource += episode.displayTitle
+            } else if (queueTranscode(episode, preset, path).isSuccess) {
+                queued++
+            } else {
+                failed += episode.displayTitle
+            }
+            onProgress(idx + 1, episodes.size)
+        }
+        QueueBatchResult(queued, noSource, failed)
+    }.await()
 
     // Builds a Jellyfin-style relative path (subfolders + filename) under the download root:
     //   Movies/Title (Year)/<filename>
@@ -1391,9 +1441,19 @@ class DownloadRepository @Inject constructor(
         }
     }
 
+    // Preset settings rarely change; a batch of episodes shouldn't ask Press for them once each.
+    private var presetCache: Pair<Long, Map<String, PresetConfigDto>>? = null
+
+    private suspend fun presetDetails(): Map<String, PresetConfigDto> {
+        presetCache?.takeIf { System.currentTimeMillis() - it.first < PRESET_CACHE_MS }?.let { return it.second }
+        val fresh = runCatching { shimService().getPresetDetails() }.getOrNull() ?: return emptyMap()
+        presetCache = System.currentTimeMillis() to fresh
+        return fresh
+    }
+
     private suspend fun estimateOutputBytes(preset: String, runtimeMinutes: Int?): Long? {
         if (runtimeMinutes == null || runtimeMinutes <= 0) return null
-        val config = runCatching { shimService().getPresetDetails()[preset] }.getOrNull() ?: return null
+        val config = presetDetails()[preset] ?: return null
         val videoBps = parseBitrateBps(config.video_bitrate) ?: return null
         val audioBps = parseBitrateBps(config.audio_bitrate) ?: return null
         val seconds = runtimeMinutes.toLong() * 60

@@ -811,19 +811,15 @@ class DetailViewModel @Inject constructor(
         // Show indeterminate progress while fetching episode list
         _state.update { it.copy(seasonDownloadProgress = it.seasonDownloadProgress + (seasonId to 0f)) }
         jellyfinRepo.getItems(parentId = seasonId, types = "Episode").onSuccess { response ->
-            val episodes = response.Items
-            var failCount = 0
-            episodes.forEachIndexed { idx, episode ->
-                val mediaPath = episode.mediaSources.richestAudioSource()?.path ?: return@forEachIndexed
-                downloadRepo.queueTranscode(episode, preset, mediaPath).onFailure { failCount++ }
-                val progress = ((idx + 1).toFloat() / episodes.size) * 100f
+            val result = downloadRepo.queueEpisodes(response.Items, preset) { done, total ->
+                val progress = (done.toFloat() / total) * 100f
                 _state.update { it.copy(seasonDownloadProgress = it.seasonDownloadProgress + (seasonId to progress)) }
             }
             // Clear progress indicator once all queued
             _state.update {
                 it.copy(
                     seasonDownloadProgress = it.seasonDownloadProgress - seasonId,
-                    downloadError = if (failCount > 0) "$failCount episode(s) failed to queue" else it.downloadError,
+                    downloadError = result.errorMessage() ?: it.downloadError,
                 )
             }
         }.onFailure {
@@ -1977,18 +1973,14 @@ class SeasonViewModel @Inject constructor(
 
     fun downloadRemaining(preset: String) = viewModelScope.launch {
         val downloads = _state.value.episodeDownloads
-        var failCount = 0
-        _state.value.episodes
-            .filter { ep ->
+        val result = downloadRepo.queueEpisodes(
+            _state.value.episodes.filter { ep ->
                 val dl = downloads[ep.id]
                 dl == null || dl.status == DownloadStatus.FAILED.name
-            }
-            .forEach { ep ->
-                ep.mediaSources.richestAudioSource()?.path?.let { path ->
-                    downloadRepo.queueTranscode(ep, preset, path).onFailure { failCount++ }
-                }
-            }
-        if (failCount > 0) _state.update { it.copy(downloadError = "$failCount episode(s) failed to queue") }
+            },
+            preset,
+        )
+        result.errorMessage()?.let { msg -> _state.update { it.copy(downloadError = msg) } }
     }
 
     // The next [n] not-yet-downloaded episodes counting from [fromEpisodeId] — the season's "next
@@ -1998,19 +1990,16 @@ class SeasonViewModel @Inject constructor(
         val downloads = _state.value.episodeDownloads
         val episodes = _state.value.episodes
         val start = episodes.indexOfFirst { it.id == fromEpisodeId }.coerceAtLeast(0)
-        var failCount = 0
-        episodes.drop(start)
-            .filter { ep ->
-                val dl = downloads[ep.id]
-                dl == null || dl.status == DownloadStatus.FAILED.name
-            }
-            .take(n)
-            .forEach { ep ->
-                ep.mediaSources.richestAudioSource()?.path?.let { path ->
-                    downloadRepo.queueTranscode(ep, preset, path).onFailure { failCount++ }
+        val result = downloadRepo.queueEpisodes(
+            episodes.drop(start)
+                .filter { ep ->
+                    val dl = downloads[ep.id]
+                    dl == null || dl.status == DownloadStatus.FAILED.name
                 }
-            }
-        if (failCount > 0) _state.update { it.copy(downloadError = "$failCount episode(s) failed to queue") }
+                .take(n),
+            preset,
+        )
+        result.errorMessage()?.let { msg -> _state.update { it.copy(downloadError = msg) } }
     }
 
     fun toggleEpisodeView() = viewModelScope.launch {
