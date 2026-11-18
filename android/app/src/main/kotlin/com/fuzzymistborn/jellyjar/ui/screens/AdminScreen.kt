@@ -8,6 +8,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -169,8 +170,18 @@ fun AdminScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Default.AccountCircle, contentDescription = null,
-                        tint = Primary, modifier = Modifier.size(IconSize.md))
+                    val fallback = @Composable {
+                        Icon(Icons.Default.AccountCircle, contentDescription = null,
+                            tint = Primary, modifier = Modifier.size(40.dp))
+                    }
+                    if (state.jellyfinAvatarUrl.isBlank()) fallback()
+                    else coil.compose.SubcomposeAsyncImage(
+                        model = state.jellyfinAvatarUrl,
+                        contentDescription = null,
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                        modifier = Modifier.size(40.dp).clip(CircleShape),
+                        error = { fallback() },
+                    )
                     Text(
                         buildAnnotatedString {
                             append("Signed in as ")
