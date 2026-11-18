@@ -1027,6 +1027,9 @@ data class AdminState(
     val hasCredentials: Boolean = false,
     // Who the saved sign-in belongs to; blank until known (see checkJellyfinConnection).
     val jellyfinUserName: String = "",
+    // Avatar URL for the signed-in user; blank until signed in. A user with no picture 404s and
+    // the Admin header falls back to the generic icon.
+    val jellyfinAvatarUrl: String = "",
     val isAuthenticated: Boolean = false,
     val isAuthenticating: Boolean = false,
     val isCheckingConnection: Boolean = false,
@@ -1097,6 +1100,8 @@ class AdminViewModel @Inject constructor(
                         isPinEnabled = s.isPinEnabled,
                         hasCredentials = hasCredentials,
                         jellyfinUserName = s.jellyfinUserName,
+                        jellyfinAvatarUrl = if (hasCredentials && s.jellyfinUserId.isNotBlank())
+                            JellyfinImageHelper.userAvatarUrl(s.jellyfinUrl, s.jellyfinUserId) else "",
                         settingsLoaded = true,
                         wifiOnly = s.wifiOnly,
                         streamOverCellular = s.streamOverCellular,
