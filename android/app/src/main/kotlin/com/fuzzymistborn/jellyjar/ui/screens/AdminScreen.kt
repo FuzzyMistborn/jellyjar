@@ -46,11 +46,14 @@ fun PinGateScreen(
     onSkip: () -> Unit,
     viewModel: AdminViewModel = hiltViewModel(),
 ) {
+    // Recently unlocked counts as unlocked: skip the keypad for a few minutes after leaving Admin.
+    val graceActive = remember(settingsLoaded) { settingsLoaded && viewModel.isAdminGraceActive() }
+
     LaunchedEffect(isPinEnabled, settingsLoaded) {
-        if (settingsLoaded && !isPinEnabled) onSkip()
+        if (settingsLoaded && (!isPinEnabled || graceActive)) onSkip()
     }
 
-    if (!settingsLoaded || !isPinEnabled) return
+    if (!settingsLoaded || !isPinEnabled || graceActive) return
 
     var pin by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
@@ -121,6 +124,7 @@ fun AdminScreen(
     // No explicit Save button — everything persists as it changes; the Press URL commits on
     // focus loss / test / leaving the screen, so catch system back as well as the header arrow.
     val leaveScreen = {
+        viewModel.markAdminUnlocked()
         viewModel.commitShimUrl()
         viewModel.commitJellyfinUrl()
         onBack()
@@ -778,6 +782,16 @@ fun AdminScreen(
                 modifier = Modifier.fillMaxWidth(),
                 colors = themedTextFieldColors(),
             )
+            if (state.isPinEnabled) {
+                LimitChoiceRow(
+                    title = "Skip PIN After Leaving Admin",
+                    subtitle = "Reopening Admin within this time needs no PIN",
+                    options = listOf(0, 1, 5, 15, 30),
+                    selected = state.adminPinGraceMinutes,
+                    label = { if (it == 0) "Off" else "$it m" },
+                    onSelect = { viewModel.setAdminPinGraceMinutes(it) },
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 Button(
                     onClick = { viewModel.savePin(newPin); newPin = "" },

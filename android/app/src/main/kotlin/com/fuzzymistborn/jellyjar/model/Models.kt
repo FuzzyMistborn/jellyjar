@@ -230,6 +230,8 @@ data class AppSettings(
     val downloadFolders: List<String> = emptyList(),
     val parentalPinHash: String = "",
     val isPinEnabled: Boolean = false,
+    // Minutes after leaving Admin during which re-entering skips the PIN; 0 = always ask.
+    val adminPinGraceMinutes: Int = 5,
     val episodeViewGrid: Boolean = false,
     val wifiOnly: Boolean = false,
     val streamOverCellular: Boolean = false,
