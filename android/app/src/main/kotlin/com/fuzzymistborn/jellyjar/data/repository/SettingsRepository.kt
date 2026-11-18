@@ -39,8 +39,6 @@ class SettingsRepository @Inject constructor(
         val DOWNLOAD_FOLDERS = stringPreferencesKey("download_folders")
         val PARENTAL_PIN_HASH = stringPreferencesKey("parental_pin_hash")
         val PIN_ENABLED = stringPreferencesKey("pin_enabled")
-        // Folder last picked in the download dialog; absent/blank = Automatic.
-        val LAST_DOWNLOAD_FOLDER = stringPreferencesKey("last_download_folder")
         val EPISODE_VIEW_GRID = booleanPreferencesKey("episode_view_grid")
         val WIFI_ONLY = booleanPreferencesKey("wifi_only")
         val STREAM_OVER_CELLULAR = booleanPreferencesKey("stream_over_cellular")
@@ -60,6 +58,8 @@ class SettingsRepository @Inject constructor(
         val KID_MODE_ENABLED = booleanPreferencesKey("kid_mode_enabled")
         val EPISODE_STREAK_LIMIT = intPreferencesKey("episode_streak_limit")
         val DAILY_LIMIT_MINUTES = intPreferencesKey("daily_limit_minutes")
+        // Folder last picked in the download dialog; absent/blank = Automatic.
+        val LAST_DOWNLOAD_FOLDER = stringPreferencesKey("last_download_folder")
         // Today's screen-time usage. All four describe SCREEN_TIME_DATE only; the first write on
         // a new day resets them (see editScreenTime).
         val SCREEN_TIME_DATE = stringPreferencesKey("screen_time_date")
@@ -77,7 +77,6 @@ class SettingsRepository @Inject constructor(
             jellyfinDeviceId = prefs[Keys.JELLYFIN_DEVICE_ID] ?: "",
             shimUrl = prefs[Keys.SHIM_URL] ?: "",
             downloadFolders = downloadFoldersOf(prefs),
-            lastDownloadFolder = prefs[Keys.LAST_DOWNLOAD_FOLDER]?.takeIf { it.isNotBlank() },
             parentalPinHash = prefs[Keys.PARENTAL_PIN_HASH] ?: "",
             isPinEnabled = prefs[Keys.PIN_ENABLED] == "true",
             episodeViewGrid = prefs[Keys.EPISODE_VIEW_GRID] ?: false,
@@ -101,6 +100,7 @@ class SettingsRepository @Inject constructor(
             kidModeEnabled = prefs[Keys.KID_MODE_ENABLED] ?: false,
             episodeStreakLimit = prefs[Keys.EPISODE_STREAK_LIMIT] ?: 0,
             dailyLimitMinutes = prefs[Keys.DAILY_LIMIT_MINUTES] ?: 0,
+            lastDownloadFolder = prefs[Keys.LAST_DOWNLOAD_FOLDER]?.takeIf { it.isNotBlank() },
         )
     }
 
