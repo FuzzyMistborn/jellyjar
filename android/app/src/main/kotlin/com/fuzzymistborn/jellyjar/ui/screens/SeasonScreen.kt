@@ -237,15 +237,17 @@ fun SeasonScreen(
                             }
                             if (showPresetsFor != null) {
                                 PresetPickerDialog(
-                                    onPresetSelected = { preset ->
+                                    onSelected = { preset, folder ->
                                         when (showPresetsFor) {
-                                            "remaining" -> viewModel.downloadRemaining(preset)
-                                            "next5" -> viewModel.downloadNextN(5, preset, nextEpisode?.id)
-                                            "next10" -> viewModel.downloadNextN(10, preset, nextEpisode?.id)
+                                            "remaining" -> viewModel.downloadRemaining(preset, folder)
+                                            "next5" -> viewModel.downloadNextN(5, preset, nextEpisode?.id, folder)
+                                            "next10" -> viewModel.downloadNextN(10, preset, nextEpisode?.id, folder)
                                         }
                                         showPresetsFor = null
                                     },
                                     onDismiss = { showPresetsFor = null },
+                                    folders = state.downloadFolders,
+                                    initialFolder = state.lastDownloadFolder,
                                 )
                             }
                         }
@@ -289,9 +291,11 @@ fun SeasonScreen(
                                             onStreamClick(viewModel.streamUrl(episode.id), episode.id, startMs)
                                         }
                                     },
-                                    onDownloadClick = { preset ->
+                                    folders = state.downloadFolders,
+                                    initialFolder = state.lastDownloadFolder,
+                                    onDownloadClick = { preset, folder ->
                                         if (preset == "retry") viewModel.retryEpisodeDownload(episode.id)
-                                        else viewModel.queueEpisodeDownload(episode, preset)
+                                        else viewModel.queueEpisodeDownload(episode, preset, folder)
                                     },
                                     onDeleteClick = { requestDelete(episode.id) },
                                     onPlayOfflineClick = onPlayClick,
@@ -316,9 +320,11 @@ fun SeasonScreen(
                                     onStreamClick(viewModel.streamUrl(episode.id), episode.id, startMs)
                                 }
                             },
-                            onDownloadClick = { preset ->
+                            folders = state.downloadFolders,
+                            initialFolder = state.lastDownloadFolder,
+                            onDownloadClick = { preset, folder ->
                                 if (preset == "retry") viewModel.retryEpisodeDownload(episode.id)
-                                else viewModel.queueEpisodeDownload(episode, preset)
+                                else viewModel.queueEpisodeDownload(episode, preset, folder)
                             },
                             onDeleteClick = { requestDelete(episode.id) },
                             onPlayOfflineClick = onPlayClick,

@@ -39,6 +39,8 @@ class SettingsRepository @Inject constructor(
         val DOWNLOAD_FOLDERS = stringPreferencesKey("download_folders")
         val PARENTAL_PIN_HASH = stringPreferencesKey("parental_pin_hash")
         val PIN_ENABLED = stringPreferencesKey("pin_enabled")
+        // Folder last picked in the download dialog; absent/blank = Automatic.
+        val LAST_DOWNLOAD_FOLDER = stringPreferencesKey("last_download_folder")
         val EPISODE_VIEW_GRID = booleanPreferencesKey("episode_view_grid")
         val WIFI_ONLY = booleanPreferencesKey("wifi_only")
         val STREAM_OVER_CELLULAR = booleanPreferencesKey("stream_over_cellular")
@@ -75,6 +77,7 @@ class SettingsRepository @Inject constructor(
             jellyfinDeviceId = prefs[Keys.JELLYFIN_DEVICE_ID] ?: "",
             shimUrl = prefs[Keys.SHIM_URL] ?: "",
             downloadFolders = downloadFoldersOf(prefs),
+            lastDownloadFolder = prefs[Keys.LAST_DOWNLOAD_FOLDER]?.takeIf { it.isNotBlank() },
             parentalPinHash = prefs[Keys.PARENTAL_PIN_HASH] ?: "",
             isPinEnabled = prefs[Keys.PIN_ENABLED] == "true",
             episodeViewGrid = prefs[Keys.EPISODE_VIEW_GRID] ?: false,
@@ -273,6 +276,10 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.WIFI_ONLY] = true
             prefs[Keys.STREAM_OVER_CELLULAR] = false
         }
+    }
+
+    suspend fun saveLastDownloadFolder(folder: String?) {
+        context.dataStore.edit { prefs -> prefs[Keys.LAST_DOWNLOAD_FOLDER] = folder.orEmpty() }
     }
 
     suspend fun saveEpisodeStreakLimit(limit: Int) {

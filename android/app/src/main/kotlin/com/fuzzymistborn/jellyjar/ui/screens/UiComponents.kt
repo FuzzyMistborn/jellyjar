@@ -147,16 +147,16 @@ fun DeleteConfirmDialog(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PresetPickerDialog(
-    onPresetSelected: (String) -> Unit,
+    // folder is null for Automatic, and always null when there is only one download folder.
+    onSelected: (preset: String, folder: String?) -> Unit,
     onDismiss: () -> Unit,
-    // With more than one download folder and onPresetAndFolderSelected set, the dialog also offers
-    // a "Save to" choice (Automatic, or one folder) and reports it instead of calling
-    // onPresetSelected.
+    // With more than one download folder the dialog also offers a "Save to" choice (Automatic, or
+    // one folder), pre-selected to initialFolder (the one used last time).
     folders: List<com.fuzzymistborn.jellyjar.data.repository.FolderInfo> = emptyList(),
-    onPresetAndFolderSelected: ((preset: String, folder: String?) -> Unit)? = null,
+    initialFolder: String? = null,
 ) {
-    var chosenFolder by remember { mutableStateOf<String?>(null) }
-    val askFolder = folders.size > 1 && onPresetAndFolderSelected != null
+    var chosenFolder by remember { mutableStateOf(initialFolder) }
+    val askFolder = folders.size > 1
     // The card can be ejected while the dialog is open; don't submit a folder that just vanished.
     val effectiveFolder = chosenFolder?.takeIf { uri -> folders.any { it.uri == uri && it.available } }
     AlertDialog(
@@ -185,8 +185,7 @@ fun PresetPickerDialog(
                 listOf("1080p" to "Full HD · ~4GB/hr", "720p" to "HD · ~2GB/hr").forEach { (preset, desc) ->
                     OutlinedButton(
                         onClick = {
-                            if (askFolder) onPresetAndFolderSelected!!(preset, effectiveFolder)
-                            else onPresetSelected(preset)
+                            onSelected(preset, if (askFolder) effectiveFolder else null)
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
