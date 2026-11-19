@@ -173,3 +173,44 @@ fun GroupActionsMenu(
         }
     }
 }
+
+// Asks before queueing a batch, with what it will cost: how many files, how big, how much room.
+// [approximate] marks a size that is an estimate from runtime rather than the real file size.
+@Composable
+fun BulkDownloadConfirmDialog(
+    title: String,
+    count: Int,
+    bytes: Long,
+    approximate: Boolean,
+    freeBytes: Long,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val tooBig = freeBytes in 0 until bytes
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title, style = MaterialTheme.typography.titleLarge, color = OnSurface) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                Text(
+                    "$count episode${if (count != 1) "s" else ""} · ${if (approximate) "about " else ""}${formatSize(bytes)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OnSurface,
+                )
+                Text(
+                    "${formatSize(freeBytes)} free on this device",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (tooBig) Error else OnSurfaceMuted,
+                )
+                if (tooBig) Text(
+                    "There isn't enough room for all of it. Free some space first, or some downloads will fail.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Error,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onDismiss(); onConfirm() }) { Text("Download") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        containerColor = SurfaceVariant,
+    )
+}

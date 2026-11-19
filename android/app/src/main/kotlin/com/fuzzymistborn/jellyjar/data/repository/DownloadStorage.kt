@@ -82,6 +82,9 @@ data class FolderInfo(
         }
 }
 
+// Free space across every reachable folder, counting a volume once even if two folders live on it.
+fun totalFreeBytes(folders: List<FolderInfo>): Long =
+    folders.filter { it.available }.distinctBy { it.volumeKey }.sumOf { it.freeBytes }
 
 @Singleton
 class DownloadStorage @Inject constructor(

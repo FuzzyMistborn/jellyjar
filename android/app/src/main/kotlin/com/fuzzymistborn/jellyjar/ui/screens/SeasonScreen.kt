@@ -26,6 +26,9 @@ import com.fuzzymistborn.jellyjar.ui.theme.*
 import com.fuzzymistborn.jellyjar.ui.viewmodel.SeasonViewModel
 import kotlinx.coroutines.launch
 
+// A bulk download whose quality and folder are chosen but which hasn't been confirmed yet.
+private data class BulkChoice(val kind: String, val preset: String, val folder: String?)
+
 @Composable
 fun SeasonScreen(
     seasonId: String,
@@ -55,6 +58,7 @@ fun SeasonScreen(
         )
     }
 
+    var pendingBulk by remember { mutableStateOf<BulkChoice?>(null) }
     var confirmDeleteSeason by remember { mutableStateOf(false) }
     if (confirmDeleteSeason) {
         DeleteConfirmDialog(
@@ -62,6 +66,28 @@ fun SeasonScreen(
             message = "This deletes every downloaded episode of this season from this device. You can download them again later.",
             onConfirm = { viewModel.deleteSeasonDownloads(); confirmDeleteSeason = false },
             onDismiss = { confirmDeleteSeason = false },
+        )
+    }
+
+    // "Download Remaining / Next N" ask first, showing what it will cost. Only the runtime is known
+    // before encoding, so the size is an estimate from the preset's rough GB-per-hour.
+    pendingBulk?.let { choice ->
+        val nextId = remember(state.episodes, state.episodeDownloads) {
+            nextUpEpisode(state.episodes, state.episodeDownloads)?.id
+        }
+        val episodes = remember(choice, state.episodes, state.episodeDownloads) {
+            viewModel.bulkEpisodes(choice.kind, nextId)
+        }
+        val gbPerHour = if (choice.preset.startsWith("1080")) 4.0 else 2.0
+        val estimate = (episodes.sumOf { it.runtimeMinutes ?: 0 } / 60.0 * gbPerHour * 1_073_741_824L).toLong()
+        BulkDownloadConfirmDialog(
+            title = "Download ${episodes.size} episode${if (episodes.size != 1) "s" else ""}?",
+            count = episodes.size,
+            bytes = estimate,
+            approximate = true,
+            freeBytes = com.fuzzymistborn.jellyjar.data.repository.totalFreeBytes(state.downloadFolders),
+            onConfirm = { viewModel.downloadEpisodes(episodes, choice.preset, choice.folder) },
+            onDismiss = { pendingBulk = null },
         )
     }
 
@@ -247,12 +273,9 @@ fun SeasonScreen(
                             }
                             if (showPresetsFor != null) {
                                 PresetPickerDialog(
+                                    // The choice isn't final until the size confirmation below.
                                     onSelected = { preset, folder ->
-                                        when (showPresetsFor) {
-                                            "remaining" -> viewModel.downloadRemaining(preset, folder)
-                                            "next5" -> viewModel.downloadNextN(5, preset, nextEpisode?.id, folder)
-                                            "next10" -> viewModel.downloadNextN(10, preset, nextEpisode?.id, folder)
-                                        }
+                                        pendingBulk = BulkChoice(showPresetsFor!!, preset, folder)
                                         showPresetsFor = null
                                     },
                                     onDismiss = { showPresetsFor = null },
@@ -283,7 +306,7 @@ fun SeasonScreen(
                                 DropdownMenu(expanded = showManageMenu, onDismissRequest = { showManageMenu = false }) {
                                     if (!moving) moveTargets.forEach { target ->
                                         DropdownMenuItem(
-                                            text = { Text("Move downloads to ${target.shortLabel}") },
+                                            text = { Text("Move downloads to ${target.label}") },
                                             onClick = { showManageMenu = false; viewModel.moveSeasonDownloads(target.uri) },
                                             leadingIcon = { Icon(Icons.Default.DriveFileMove, contentDescription = null) },
                                         )
