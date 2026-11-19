@@ -55,6 +55,16 @@ fun SeasonScreen(
         )
     }
 
+    var confirmDeleteSeason by remember { mutableStateOf(false) }
+    if (confirmDeleteSeason) {
+        DeleteConfirmDialog(
+            title = "Remove downloaded episodes?",
+            message = "This deletes every downloaded episode of this season from this device. You can download them again later.",
+            onConfirm = { viewModel.deleteSeasonDownloads(); confirmDeleteSeason = false },
+            onDismiss = { confirmDeleteSeason = false },
+        )
+    }
+
     val visibleEpisodes = remember(state.episodes, state.episodeDownloads, state.isOnline) {
         if (state.isOnline) state.episodes
         else state.episodes.filter { ep ->
@@ -249,6 +259,41 @@ fun SeasonScreen(
                                     folders = state.downloadFolders,
                                     initialFolder = state.lastDownloadFolder,
                                 )
+                            }
+                        }
+                        val completedIds = visibleEpisodes.map { it.id }
+                            .filter { state.episodeDownloads[it]?.status == DownloadStatus.COMPLETE.name }
+                        if (completedIds.isNotEmpty() && !state.kidModeEnabled) {
+                            var showManageMenu by remember { mutableStateOf(false) }
+                            val moving = completedIds.any { it in state.movingIds }
+                            // Folders at least one downloaded episode could still move into.
+                            val moveTargets = state.downloadFolders.filter { f ->
+                                f.available && completedIds.any {
+                                    it !in state.unavailableIds && state.folderRootById[it] != f.uri
+                                }
+                            }
+                            Box {
+                                IconButton(onClick = { showManageMenu = true }) {
+                                    if (moving) {
+                                        CircularProgressIndicator(modifier = Modifier.size(IconSize.md), strokeWidth = 2.dp, color = accent)
+                                    } else {
+                                        Icon(Icons.Default.FolderOpen, contentDescription = "Manage downloads", tint = OnSurfaceMuted)
+                                    }
+                                }
+                                DropdownMenu(expanded = showManageMenu, onDismissRequest = { showManageMenu = false }) {
+                                    if (!moving) moveTargets.forEach { target ->
+                                        DropdownMenuItem(
+                                            text = { Text("Move downloads to ${target.shortLabel}") },
+                                            onClick = { showManageMenu = false; viewModel.moveSeasonDownloads(target.uri) },
+                                            leadingIcon = { Icon(Icons.Default.DriveFileMove, contentDescription = null) },
+                                        )
+                                    }
+                                    DropdownMenuItem(
+                                        text = { Text("Delete downloaded episodes", color = Error) },
+                                        onClick = { showManageMenu = false; confirmDeleteSeason = true },
+                                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Error) },
+                                    )
+                                }
                             }
                         }
                         IconButton(onClick = { if (!state.episodeViewGrid) viewModel.toggleEpisodeView() }) {

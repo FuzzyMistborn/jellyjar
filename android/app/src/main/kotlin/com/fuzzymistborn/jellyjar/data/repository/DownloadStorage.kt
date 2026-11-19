@@ -72,7 +72,16 @@ data class FolderInfo(
     val totalBytes: Long,
     // Folders on the same volume share free space, so totals must not be summed per folder.
     val volumeKey: String,
-)
+) {
+    // "Internal · Movies" instead of "Internal shared storage / Movies" — for chips and menus.
+    val shortLabel: String
+        get() {
+            val volume = label.substringBefore(" / ").replace("Internal shared storage", "Internal")
+            val folder = label.substringAfter(" / ", "").substringAfterLast('/').trim()
+            return if (folder.isEmpty()) volume else "$volume · $folder"
+        }
+}
+
 
 @Singleton
 class DownloadStorage @Inject constructor(
