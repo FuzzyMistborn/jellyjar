@@ -1870,9 +1870,14 @@ data class SeasonState(
     val jellyfinUrl: String = "",
     val jellyfinToken: String = "",
     val kidModeEnabled: Boolean = false,
-    // Download folders and the last-used one, for the dialog's "Save to" choice.
+    // Download folders and the last-used one, for the dialog's "Save to" choice and the season's
+    // "Move downloads to…" targets.
     val downloadFolders: List<com.fuzzymistborn.jellyjar.data.repository.FolderInfo> = emptyList(),
     val lastDownloadFolder: String? = null,
+    // Folder URI each completed download lives in, and those whose storage is out right now.
+    val folderRootById: Map<String, String> = emptyMap(),
+    val unavailableIds: Set<String> = emptySet(),
+    val movingIds: Set<String> = emptySet(),
 ) {
     val canStream: Boolean get() = isOnline && (isWifi || streamOverCellular)
 }
@@ -1929,6 +1934,40 @@ class SeasonViewModel @Inject constructor(
                 _state.update { it.copy(episodeDownloads = all.associateBy { d -> d.jellyfinId }) }
             }
         }
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(storage.folderInfos, downloadRepo.completedDownloads) { infos, completed ->
+                val uris = infos.map { it.uri }
+                val gone = infos.filterNot { it.available }.map { it.uri }.toSet()
+                completed.mapNotNull { d -> storage.rootOf(d, uris)?.let { d.jellyfinId to it } }.toMap() to
+                    completed.filter { storage.isUnavailable(it, uris, gone) }.map { it.jellyfinId }.toSet()
+            }.collect { (roots, unavailable) ->
+                _state.update { it.copy(folderRootById = roots, unavailableIds = unavailable) }
+            }
+        }
+        viewModelScope.launch {
+            downloadRepo.movingIds.collect { ids -> _state.update { it.copy(movingIds = ids) } }
+        }
+        viewModelScope.launch {
+            downloadRepo.moveErrors.collect { msg -> _state.update { it.copy(downloadError = msg) } }
+        }
+    }
+
+    // Finished downloads of this season's episodes.
+    private fun completedEpisodeIds(): List<String> {
+        val downloads = _state.value.episodeDownloads
+        return _state.value.episodes.map { it.id }
+            .filter { downloads[it]?.status == DownloadStatus.COMPLETE.name }
+    }
+
+    fun moveSeasonDownloads(targetFolder: String) {
+        val s = _state.value
+        completedEpisodeIds()
+            .filter { it !in s.unavailableIds && s.folderRootById[it] != targetFolder }
+            .forEach { downloadRepo.startMove(it, targetFolder) }
+    }
+
+    fun deleteSeasonDownloads() = viewModelScope.launch {
+        completedEpisodeIds().forEach { downloadRepo.deleteDownload(it) }
     }
 
     fun load(seasonId: String, seriesId: String) {
