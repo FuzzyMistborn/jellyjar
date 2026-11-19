@@ -2367,7 +2367,15 @@ data class ReadyOnPressState(
     val jellyfinUrl: String = "",
     // Download status by Jellyfin id, so a row shows "Downloaded"/"In progress" instead of a button
     val downloadStatus: Map<String, String> = emptyMap(),
-)
+    val browse: ReadyBrowse = ReadyBrowse(),
+    // Free space across the download folders, for the batch-download confirmation.
+    val freeBytes: Long = 0L,
+    // Series (ReadyGroup.key) the user has opened.
+    val expanded: Set<String> = emptySet(),
+) {
+    // Ids already on the device or on their way; a failed one can be tried again, so it isn't here.
+    val downloadedIds: Set<String> get() = downloadStatus.filterValues { it != DownloadStatus.FAILED.name }.keys
+}
 
 // Finished files already sitting on Press. Downloading one is the normal queue path: Press hands
 // the existing file back (see "Press Output Reuse") instead of encoding.
@@ -2376,6 +2384,7 @@ class ReadyOnPressViewModel @Inject constructor(
     private val jellyfinRepo: JellyfinRepository,
     private val downloadRepo: DownloadRepository,
     private val settings: SettingsRepository,
+    private val storage: com.fuzzymistborn.jellyjar.data.repository.DownloadStorage,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ReadyOnPressState())
@@ -2388,6 +2397,11 @@ class ReadyOnPressViewModel @Inject constructor(
         viewModelScope.launch {
             downloadRepo.downloads.collect { all ->
                 _state.update { it.copy(downloadStatus = all.associate { d -> d.jellyfinId to d.status }) }
+            }
+        }
+        viewModelScope.launch {
+            storage.folderInfos.collect { infos ->
+                _state.update { it.copy(freeBytes = com.fuzzymistborn.jellyjar.data.repository.totalFreeBytes(infos)) }
             }
         }
         refresh()
@@ -2407,6 +2421,26 @@ class ReadyOnPressViewModel @Inject constructor(
         }.associateBy { it.id }
         val rows = entries.mapNotNull { e -> items[e.item_id]?.let { ReadyOnPressRow(e, it) } }
         _state.update { it.copy(isLoading = false, rows = rows) }
+    }
+
+    fun setSort(sort: DownloadSort) = _state.update { it.copy(browse = it.browse.copy(sort = sort)) }
+    fun setFilter(filter: ReadyFilter) = _state.update { it.copy(browse = it.browse.copy(filter = filter)) }
+    fun setQuery(query: String) = _state.update { it.copy(browse = it.browse.copy(query = query)) }
+    fun clearFilters() = _state.update { it.copy(browse = it.browse.copy(filter = ReadyFilter.ALL, query = "")) }
+    fun toggleExpanded(key: String) = _state.update {
+        it.copy(expanded = if (key in it.expanded) it.expanded - key else it.expanded + key)
+    }
+
+    // Queues every file in [rows] that isn't already on the device or in the queue. Each is asked
+    // for with the preset it was encoded at, so Press hands back the existing file.
+    fun downloadAll(rows: List<ReadyOnPressRow>) = viewModelScope.launch {
+        val have = _state.value.downloadedIds
+        val problems = rows.filter { it.item.id !in have }
+            .groupBy { it.entry.preset }
+            .mapNotNull { (preset, group) ->
+                downloadRepo.queueEpisodes(group.map { it.item }, preset).errorMessage()
+            }
+        if (problems.isNotEmpty()) _state.update { it.copy(error = problems.joinToString(". ")) }
     }
 
     fun download(row: ReadyOnPressRow) = viewModelScope.launch {
