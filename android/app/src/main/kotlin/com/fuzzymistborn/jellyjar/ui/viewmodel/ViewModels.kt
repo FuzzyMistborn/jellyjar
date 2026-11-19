@@ -2004,38 +2004,30 @@ class SeasonViewModel @Inject constructor(
 
     fun clearDownloadError() = _state.update { it.copy(downloadError = null) }
 
-    fun downloadRemaining(preset: String, targetFolder: String? = null) = viewModelScope.launch {
-        rememberFolder(targetFolder)
-        val downloads = _state.value.episodeDownloads
-        val result = downloadRepo.queueEpisodes(
-            _state.value.episodes.filter { ep ->
-                val dl = downloads[ep.id]
-                dl == null || dl.status == DownloadStatus.FAILED.name
-            },
-            preset,
-            targetFolder,
-        )
-        result.errorMessage()?.let { msg -> _state.update { it.copy(downloadError = msg) } }
-    }
-
-    // The next [n] not-yet-downloaded episodes counting from [fromEpisodeId] — the season's "next
-    // up", the one its Play button offers. It used to count from E01, so on a half-watched season
-    // "Next 5" fetched episodes already watched instead of the ones coming up.
-    fun downloadNextN(n: Int, preset: String, fromEpisodeId: String?, targetFolder: String? = null) = viewModelScope.launch {
-        rememberFolder(targetFolder)
+    // Which episodes a bulk action covers: "remaining" (everything not downloaded), or "next5" /
+    // "next10" counting from [fromEpisodeId] — the season's "next up", the one its Play button
+    // offers. They used to count from E01, so on a half-watched season "Next 5" fetched episodes
+    // already watched instead of the ones coming up.
+    fun bulkEpisodes(kind: String, fromEpisodeId: String?): List<JellyfinItem> {
         val downloads = _state.value.episodeDownloads
         val episodes = _state.value.episodes
-        val start = episodes.indexOfFirst { it.id == fromEpisodeId }.coerceAtLeast(0)
-        val result = downloadRepo.queueEpisodes(
-            episodes.drop(start)
-                .filter { ep ->
-                    val dl = downloads[ep.id]
-                    dl == null || dl.status == DownloadStatus.FAILED.name
-                }
-                .take(n),
-            preset,
-            targetFolder,
-        )
+        fun wanted(ep: JellyfinItem): Boolean {
+            val dl = downloads[ep.id]
+            return dl == null || dl.status == DownloadStatus.FAILED.name
+        }
+        return when (kind) {
+            "remaining" -> episodes.filter(::wanted)
+            else -> {
+                val n = if (kind == "next5") 5 else 10
+                val start = episodes.indexOfFirst { it.id == fromEpisodeId }.coerceAtLeast(0)
+                episodes.drop(start).filter(::wanted).take(n)
+            }
+        }
+    }
+
+    fun downloadEpisodes(episodes: List<JellyfinItem>, preset: String, targetFolder: String? = null) = viewModelScope.launch {
+        rememberFolder(targetFolder)
+        val result = downloadRepo.queueEpisodes(episodes, preset, targetFolder)
         result.errorMessage()?.let { msg -> _state.update { it.copy(downloadError = msg) } }
     }
 
