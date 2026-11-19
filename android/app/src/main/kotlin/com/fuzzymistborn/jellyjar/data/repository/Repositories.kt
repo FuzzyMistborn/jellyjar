@@ -728,6 +728,10 @@ class DownloadRepository @Inject constructor(
     private val moveJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
     // Folders a download ran out of space in, by download id — see pickDestination().
     private val outOfSpace = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
+    // The half-written file of each download that is copying to the device right now, by download
+    // id. The row has no path for it until the copy completes, so deleteDownload() needs this to
+    // remove it when a download is cancelled mid-copy.
+    private val partialOutputs = java.util.concurrent.ConcurrentHashMap<String, Pair<String, String?>>()
     private val _movingIds = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
     val movingIds: kotlinx.coroutines.flow.StateFlow<Set<String>> = _movingIds
     private val _moveErrors = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 8)
@@ -1151,6 +1155,7 @@ class DownloadRepository @Inject constructor(
                 var lastReportedProgressInt = -1
 
                 val (outputStream, savedPath, savedUri) = openDestination(destinationDir, relativePath)
+                partialOutputs[entity.jellyfinId] = savedPath to savedUri
 
                 // Hashing as the bytes arrive replaces a second full read of the saved file, which
                 // on a content:// destination is slow enough to double the transfer time.
@@ -1158,31 +1163,43 @@ class DownloadRepository @Inject constructor(
                 // 8 KB writes into a scoped-storage (FUSE) file are syscall-bound and cap well
                 // below what Wi-Fi delivers; large writes through a buffer don't.
                 try {
-                    java.io.BufferedOutputStream(outputStream, COPY_BUFFER_BYTES).use { output ->
-                        responseBody.byteStream().use { input ->
-                            val buffer = ByteArray(COPY_BUFFER_BYTES)
-                            var bytesRead: Int
-                            while (input.read(buffer).also { bytesRead = it } != -1) {
-                                output.write(buffer, 0, bytesRead)
-                                digest?.update(buffer, 0, bytesRead)
-                                downloadedBytes += bytesRead
-                                if (totalBytes > 0) {
-                                    val progress = (downloadedBytes.toFloat() / totalBytes) * 100f
-                                    val progressInt = progress.toInt()
-                                    if (progressInt != lastReportedProgressInt) {
-                                        lastReportedProgressInt = progressInt
-                                        downloadDao.updateProgress(
-                                            entity.jellyfinId, progress, DownloadStatus.DOWNLOADING.name
-                                        )
+                    kotlinx.coroutines.coroutineScope {
+                        // The loop blocks in read(), which cancellation can't interrupt, so a cancelled
+                        // download used to keep copying until its next progress write. A sibling that
+                        // closes the body on cancel is what unblocks the read.
+                        val closer = launch(Dispatchers.Default) {
+                            try { kotlinx.coroutines.awaitCancellation() } finally { responseBody.close() }
+                        }
+                        try {
+                            java.io.BufferedOutputStream(outputStream, COPY_BUFFER_BYTES).use { output ->
+                                responseBody.byteStream().use { input ->
+                                    val buffer = ByteArray(COPY_BUFFER_BYTES)
+                                    var bytesRead: Int
+                                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                                        output.write(buffer, 0, bytesRead)
+                                        digest?.update(buffer, 0, bytesRead)
+                                        downloadedBytes += bytesRead
+                                        if (totalBytes > 0) {
+                                            val progress = (downloadedBytes.toFloat() / totalBytes) * 100f
+                                            val progressInt = progress.toInt()
+                                            if (progressInt != lastReportedProgressInt) {
+                                                lastReportedProgressInt = progressInt
+                                                downloadDao.updateProgress(
+                                                    entity.jellyfinId, progress, DownloadStatus.DOWNLOADING.name
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
+                        } finally {
+                            closer.cancel()
                         }
                     }
                 } catch (e: Throwable) {
                     // Don't leave a truncated MP4 behind (it counts against free space and no row
                     // points at it), and if the folder filled up, avoid it on the next attempt.
-                    deleteSavedOutput(savedPath, savedUri)
+                    discardPartial(entity.jellyfinId, savedPath, savedUri)
                     if (isOutOfSpace(e)) {
                         outOfSpace.getOrPut(entity.jellyfinId) { java.util.concurrent.ConcurrentHashMap.newKeySet() }
                             .add(destinationDir)
@@ -1191,14 +1208,14 @@ class DownloadRepository @Inject constructor(
                 }
 
                 if (totalBytes > 0 && downloadedBytes != totalBytes) {
-                    deleteSavedOutput(savedPath, savedUri)
+                    discardPartial(entity.jellyfinId, savedPath, savedUri)
                     error("Download incomplete: got $downloadedBytes of $totalBytes bytes")
                 }
 
                 if (digest != null) {
                     val actualSha256 = digest.digest().joinToString("") { "%02x".format(it) }
                     if (!actualSha256.equals(expectedSha256, ignoreCase = true)) {
-                        deleteSavedOutput(savedPath, savedUri)
+                        discardPartial(entity.jellyfinId, savedPath, savedUri)
                         error("Downloaded file hash mismatch (integrity check failed)")
                     }
                 }
@@ -1207,7 +1224,7 @@ class DownloadRepository @Inject constructor(
                 // resurrect a "completed" download the user already removed, with the file it
                 // deleted still on disk under its old name.
                 if (downloadDao.findById(entity.jellyfinId) == null) {
-                    deleteSavedOutput(savedPath, savedUri)
+                    discardPartial(entity.jellyfinId, savedPath, savedUri)
                     error("Download record for $jobId was deleted during transfer")
                 }
 
@@ -1216,6 +1233,7 @@ class DownloadRepository @Inject constructor(
                 }.getOrNull()
 
                 outOfSpace.remove(entity.jellyfinId)
+                partialOutputs.remove(entity.jellyfinId)
                 downloadDao.upsert(
                     entity.copy(
                         localPath = savedPath,
@@ -1235,6 +1253,11 @@ class DownloadRepository @Inject constructor(
     // A file written through SAF belongs to the storage provider, not this app, so File.delete()
     // on its real path (which documentUriToFilePath() resolves on the primary volume) silently
     // fails. Whenever there is a document URI, delete through that.
+    private fun discardPartial(id: String, savedPath: String, savedUri: String?) {
+        partialOutputs.remove(id)
+        deleteSavedOutput(savedPath, savedUri)
+    }
+
     private fun deleteSavedOutput(savedPath: String, savedUri: String?) {
         if (savedUri != null) {
             DocumentFile.fromSingleUri(context, Uri.parse(savedUri))?.delete()
@@ -1553,6 +1576,9 @@ class DownloadRepository @Inject constructor(
         outOfSpace.remove(jellyfinId)
         val entity = downloadDao.findById(jellyfinId) ?: return@withContext
         WorkManager.getInstance(context).cancelUniqueWork("download_$jellyfinId")
+        // Cancelled mid-copy: the half-written file isn't on the row yet, so remove it from here.
+        // (The copy itself stops when its coroutine is cancelled and the connection closes.)
+        partialOutputs.remove(jellyfinId)?.let { (path, uri) -> runCatching { deleteSavedOutput(path, uri) } }
         if (entity.status != DownloadStatus.COMPLETE.name && entity.shimJobId != null) {
             // Only cancel a job that's still encoding. A finished one may be shared with another
             // user's download (Press reuses finished files), and is left to CLEANUP_AFTER_DAYS.
