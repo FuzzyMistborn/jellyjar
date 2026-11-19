@@ -1556,13 +1556,6 @@ class AdminViewModel @Inject constructor(
 
 // ─── Downloads Queue ViewModel ────────────────────────────────────────────────
 
-data class StorageStats(
-    val totalMb: Long,
-    val watchedMb: Long,
-    val watchedCount: Int,
-    val watchedItems: List<com.fuzzymistborn.jellyjar.data.local.DownloadEntity>,
-)
-
 data class DownloadsState(
     val active: List<com.fuzzymistborn.jellyjar.data.local.DownloadEntity> = emptyList(),
     val queued: List<com.fuzzymistborn.jellyjar.data.local.DownloadEntity> = emptyList(),
@@ -1570,7 +1563,6 @@ data class DownloadsState(
     val failed: List<com.fuzzymistborn.jellyjar.data.local.DownloadEntity> = emptyList(),
     val queuePaused: Boolean = false,
     val jellyfinUrl: String = "",
-    val storageStats: StorageStats? = null,
     val etaByJellyfinId: Map<String, Int?> = emptyMap(),
     val downloadError: String? = null,
     val kidModeEnabled: Boolean = false,
@@ -1583,6 +1575,14 @@ data class DownloadsState(
     // Folder URI each completed download lives in (for excluding it from the Move targets).
     val folderRootById: Map<String, String> = emptyMap(),
     val movingIds: Set<String> = emptySet(),
+    // How the "Available Offline" list is searched/filtered/sorted, and which series are open.
+    val browse: DownloadsBrowse = DownloadsBrowse(),
+    // Open groups: series/season keys in the offline list, "queue:"/"active:" keys above it.
+    val expandedSeries: Set<String> = emptySet(),
+    // Device-wide figures for the storage panel, and per-folder usage.
+    val deviceFreeBytes: Long = 0L,
+    val deviceTotalBytes: Long = 0L,
+    val folderStorage: List<com.fuzzymistborn.jellyjar.data.repository.FolderStorage> = emptyList(),
 )
 
 private data class DownloadFolderView(
@@ -1590,6 +1590,9 @@ private data class DownloadFolderView(
     val unavailableIds: Set<String>,
     val labelById: Map<String, String>,
     val rootById: Map<String, String>,
+    val freeBytes: Long,
+    val totalBytes: Long,
+    val folderStorage: List<com.fuzzymistborn.jellyjar.data.repository.FolderStorage>,
 )
 
 @HiltViewModel
@@ -1626,17 +1629,23 @@ class DownloadsViewModel @Inject constructor(
                     storage.rootOf(d, uris)?.let { root -> labels[root]?.let { d.jellyfinId to it } }
                 }.toMap()
                 val rootById = completed.mapNotNull { d -> storage.rootOf(d, uris)?.let { d.jellyfinId to it } }.toMap()
+                val (device, perFolder) = downloadRepo.getStorageSnapshot()
                 DownloadFolderView(
                     infos,
                     completed.filter { storage.isUnavailable(it, uris, unavailable) }.map { it.jellyfinId }.toSet(),
                     labelById,
                     rootById,
+                    device.freeBytes,
+                    device.totalBytes,
+                    perFolder,
                 )
             }.collect { v ->
                 _state.update {
                     it.copy(
                         folders = v.infos, unavailableIds = v.unavailableIds,
                         folderLabelById = v.labelById, folderRootById = v.rootById,
+                        deviceFreeBytes = v.freeBytes, deviceTotalBytes = v.totalBytes,
+                        folderStorage = v.folderStorage,
                     )
                 }
             }
@@ -1686,10 +1695,6 @@ class DownloadsViewModel @Inject constructor(
                 progressSamples.keys.retainAll(newEtas.keys)
 
                 val completed = all.filter { d -> d.status == com.fuzzymistborn.jellyjar.model.DownloadStatus.COMPLETE.name }
-                val totalMb = completed.sumOf { it.sizeBytes } / (1024 * 1024)
-                val watched = completed.filter { it.isWatched }
-                val watchedMb = watched.sumOf { it.sizeBytes } / (1024 * 1024)
-                val stats = if (watched.isNotEmpty()) StorageStats(totalMb, watchedMb, watched.size, watched) else null
 
                 _state.update {
                     it.copy(
@@ -1700,7 +1705,6 @@ class DownloadsViewModel @Inject constructor(
                         completed = completed,
                         failed = all.filter { d -> d.status == com.fuzzymistborn.jellyjar.model.DownloadStatus.FAILED.name },
                         etaByJellyfinId = newEtas,
-                        storageStats = stats,
                     )
                 }
             }
@@ -1709,6 +1713,31 @@ class DownloadsViewModel @Inject constructor(
 
     fun moveDownload(jellyfinId: String, targetFolder: String) =
         downloadRepo.startMove(jellyfinId, targetFolder)
+
+    // Deletes (or cancels) a batch of downloads — a series, a season, or whatever a filter shows.
+    fun deleteDownloads(ids: Collection<String>) = viewModelScope.launch {
+        ids.forEach { downloadRepo.deleteDownload(it) }
+    }
+
+    // Starts a move for each finished download that isn't already in [folder] or on ejected storage.
+    fun moveDownloads(ids: Collection<String>, folder: String) {
+        val s = _state.value
+        ids.filter { it !in s.unavailableIds && s.folderRootById[it] != folder }
+            .forEach { downloadRepo.startMove(it, folder) }
+    }
+
+    fun deleteOldest(count: Int) = viewModelScope.launch {
+        _state.value.completed.sortedBy { it.addedAt }.take(count).forEach { downloadRepo.deleteDownload(it.jellyfinId) }
+    }
+
+    fun setSort(sort: DownloadSort) = _state.update { it.copy(browse = it.browse.copy(sort = sort)) }
+    fun setFilter(filter: DownloadFilter) = _state.update { it.copy(browse = it.browse.copy(filter = filter)) }
+    fun setFolderFilter(folder: String?) = _state.update { it.copy(browse = it.browse.copy(folder = folder)) }
+    fun setQuery(query: String) = _state.update { it.copy(browse = it.browse.copy(query = query)) }
+    fun clearFilters() = _state.update { it.copy(browse = it.browse.copy(filter = DownloadFilter.ALL, folder = null, query = "")) }
+    fun toggleSeries(key: String) = _state.update {
+        it.copy(expandedSeries = if (key in it.expandedSeries) it.expandedSeries - key else it.expandedSeries + key)
+    }
 
     fun cancelDownload(jellyfinId: String) = viewModelScope.launch {
         downloadRepo.deleteDownload(jellyfinId)
@@ -1755,98 +1784,10 @@ class DownloadsViewModel @Inject constructor(
         _state.value.failed.forEach { downloadRepo.deleteDownload(it.jellyfinId) }
     }
 
-    fun deleteWatched() = viewModelScope.launch {
-        _state.value.storageStats?.watchedItems?.forEach { downloadRepo.deleteDownload(it.jellyfinId) }
-    }
-
     fun thumbnailUrl(jellyfinId: String): String =
         com.fuzzymistborn.jellyjar.api.JellyfinImageHelper.primaryImageUrl(
             _state.value.jellyfinUrl, jellyfinId, maxWidth = 200
         )
-}
-
-// ─── Storage ViewModel ────────────────────────────────────────────────────────
-
-enum class StorageSort { SIZE, NEWEST, OLDEST, NAME }
-
-data class StorageState(
-    val items: List<DownloadEntity> = emptyList(),
-    val sort: StorageSort = StorageSort.SIZE,
-    val movieCount: Int = 0,
-    val movieBytes: Long = 0L,
-    val episodeCount: Int = 0,
-    val episodeBytes: Long = 0L,
-    val totalBytes: Long = 0L,
-    val freeBytes: Long = 0L,
-    val deviceTotalBytes: Long = 0L,
-    val folders: List<com.fuzzymistborn.jellyjar.data.repository.FolderStorage> = emptyList(),
-    val watchedItems: List<DownloadEntity> = emptyList(),
-    val watchedBytes: Long = 0L,
-) {
-    val sortedItems: List<DownloadEntity> get() = when (sort) {
-        StorageSort.SIZE -> items.sortedByDescending { it.sizeBytes }
-        StorageSort.NEWEST -> items.sortedByDescending { it.addedAt }
-        StorageSort.OLDEST -> items.sortedBy { it.addedAt }
-        StorageSort.NAME -> items.sortedBy { it.title.lowercase() }
-    }
-}
-
-@HiltViewModel
-class StorageViewModel @Inject constructor(
-    private val downloadRepo: DownloadRepository,
-    private val storage: com.fuzzymistborn.jellyjar.data.repository.DownloadStorage,
-) : ViewModel() {
-
-    private val _state = MutableStateFlow(StorageState())
-    val state: StateFlow<StorageState> = _state.asStateFlow()
-
-    init {
-        // Re-read when a download changes or a volume's state does (a card ejected, a file copied
-        // in elsewhere) — one collector, so the two can't overwrite each other with stale data.
-        viewModelScope.launch {
-            kotlinx.coroutines.flow.combine(downloadRepo.completedDownloads, storage.folderInfos) { completed, _ -> completed }
-                .collect { completed ->
-                val movies = completed.filter { it.type == "Movie" }
-                val episodes = completed.filter { it.type == "Episode" }
-                val watched = completed.filter { it.isWatched }
-                val (info, folders) = downloadRepo.getStorageSnapshot()
-                _state.update {
-                    it.copy(
-                        folders = folders,
-                        items = completed,
-                        movieCount = movies.size,
-                        movieBytes = movies.sumOf { m -> m.sizeBytes },
-                        episodeCount = episodes.size,
-                        episodeBytes = episodes.sumOf { e -> e.sizeBytes },
-                        totalBytes = completed.sumOf { c -> c.sizeBytes },
-                        freeBytes = info.freeBytes,
-                        deviceTotalBytes = info.totalBytes,
-                        watchedItems = watched,
-                        watchedBytes = watched.sumOf { w -> w.sizeBytes },
-                    )
-                }
-            }
-        }
-    }
-
-    fun setSort(sort: StorageSort) = _state.update { it.copy(sort = sort) }
-
-    fun delete(jellyfinId: String) = viewModelScope.launch {
-        downloadRepo.deleteDownload(jellyfinId)
-    }
-
-    fun deleteWatched() = viewModelScope.launch {
-        _state.value.watchedItems.forEach { downloadRepo.deleteDownload(it.jellyfinId) }
-    }
-
-    fun deleteOldest(count: Int) = viewModelScope.launch {
-        _state.value.items.sortedBy { it.addedAt }.take(count)
-            .forEach { downloadRepo.deleteDownload(it.jellyfinId) }
-    }
-
-    fun deleteEverything() = viewModelScope.launch {
-        _state.value.items.forEach { downloadRepo.deleteDownload(it.jellyfinId) }
-    }
 }
 
 // ─── Seasons ViewModel ────────────────────────────────────────────────────────

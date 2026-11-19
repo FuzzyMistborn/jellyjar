@@ -10,20 +10,30 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.fuzzymistborn.jellyjar.api.JellyfinImageHelper
 import com.fuzzymistborn.jellyjar.data.local.DownloadEntity
 import com.fuzzymistborn.jellyjar.data.local.playbackUri
 import com.fuzzymistborn.jellyjar.ui.theme.*
+import com.fuzzymistborn.jellyjar.ui.viewmodel.DownloadEntry
+import com.fuzzymistborn.jellyjar.ui.viewmodel.DownloadFilter
+import com.fuzzymistborn.jellyjar.ui.viewmodel.DownloadSort
+import com.fuzzymistborn.jellyjar.ui.viewmodel.QueueGroup
+import com.fuzzymistborn.jellyjar.ui.viewmodel.groupQueue
 import com.fuzzymistborn.jellyjar.ui.viewmodel.DownloadsViewModel
+import com.fuzzymistborn.jellyjar.ui.viewmodel.browseDownloads
+
+// A batch delete waiting on the user's confirmation (a series, a season, or the filtered list).
+private data class PendingBulkDelete(val title: String, val ids: List<String>, val bytes: Long, val note: String? = null)
 
 @Composable
 fun DownloadsScreen(
     onPlayClick: (localPath: String, jellyfinId: String) -> Unit,
-    onStorageClick: () -> Unit,
     onReadyClick: () -> Unit,
     onBack: () -> Unit,
     viewModel: DownloadsViewModel = hiltViewModel(),
@@ -39,8 +49,61 @@ fun DownloadsScreen(
         state.active.isNotEmpty() || state.queued.isNotEmpty() ||
             state.completed.isNotEmpty() || state.failed.isNotEmpty()
     }
+    val entries = remember(state.completed, state.browse, state.folderRootById) {
+        browseDownloads(state.completed, state.browse, state.folderRootById)
+    }
+    // Every download the filtered list currently shows — what "Delete these" acts on.
+    val visible = remember(entries) {
+        entries.flatMap { e -> if (e is DownloadEntry.Series) e.episodes else listOf((e as DownloadEntry.Single).download) }
+    }
     var pendingDeleteId by remember { mutableStateOf<String?>(null) }
-    var showDeleteAllConfirm by remember { mutableStateOf(false) }
+    var pendingBulk by remember { mutableStateOf<PendingBulkDelete?>(null) }
+    var showDeleteOldest by remember { mutableStateOf(false) }
+    var storageExpanded by rememberSaveable { mutableStateOf(false) }
+
+    val posterFor: (String?, DownloadEntity) -> String = { seriesId, fallback ->
+        seriesId?.let { JellyfinImageHelper.primaryImageUrl(state.jellyfinUrl, it, maxWidth = 200) }
+            ?: fallback.thumbnailUri ?: viewModel.thumbnailUrl(fallback.jellyfinId)
+    }
+    val completedCard: @Composable (DownloadEntity, Boolean) -> Unit = { entity, compact ->
+        CompletedDownloadCard(
+            entity = entity,
+            thumbnailUrl = entity.thumbnailUri ?: viewModel.thumbnailUrl(entity.jellyfinId),
+            onPlay = { onPlayClick(entity.playbackUri(), entity.jellyfinId) },
+            onDelete = if (kidMode) null else {
+                { pendingDeleteId = entity.jellyfinId }
+            },
+            folderLabel = state.folderLabelById[entity.jellyfinId]
+                ?.takeIf { state.folders.size > 1 },
+            unavailable = entity.jellyfinId in state.unavailableIds,
+            moving = entity.jellyfinId in state.movingIds,
+            // Targets other than where it already is; none in Kid Mode.
+            moveTargets = if (kidMode) emptyList() else state.folders.filter {
+                it.available && it.uri != state.folderRootById[entity.jellyfinId]
+            },
+            onMove = { folder -> viewModel.moveDownloads(listOf(entity.jellyfinId), folder) },
+            compact = compact,
+        )
+    }
+    // The ⋮ menu of a series or one season.
+    val groupMenu: @Composable (String, List<DownloadEntity>) -> Unit = { name, items ->
+        val ids = items.map { it.jellyfinId }
+        GroupActionsMenu(
+            moveTargets = state.folders.filter { f ->
+                f.available && items.any { it.jellyfinId !in state.unavailableIds && state.folderRootById[it.jellyfinId] != f.uri }
+            },
+            hasWatched = items.any { it.isWatched },
+            moving = ids.any { it in state.movingIds },
+            onMove = { folder -> viewModel.moveDownloads(ids, folder) },
+            onDeleteWatched = {
+                val watched = items.filter { it.isWatched }
+                pendingBulk = PendingBulkDelete("Delete watched from $name?", watched.map { it.jellyfinId }, watched.sumOf { it.sizeBytes })
+            },
+            onDelete = {
+                pendingBulk = PendingBulkDelete("Delete $name?", ids, items.sumOf { it.sizeBytes })
+            },
+        )
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(BackgroundGradient)) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -51,17 +114,10 @@ fun DownloadsScreen(
                     .fillMaxWidth()
                     .statusBarsPadding()
                     .padding(horizontal = Spacing.md, vertical = Spacing.sm),
-                // This is the only route to StorageScreen, so hiding it here is what keeps
-                // "Delete Everything" / "Delete Oldest" out of reach in Kid Mode.
                 trailingContent = if (kidMode) null else {
                     {
-                        Row {
-                            IconButton(onClick = onReadyClick) {
-                                Icon(Icons.Default.Inbox, contentDescription = "Ready on Press", tint = OnSurface)
-                            }
-                            IconButton(onClick = onStorageClick) {
-                                Icon(Icons.Default.Storage, contentDescription = "Manage Storage", tint = OnSurface)
-                            }
+                        IconButton(onClick = onReadyClick) {
+                            Icon(Icons.Default.Inbox, contentDescription = "Ready on Press", tint = OnSurface)
                         }
                     }
                 },
@@ -89,40 +145,23 @@ fun DownloadsScreen(
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                        // Smart storage suggestion
-                    if (!kidMode) state.storageStats?.let { stats ->
-                        item {
-                            Surface(
-                                color = Success.copy(alpha = 0.15f),
-                                shape = RoundedCornerShape(Radius.md),
-                                modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm),
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(Spacing.lg),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                                ) {
-                                    Icon(Icons.Default.Storage, contentDescription = null,
-                                        tint = Success,
-                                        modifier = Modifier.size(IconSize.md))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            "${stats.watchedCount} watched item${if (stats.watchedCount != 1) "s" else ""} · ${stats.watchedMb} MB",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = Success,
-                                        )
-                                        Text(
-                                            "Total offline: ${stats.totalMb} MB",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = OnSurfaceMuted,
-                                        )
-                                    }
-                                    TextButton(onClick = { viewModel.deleteWatched() }) {
-                                        Text("Clean up", style = MaterialTheme.typography.labelSmall,
-                                            color = Success)
-                                    }
-                                }
-                            }
+                    if (!kidMode && state.completed.isNotEmpty()) {
+                        item(key = "storage_panel") {
+                            StoragePanel(
+                                completed = state.completed,
+                                freeBytes = state.deviceFreeBytes,
+                                deviceTotalBytes = state.deviceTotalBytes,
+                                folders = state.folderStorage,
+                                expanded = storageExpanded,
+                                onToggle = { storageExpanded = !storageExpanded },
+                                onDeleteWatched = {
+                                    val watched = state.completed.filter { it.isWatched }
+                                    pendingBulk = PendingBulkDelete(
+                                        "Delete watched downloads?", watched.map { it.jellyfinId }, watched.sumOf { it.sizeBytes },
+                                    )
+                                },
+                                onDeleteOldest = { showDeleteOldest = true },
+                            )
                         }
                     }
 
@@ -138,14 +177,47 @@ fun DownloadsScreen(
                                 }
                             }
                         }
-                        items(state.active, key = { it.jellyfinId }) { entity ->
-                            ActiveDownloadCard(
-                                entity = entity,
-                                thumbnailUrl = entity.thumbnailUri
-                                    ?: viewModel.thumbnailUrl(entity.jellyfinId),
-                                etaMinutes = state.etaByJellyfinId[entity.jellyfinId],
-                                onCancel = { viewModel.cancelDownload(entity.jellyfinId) },
-                            )
+                        groupQueue(state.active).forEach { group ->
+                            when (group) {
+                                is QueueGroup.Single -> item(key = "active:${group.key}") {
+                                    ActiveDownloadCard(
+                                        entity = group.download,
+                                        thumbnailUrl = group.download.thumbnailUri ?: viewModel.thumbnailUrl(group.download.jellyfinId),
+                                        etaMinutes = state.etaByJellyfinId[group.download.jellyfinId],
+                                        onCancel = { viewModel.cancelDownload(group.download.jellyfinId) },
+                                    )
+                                }
+                                is QueueGroup.Series -> {
+                                    val key = "active:${group.key}"
+                                    val open = key in state.expandedSeries
+                                    item(key = key) {
+                                        // progress is already 0–100
+                                        val avg = (group.items.sumOf { it.progress.toDouble() } / group.items.size).toInt()
+                                        SeriesGroupHeader(
+                                            title = group.name,
+                                            subtitle = "${group.items.size} in progress · $avg%",
+                                            posterUrl = posterFor(group.items.firstNotNullOfOrNull { it.seriesId }, group.items.first()),
+                                            expanded = open,
+                                            onClick = { viewModel.toggleSeries(key) },
+                                            trailing = {
+                                                IconButton(onClick = { viewModel.deleteDownloads(group.items.map { it.jellyfinId }) }) {
+                                                    Icon(Icons.Default.Close, contentDescription = "Cancel ${group.name}", tint = Error)
+                                                }
+                                            },
+                                        )
+                                    }
+                                    if (open) items(group.items, key = { "active:${it.jellyfinId}" }) { entity ->
+                                        Box(Modifier.padding(start = Spacing.xl)) {
+                                            ActiveDownloadCard(
+                                                entity = entity,
+                                                thumbnailUrl = entity.thumbnailUri ?: viewModel.thumbnailUrl(entity.jellyfinId),
+                                                etaMinutes = state.etaByJellyfinId[entity.jellyfinId],
+                                                onCancel = { viewModel.cancelDownload(entity.jellyfinId) },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     if (!kidMode && (state.queued.isNotEmpty() || (state.queuePaused && state.active.isEmpty()))) {
@@ -191,11 +263,11 @@ fun DownloadsScreen(
                                 )
                             }
                         }
-                        itemsIndexed(state.queued, key = { _, d -> d.jellyfinId }) { index, entity ->
+                        val queueCard: @Composable (DownloadEntity) -> Unit = { entity ->
+                            val index = state.queued.indexOfFirst { it.jellyfinId == entity.jellyfinId }
                             QueuedDownloadCard(
                                 entity = entity,
-                                thumbnailUrl = entity.thumbnailUri
-                                    ?: viewModel.thumbnailUrl(entity.jellyfinId),
+                                thumbnailUrl = entity.thumbnailUri ?: viewModel.thumbnailUrl(entity.jellyfinId),
                                 position = index + 1,
                                 isFirst = index == 0,
                                 isLast = index == state.queued.lastIndex,
@@ -205,14 +277,47 @@ fun DownloadsScreen(
                                 onCancel = { viewModel.cancelDownload(entity.jellyfinId) },
                             )
                         }
+                        groupQueue(state.queued).forEach { group ->
+                            when (group) {
+                                is QueueGroup.Single -> item(key = "queued:${group.key}") { queueCard(group.download) }
+                                is QueueGroup.Series -> {
+                                    val key = "queue:${group.key}"
+                                    val open = key in state.expandedSeries
+                                    item(key = key) {
+                                        SeriesGroupHeader(
+                                            title = group.name,
+                                            subtitle = "${group.items.size} queued",
+                                            posterUrl = posterFor(group.items.firstNotNullOfOrNull { it.seriesId }, group.items.first()),
+                                            expanded = open,
+                                            onClick = { viewModel.toggleSeries(key) },
+                                            trailing = {
+                                                IconButton(onClick = { viewModel.deleteDownloads(group.items.map { it.jellyfinId }) }) {
+                                                    Icon(Icons.Default.Close, contentDescription = "Cancel ${group.name}", tint = Error)
+                                                }
+                                            },
+                                        )
+                                    }
+                                    if (open) items(group.items, key = { "queued:${it.jellyfinId}" }) { entity ->
+                                        Box(Modifier.padding(start = Spacing.xl)) { queueCard(entity) }
+                                    }
+                                }
+                            }
+                        }
                     }
                     if (state.completed.isNotEmpty()) {
                         item {
                             SectionHeader("Available Offline") {
-                                if (!kidMode) {
-                                    TextButton(onClick = { showDeleteAllConfirm = true }) {
+                                if (!kidMode && visible.isNotEmpty()) {
+                                    TextButton(onClick = {
+                                        pendingBulk = PendingBulkDelete(
+                                            title = if (state.browse.isFiltering) "Delete these downloads?" else "Delete all downloads?",
+                                            ids = visible.map { it.jellyfinId },
+                                            bytes = visible.sumOf { it.sizeBytes },
+                                            note = "Media on the server is not affected.",
+                                        )
+                                    }) {
                                         Text(
-                                            "Delete All",
+                                            if (state.browse.isFiltering) "Delete these ${visible.size}" else "Delete All",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = Error,
                                         )
@@ -220,25 +325,79 @@ fun DownloadsScreen(
                                 }
                             }
                         }
-                        items(state.completed, key = { it.jellyfinId }) { entity ->
-                            CompletedDownloadCard(
-                                entity = entity,
-                                thumbnailUrl = entity.thumbnailUri
-                                    ?: viewModel.thumbnailUrl(entity.jellyfinId),
-                                onPlay = { onPlayClick(entity.playbackUri(), entity.jellyfinId) },
-                                onDelete = if (kidMode) null else {
-                                    { pendingDeleteId = entity.jellyfinId }
+                        item(key = "browse_controls") {
+                            BrowseControls(
+                                searchPlaceholder = "Search downloads",
+                                query = state.browse.query,
+                                onQuery = viewModel::setQuery,
+                                // Not in Kid Mode: the search box is part of the management surface.
+                                showSearch = !kidMode,
+                                filters = DownloadFilter.values().map { f ->
+                                    BrowseChip(f.label, state.browse.filter == f, { viewModel.setFilter(f) })
+                                } +
+                                    // Folder chips only when there's more than one place to look; tapping
+                                    // the active one again goes back to every folder.
+                                    state.folders.takeIf { it.size > 1 }.orEmpty().map { f ->
+                                        folderChip(f, state.browse.folder == f.uri) {
+                                            viewModel.setFolderFilter(if (state.browse.folder == f.uri) null else f.uri)
+                                        }
+                                    },
+                                sorts = DownloadSort.values().map { sort ->
+                                    BrowseChip(sort.label, state.browse.sort == sort, { viewModel.setSort(sort) })
                                 },
-                                folderLabel = state.folderLabelById[entity.jellyfinId]
-                                    ?.takeIf { state.folders.size > 1 },
-                                unavailable = entity.jellyfinId in state.unavailableIds,
-                                moving = entity.jellyfinId in state.movingIds,
-                                // Targets other than where it already is; none in Kid Mode.
-                                moveTargets = if (kidMode) emptyList() else state.folders.filter {
-                                    it.available && it.uri != state.folderRootById[entity.jellyfinId]
-                                },
-                                onMove = { folder -> viewModel.moveDownload(entity.jellyfinId, folder) },
                             )
+                        }
+                        if (entries.isEmpty()) {
+                            item(key = "browse_empty") {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.xl),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                                ) {
+                                    Text("No downloads match", style = MaterialTheme.typography.titleMedium, color = OnSurface)
+                                    TextButton(onClick = viewModel::clearFilters) { Text("Clear filters") }
+                                }
+                            }
+                        }
+                        entries.forEach { entry ->
+                            when (entry) {
+                                is DownloadEntry.Single -> item(key = entry.key) { completedCard(entry.download, false) }
+                                is DownloadEntry.Series -> {
+                                    // A search opens every matching series so the hits are visible.
+                                    val expanded = entry.key in state.expandedSeries || state.browse.query.isNotBlank()
+                                    item(key = entry.key) {
+                                        val n = entry.episodes.size
+                                        val watched = entry.episodes.count { it.isWatched }
+                                        SeriesGroupHeader(
+                                            title = entry.name,
+                                            subtitle = buildString {
+                                                append("$n episode${if (n != 1) "s" else ""}")
+                                                if (entry.seasons.size > 1) append(" · ${entry.seasons.size} seasons")
+                                                if (entry.totalBytes > 0) append(" · ${formatSize(entry.totalBytes)}")
+                                                if (watched > 0) append(" · $watched watched")
+                                            },
+                                            posterUrl = posterFor(entry.seriesId, entry.episodes.first()),
+                                            expanded = expanded,
+                                            onClick = { viewModel.toggleSeries(entry.key) },
+                                            trailing = { if (!kidMode) groupMenu(entry.name, entry.episodes) },
+                                        )
+                                    }
+                                    if (expanded) entry.seasons.forEach { season ->
+                                        item(key = "${entry.key}:season:${season.number}") {
+                                            val n = season.episodes.size
+                                            SeasonSectionHeader(
+                                                label = season.label,
+                                                subtitle = "$n episode${if (n != 1) "s" else ""} · ${formatSize(season.totalBytes)}" +
+                                                    if (season.watchedCount > 0) " · ${season.watchedCount} watched" else "",
+                                                trailing = { if (!kidMode) groupMenu("${entry.name} ${season.label}", season.episodes) },
+                                            )
+                                        }
+                                        items(season.episodes, key = { it.jellyfinId }) { ep ->
+                                            Box(Modifier.padding(start = Spacing.xl)) { completedCard(ep, true) }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     if (state.failed.isNotEmpty() && !kidMode) {
@@ -284,12 +443,23 @@ fun DownloadsScreen(
             )
         }
 
-        if (showDeleteAllConfirm) {
-            DeleteConfirmDialog(
-                title = "Delete all downloads?",
-                message = "This deletes every downloaded file from this device. You can download them again later.",
-                onConfirm = { viewModel.deleteAllCompleted() },
-                onDismiss = { showDeleteAllConfirm = false },
+        pendingBulk?.let { bulk ->
+            val n = bulk.ids.size
+            ConfirmDialog(
+                title = bulk.title,
+                message = "$n download${if (n != 1) "s" else ""} (${formatSize(bulk.bytes)}) will be removed from this device." +
+                    (bulk.note?.let { " $it" } ?: " You can download ${if (n != 1) "them" else "it"} again later."),
+                confirmLabel = "Delete",
+                onConfirm = { viewModel.deleteDownloads(bulk.ids) },
+                onDismiss = { pendingBulk = null },
+            )
+        }
+
+        if (showDeleteOldest) {
+            DeleteOldestDialog(
+                items = state.completed,
+                onConfirm = { count -> viewModel.deleteOldest(count) },
+                onDismiss = { showDeleteOldest = false },
             )
         }
     }
@@ -342,10 +512,6 @@ private fun NotificationsDisabledBanner(modifier: Modifier = Modifier) {
         }
     }
 }
-
-private fun formatFileSize(bytes: Long): String =
-    if (bytes >= 1_073_741_824L) "%.1f GB".format(bytes / 1_073_741_824.0)
-    else "%.0f MB".format(bytes / 1_048_576.0)
 
 @Composable
 private fun SectionHeader(title: String, action: @Composable (() -> Unit)? = null) {
@@ -535,6 +701,9 @@ private fun CompletedDownloadCard(
     moving: Boolean,
     moveTargets: List<com.fuzzymistborn.jellyjar.data.repository.FolderInfo>,
     onMove: (String) -> Unit,
+    // Episodes inside a series: a landscape still and "E01 · Title" instead of a poster and the
+    // long "Series · S01E01 · Title".
+    compact: Boolean = false,
 ) {
     Surface(color = SurfaceVariant, shape = RoundedCornerShape(Radius.md)) {
         Row(
@@ -547,7 +716,8 @@ private fun CompletedDownloadCard(
             PosterImage(
                 imageUrl = thumbnailUrl,
                 contentDescription = null,
-                modifier = Modifier.size(width = 80.dp, height = 120.dp),
+                modifier = if (compact) Modifier.size(width = 112.dp, height = 63.dp) else Modifier.size(width = 80.dp, height = 120.dp),
+                aspectRatio = if (compact) 16f / 9f else 2f / 3f,
             ) {
                 val watchFraction = run {
                     val runtimeMs = entity.runtimeMinutes?.let { it * 60_000L } ?: 0L
@@ -565,14 +735,15 @@ private fun CompletedDownloadCard(
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    entity.title,
+                    if (compact) entity.indexNumber?.let { "E${it.toString().padStart(2, '0')} · ${entity.episodeName()}" } ?: entity.episodeName()
+                    else entity.title,
                     style = MaterialTheme.typography.titleMedium,
                     color = OnSurface,
                     maxLines = 2,
                 )
                 Spacer(Modifier.height(4.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                    entity.year?.let {
+                    if (!compact) entity.year?.let {
                         Text(it.toString(), style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
                     }
                     entity.runtimeMinutes?.let {
@@ -580,7 +751,7 @@ private fun CompletedDownloadCard(
                     }
                     Text(entity.preset, style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
                     if (entity.sizeBytes > 0) {
-                        Text(formatFileSize(entity.sizeBytes), style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
+                        Text(formatSize(entity.sizeBytes), style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
                     }
                 }
                 folderLabel?.let {
@@ -693,3 +864,6 @@ private fun FailedDownloadCard(
         }
     }
 }
+
+// "Series · S01E01 · Title" → "Title"; a movie's title is already bare.
+private fun DownloadEntity.episodeName(): String = title.substringAfterLast(" · ")

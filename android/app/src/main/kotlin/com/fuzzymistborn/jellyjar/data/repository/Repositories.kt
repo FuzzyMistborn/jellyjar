@@ -805,6 +805,7 @@ class DownloadRepository @Inject constructor(
                 queuePosition = downloadDao.maxQueuePosition() + 1,
                 segmentsJson = segments.takeIf { it.isNotEmpty() }?.let { com.google.gson.Gson().toJson(it) },
                 storageRoot = targetFolder,
+                seriesId = item.seriesId,
             )
             downloadDao.upsert(entity)
         }
