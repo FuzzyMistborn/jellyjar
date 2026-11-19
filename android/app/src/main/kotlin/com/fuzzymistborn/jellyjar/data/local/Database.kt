@@ -49,6 +49,9 @@ data class DownloadEntity(
     // on a COMPLETE row = written before multiple folders existed — DownloadStorage.rootOf()
     // works it out from localUri.
     val storageRoot: String? = null,
+    // The series' Jellyfin id (episodes only), so the Downloads list can show the series poster.
+    // Null on rows from before this existed — they fall back to the episode still.
+    val seriesId: String? = null,
 ) {
     // thumbnailPath is a bare filesystem path (see DownloadRepository.saveThumbnailLocally); Coil
     // only resolves recognized URI schemes, so callers need the `file://` form to load it locally.
@@ -324,7 +327,7 @@ interface CachedItemDao {
         DownloadEntity::class, CachedItemEntity::class, PlaybackPositionEntity::class,
         FavoriteEntity::class, PendingPlaybackSync::class,
     ],
-    version = 12,
+    version = 13,
     // Exported to app/schemas (see room.schemaLocation in build.gradle.kts) so a real migration
     // can be written and reviewed once the app is distributed — see the destructive-migration
     // note in AppModule.
@@ -362,6 +365,13 @@ val MIGRATION_10_11 = object : Migration(10, 11) {
 }
 
 // Adds DownloadEntity.storageRoot (nullable TEXT, like tracksJson above).
+// Adds DownloadEntity.seriesId (nullable TEXT).
+val MIGRATION_12_13 = object : Migration(12, 13) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `downloads` ADD COLUMN `seriesId` TEXT")
+    }
+}
+
 val MIGRATION_11_12 = object : Migration(11, 12) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE `downloads` ADD COLUMN `storageRoot` TEXT")
