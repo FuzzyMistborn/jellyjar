@@ -992,7 +992,10 @@ class DownloadRepository @Inject constructor(
             "failed" -> DownloadStatus.FAILED.name
             else -> entity.status
         }
-        val newProgress = job.progress ?: 0f
+        // Press's 100 is the *encode* finishing; the DOWNLOADING bar is the device copy, which
+        // downloadFile() drives from 0. Passing 100 through made every finished/reused file
+        // read as fully downloaded while it waited for its turn at the copy permit.
+        val newProgress = if (job.status == "complete") 0f else job.progress ?: 0f
         if (entity.status != status || entity.progress != newProgress) {
             downloadDao.updateProgress(entity.jellyfinId, newProgress, status)
         }

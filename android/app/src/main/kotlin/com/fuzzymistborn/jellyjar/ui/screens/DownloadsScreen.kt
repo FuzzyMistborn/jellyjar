@@ -141,7 +141,7 @@ fun DownloadsScreen(
                 )
             } else {
                 LazyColumn(
-                    contentPadding = PaddingValues(start = Spacing.xl, end = Spacing.xl, bottom = Spacing.xl),
+                    contentPadding = PaddingValues(start = Spacing.xl, end = Spacing.xl, bottom = Spacing.xl + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()),
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                     modifier = Modifier.fillMaxSize(),
                 ) {
