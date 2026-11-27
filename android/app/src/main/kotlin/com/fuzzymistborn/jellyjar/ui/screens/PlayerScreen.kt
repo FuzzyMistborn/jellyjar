@@ -327,6 +327,10 @@ fun PlayerScreen(
     var pendingNext by remember { mutableStateOf<NextEpisodeTarget?>(null) }
     var autoPlaySecondsLeft by remember { mutableIntStateOf(AUTO_PLAY_FALLBACK_SECONDS) }
     var playbackEnded by remember { mutableStateOf(false) }
+    var leaveWhenEnded by remember { mutableStateOf(false) }
+    // The end-of-playback exits below can overlap; leaving twice would pop two screens.
+    var exited by remember { mutableStateOf(false) }
+    val exitOnce = { if (!exited) { exited = true; onBack() } }
     DisposableEffect(player, jellyfinId) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -390,7 +394,7 @@ fun PlayerScreen(
             // Nothing to look up (a local file opened without its Jellyfin id) — just don't sit on
             // a frozen last frame.
             snapshotFlow { playbackEnded }.first { it }
-            onBack()
+            exitOnce()
             return@LaunchedEffect
         }
         // Waits for whichever comes first: the outro (the credits marker when the server has one,
@@ -426,9 +430,17 @@ fun PlayerScreen(
                 blockedNext = target
                 timesUp = reason
             } else {
-                onBack()
+                exitOnce()
             }
         }
+    }
+
+    // Skip Credits leads to the end of the file; with no Up Next card pending (none, or cancelled)
+    // nothing else would leave, and the player sat on the last frame.
+    LaunchedEffect(Unit) {
+        snapshotFlow { leaveWhenEnded && playbackEnded && pendingNext == null && timesUp == null }
+            .first { it }
+        exitOnce()
     }
 
     // The countdown tracks the real time left in the episode, so a card raised at the start of a
@@ -853,16 +865,23 @@ fun PlayerScreen(
         // Skip intro / credits button. Hidden while the Up Next card is up during the credits —
         // the card is raised at the credits marker, so the two would always overlap, and "Play
         // now" is the better version of the same action. Cancelling the card brings it back.
-        if (activeSegment != null && !(activeSegment.type == "Outro" && pendingNext != null)) {
+        if (activeSegment != null) {
             Button(
-                onClick = { player.seekTo(activeSegment.endMs) },
+                onClick = {
+                    // Skipping credits is an explicit "I'm done": leave once playback ends, even
+                    // if the Up Next card was cancelled earlier (nothing else would exit then).
+                    if (activeSegment.type == "Outro") leaveWhenEnded = true
+                    player.seekTo(activeSegment.endMs)
+                    player.play()
+                },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Primary,
                     contentColor = OnPrimary,
                 ),
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(end = 32.dp, bottom = 96.dp),
+                    // Sits above the Up Next card when that is showing, instead of under it.
+                    .padding(end = 32.dp, bottom = if (pendingNext != null && activeSegment.type == "Outro") 220.dp else 96.dp),
             ) {
                 Text(activeSegment.label)
             }
