@@ -24,6 +24,7 @@ import com.fuzzymistborn.jellyjar.api.UpdateUserItemDataRequest
 import com.fuzzymistborn.jellyjar.data.local.CachedItemDao
 import com.fuzzymistborn.jellyjar.data.local.CachedItemEntity
 import com.fuzzymistborn.jellyjar.data.local.DownloadDao
+import com.fuzzymistborn.jellyjar.data.local.LocalArt
 import com.fuzzymistborn.jellyjar.data.local.DownloadEntity
 import com.fuzzymistborn.jellyjar.data.local.FavoriteDao
 import com.fuzzymistborn.jellyjar.data.local.FavoriteEntity
@@ -782,6 +783,9 @@ class DownloadRepository @Inject constructor(
             if (item.type == "Episode" && item.seriesId != null) {
                 jellyfinRepo.cacheParentSeriesIfMissing(item.seriesId)
             }
+            // Series and season posters, so the offline grid, series page and season row have art
+            // to show — only the downloaded item's own poster was saved before.
+            saveParentArt(item.seriesId, item.seasonId)
             val entity = DownloadEntity(
                 jellyfinId = item.id,
                 title = item.displayTitle,
@@ -1551,6 +1555,16 @@ class DownloadRepository @Inject constructor(
         saveThumbnailLocally(jellyfinId)?.let { path ->
             downloadDao.upsert(entity.copy(thumbnailPath = path))
         }
+        entity.seriesId?.let { runCatching { saveThumbnailLocally(it) } }
+    }
+
+    // Saves the series and season posters unless already on disk. Best-effort: a failure here
+    // must never fail queueing a download.
+    private suspend fun saveParentArt(seriesId: String?, seasonId: String?) {
+        for (id in listOfNotNull(seriesId, seasonId)) {
+            if (LocalArt.file(context, id).let { it.isFile && it.length() > 0 }) continue
+            runCatching { saveThumbnailLocally(id) }
+        }
     }
 
     suspend fun updatePlayed(jellyfinId: String, played: Boolean) = withContext(Dispatchers.IO) {
@@ -1563,11 +1577,18 @@ class DownloadRepository @Inject constructor(
         val baseUrl = JellyfinImageHelper.primaryImageUrl(s.jellyfinUrl, jellyfinId, maxWidth = 400)
         val url = if (s.jellyfinToken.isNotBlank()) "$baseUrl&api_key=${s.jellyfinToken}" else baseUrl
         val response = okHttpClient.newCall(Request.Builder().url(url).build()).execute()
-        if (!response.isSuccessful) return null
-        val dir = File(context.filesDir, "thumbnails").apply { mkdirs() }
-        val file = File(dir, "$jellyfinId.jpg")
-        response.body.byteStream().use { input ->
-            file.outputStream().use { output -> input.copyTo(output) }
+        if (!response.isSuccessful) { response.close(); return null }
+        val dir = LocalArt.dir(context).apply { mkdirs() }
+        val file = LocalArt.file(context, jellyfinId)
+        // Write beside it and rename, so a dropped connection can't leave a truncated poster.
+        val tmp = File(dir, "$jellyfinId.jpg.tmp")
+        try {
+            response.body.byteStream().use { input ->
+                tmp.outputStream().use { output -> input.copyTo(output) }
+            }
+            if (!tmp.renameTo(file)) return null
+        } finally {
+            tmp.delete()
         }
         return file.absolutePath
     }

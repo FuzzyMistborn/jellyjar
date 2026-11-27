@@ -28,6 +28,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.fuzzymistborn.jellyjar.data.local.LocalArt
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.fuzzymistborn.jellyjar.ui.theme.Elevation
@@ -80,10 +81,16 @@ fun PosterImage(
         .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.06f)), RoundedCornerShape(cornerRadius))
     if (onClick != null) boxModifier = boxModifier.clickable(onClick = onClick)
 
+    // A poster saved on the device is used first: it needs no network, so it appears at once and
+    // works offline. Fall back to the URL if the file turns out to be unreadable.
+    var localFailed by remember(imageUrl) { mutableStateOf(false) }
+    val localUri = remember(imageUrl) { LocalArt.uriForImageUrl(context, imageUrl) }
+    val model = if (localUri != null && !localFailed) localUri else imageUrl
+
     Box(modifier = boxModifier) {
         AsyncImage(
             model = ImageRequest.Builder(context)
-                .data(imageUrl)
+                .data(model)
                 .apply {
                     cacheKey?.let {
                         memoryCacheKey(it)
@@ -96,7 +103,9 @@ fun PosterImage(
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
             onSuccess = { imageState = ImageLoadState.SUCCESS },
-            onError = { imageState = ImageLoadState.ERROR },
+            onError = {
+                if (model != imageUrl) localFailed = true else imageState = ImageLoadState.ERROR
+            },
         )
         ImageLoadIndicator(imageState)
         overlay()

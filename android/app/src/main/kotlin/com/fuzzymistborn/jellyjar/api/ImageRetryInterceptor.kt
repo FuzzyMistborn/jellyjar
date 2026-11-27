@@ -25,7 +25,15 @@ class ImageRetryInterceptor : Interceptor {
             try {
                 val bytes = body.bytes() // throws if the stream ends short of Content-Length
                 if (bytes.isEmpty() && attempt < MAX_RETRIES) throw IOException("Empty image body")
-                return response.newBuilder().body(bytes.toResponseBody(body.contentType())).build()
+                // Jellyfin doesn't say how long an image stays fresh, so Coil revalidates every
+                // cached one on use — and offline that revalidation fails, taking the cached
+                // image with it. Declaring it fresh keeps cached art usable with no network.
+                return response.newBuilder()
+                    .body(bytes.toResponseBody(body.contentType()))
+                    .removeHeader("Pragma")
+                    .removeHeader("Expires")
+                    .header("Cache-Control", "public, max-age=$FRESH_SECONDS")
+                    .build()
             } catch (e: IOException) {
                 response.close()
                 if (attempt++ >= MAX_RETRIES) throw e
@@ -36,6 +44,7 @@ class ImageRetryInterceptor : Interceptor {
 
     private companion object {
         const val MAX_RETRIES = 2
+        const val FRESH_SECONDS = 365L * 24 * 60 * 60
         const val RETRY_DELAY_MS = 300L
     }
 }

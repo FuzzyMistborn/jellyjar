@@ -318,11 +318,22 @@ fun DimmedBackdrop(
         androidx.compose.runtime.mutableStateOf(false)
     }
     val usePoster = isPortraitWindow() && !portraitImageUrl.isNullOrBlank() && !posterFailed
+    val context = androidx.compose.ui.platform.LocalContext.current
     val url = if (usePoster) portraitImageUrl else imageUrl
+    // Prefer the poster saved on the device (works offline); fall back to the URL if unreadable.
+    var localFailed by androidx.compose.runtime.remember(url) {
+        androidx.compose.runtime.mutableStateOf(false)
+    }
+    val localUri = if (usePoster && url != null) {
+        androidx.compose.runtime.remember(url) {
+            com.fuzzymistborn.jellyjar.data.local.LocalArt.uriForImageUrl(context, url)
+        }
+    } else null
+    val model = if (localUri != null && !localFailed) localUri else url
     if (!url.isNullOrBlank()) {
         coil.compose.AsyncImage(
-            model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
-                .data(url)
+            model = coil.request.ImageRequest.Builder(context)
+                .data(model)
                 .apply {
                     if (usePoster && portraitCacheKey != null) {
                         memoryCacheKey(portraitCacheKey)
@@ -334,7 +345,7 @@ fun DimmedBackdrop(
             contentDescription = null,
             contentScale = androidx.compose.ui.layout.ContentScale.Crop,
             alignment = Alignment.TopCenter,
-            onError = { if (usePoster) posterFailed = true },
+            onError = { if (model != url) localFailed = true else if (usePoster) posterFailed = true },
             modifier = Modifier
                 .fillMaxSize()
                 .then(if (usePoster) Modifier.blur(16.dp) else Modifier),
