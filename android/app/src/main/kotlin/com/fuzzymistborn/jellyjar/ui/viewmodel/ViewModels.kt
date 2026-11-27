@@ -631,7 +631,8 @@ class LibraryViewModel @Inject constructor(
                         container = "mp4", mediaStreams = null)
         ) else null,
         imageTags = null,
-        backdropImageTags = null, userData = null,
+        backdropImageTags = null,
+        userData = UserData(playbackPositionTicks = null, played = isWatched, playCount = 0),
     )
 }
 
