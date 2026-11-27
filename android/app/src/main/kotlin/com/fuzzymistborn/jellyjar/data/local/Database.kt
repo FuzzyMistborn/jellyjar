@@ -163,6 +163,11 @@ interface DownloadDao {
     @Query("UPDATE downloads SET played = :played WHERE jellyfinId = :id")
     suspend fun updatePlayed(id: String, played: Boolean)
 
+    // The offline Detail/Season screens read episodes from cached_items, so a local viewing has to
+    // reach that copy too or the watched check never shows without the server.
+    @Query("UPDATE cached_items SET played = :played WHERE id = :id")
+    suspend fun updateCachedPlayed(id: String, played: Boolean)
+
     @Query("SELECT COALESCE(SUM(sizeBytes), 0) FROM downloads WHERE status = 'COMPLETE'")
     suspend fun totalCompletedBytes(): Long
 
